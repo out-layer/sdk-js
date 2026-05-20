@@ -497,7 +497,9 @@ export interface components {
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
-            details?: Record<string, never>;
+            details?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * @description For the common case (anonymous wallet on OutLayer's shared master),
@@ -586,28 +588,32 @@ export interface components {
             receiver_id: string;
             method_name: string;
             /** @description Method arguments as a JSON object. Mutually exclusive with `args_base64`. */
-            args?: Record<string, never>;
+            args?: {
+                [key: string]: unknown;
+            };
             /** @description Pre-encoded base64 args. Use for non-JSON encodings. */
             args_base64?: string;
-            /** @default 30000000000000 */
-            gas: string;
-            /** @default 0 */
-            deposit: string;
+            /** @description Gas budget in TGas as a string. Defaults to `30000000000000` (30 TGas) server-side. */
+            gas?: string;
+            /** @description Attached NEAR deposit in yoctoNEAR. Defaults to `0` server-side. */
+            deposit?: string;
         };
         CallResponse: {
             /** Format: uuid */
             request_id: string;
             status: components["schemas"]["RequestStatus"];
             tx_hash?: string | null;
-            result?: Record<string, never> | null;
+            result?: {
+                [key: string]: unknown;
+            } | null;
             /** Format: uuid */
             approval_id?: string | null;
             required?: number | null;
             approved?: number | null;
         };
         TransferRequest: {
-            /** @default near */
-            chain: components["schemas"]["Chain"];
+            /** @description Chain to transfer on. Defaults to `near` server-side. */
+            chain?: components["schemas"]["Chain"];
             receiver_id: string;
             amount: string;
         };
@@ -760,7 +766,9 @@ export interface components {
              * @description Current accumulated usage per token, per period. Same shape as
              *     `PolicyLimits` — used for client-side velocity-limit visualization.
              */
-            usage?: Record<string, never>;
+            usage?: {
+                [key: string]: unknown;
+            };
         };
         EncryptPolicyRequest: {
             wallet_id: string;
@@ -791,7 +799,9 @@ export interface components {
             /** Format: uuid */
             request_id?: string | null;
             type: components["schemas"]["RequestType"];
-            request_data: Record<string, never>;
+            request_data: {
+                [key: string]: unknown;
+            };
             required: number;
             approved: number;
             /** Format: date-time */
@@ -828,7 +838,9 @@ export interface components {
             type: string;
             request_id?: string | null;
             status?: string | null;
-            details: Record<string, never>;
+            details: {
+                [key: string]: unknown;
+            };
             /** Format: date-time */
             at: string;
         };
@@ -840,7 +852,9 @@ export interface components {
             request_id: string;
             type: components["schemas"]["RequestType"];
             status: components["schemas"]["RequestStatus"];
-            result?: Record<string, never> | null;
+            result?: {
+                [key: string]: unknown;
+            } | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */

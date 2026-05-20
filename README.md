@@ -111,12 +111,14 @@ Runnable scripts in [`examples/`](examples/):
 - `02-withdraw.ts` — gasless cross-chain withdraw with dry-run + polling
 - `03-multisig.ts` — submit a withdraw that triggers the approval flow
 - `04-agent-loop.ts` — minimal autonomous agent that respects policy
+- `05-cross-chain-app.ts` — end-to-end DeFi flow: cross-chain login pattern, deposit instructions, swap USDT → NEAR, stake with a validator, gasless withdraw back to Ethereum. CLI with sub-commands (`addresses | balances | buy-near | stake | unstake | withdraw-eth | login-demo`).
 
 Run with:
 
 ```bash
-npx tsx examples/01-register.ts                            # no auth needed
-OUTLAYER_API_KEY=wk_... npx tsx examples/02-withdraw.ts    # needs API key
+npx tsx examples/01-register.ts                                            # no auth needed
+OUTLAYER_API_KEY=wk_... npx tsx examples/02-withdraw.ts                    # needs API key
+OUTLAYER_API_KEY=wk_... npx tsx examples/05-cross-chain-app.ts addresses   # cross-chain identity
 ```
 
 ## Errors

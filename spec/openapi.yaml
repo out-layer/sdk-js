@@ -973,6 +973,7 @@ components:
           type: string
         details:
           type: object
+          additionalProperties: {}
 
     # ----- Registration -----
     RegisterRequest:
@@ -1120,16 +1121,17 @@ components:
           type: string
         args:
           type: object
+          additionalProperties: {}
           description: Method arguments as a JSON object. Mutually exclusive with `args_base64`.
         args_base64:
           type: string
           description: Pre-encoded base64 args. Use for non-JSON encodings.
         gas:
           type: string
-          default: '30000000000000'
+          description: Gas budget in TGas as a string. Defaults to `30000000000000` (30 TGas) server-side.
         deposit:
           type: string
-          default: '0'
+          description: Attached NEAR deposit in yoctoNEAR. Defaults to `0` server-side.
 
     CallResponse:
       type: object
@@ -1144,6 +1146,7 @@ components:
           type: [string, 'null']
         result:
           type: [object, 'null']
+          additionalProperties: {}
         approval_id:
           type: [string, 'null']
           format: uuid
@@ -1157,8 +1160,9 @@ components:
       required: [receiver_id, amount]
       properties:
         chain:
-          $ref: '#/components/schemas/Chain'
-          default: near
+          allOf:
+            - $ref: '#/components/schemas/Chain'
+          description: Chain to transfer on. Defaults to `near` server-side.
         receiver_id:
           type: string
         amount:
@@ -1451,6 +1455,7 @@ components:
             type: string
         usage:
           type: object
+          additionalProperties: {}
           description: |
             Current accumulated usage per token, per period. Same shape as
             `PolicyLimits` — used for client-side velocity-limit visualization.
@@ -1522,6 +1527,7 @@ components:
           $ref: '#/components/schemas/RequestType'
         request_data:
           type: object
+          additionalProperties: {}
         required:
           type: integer
         approved:
@@ -1595,6 +1601,7 @@ components:
           type: [string, 'null']
         details:
           type: object
+          additionalProperties: {}
         at:
           type: string
           format: date-time
@@ -1621,6 +1628,7 @@ components:
           $ref: '#/components/schemas/RequestStatus'
         result:
           type: [object, 'null']
+          additionalProperties: {}
         created_at:
           type: string
           format: date-time

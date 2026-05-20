@@ -90,7 +90,18 @@ Full reference: [API spec](https://api.outlayer.fastnear.com/docs).
 | [Policy management](docs/policy.md) | Configure spending limits, allowlists, time windows, multisig thresholds |
 | [Multisig approvals](docs/approvals.md) | Wire up the NEP-413 approval flow |
 | [Error handling](docs/errors.md) | Handle `PolicyDeniedError`, `WalletFrozenError`, retries |
+| [Vaults (sovereign custody)](docs/vaults.md) | Bind a wallet to a deployed customer vault |
 | [Migration from raw HTTP](docs/migration-from-http.md) | Move from `fetch('/wallet/v1/...')` to the SDK |
+
+### Vault custody (advanced)
+
+For production deployments that need **sovereign exit guarantees**, bind a wallet to a customer-owned vault. Vault deployment happens via the [dashboard](https://outlayer.fastnear.com/vault) or `outlayer vault init` CLI (not the SDK — your NEAR keys never touch us). Once deployed, binding is one option:
+
+```ts
+const wallet = await OutlayerClient.register({ vaultId: 'vault.alice.near' });
+```
+
+See [docs/vaults.md](docs/vaults.md) and https://outlayer.fastnear.com/docs/vaults.
 
 ## Examples
 

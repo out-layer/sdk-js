@@ -20,6 +20,41 @@ describe('OutlayerClient.register', () => {
     expect(r.wallet_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(r.handoff_url).toContain('api_key=');
   });
+
+  it('forwards vaultId to the request body', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/register`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          wallet_id: '00000000-0000-0000-0000-000000000001',
+          api_key: 'wk_test_vault_bound',
+          near_account_id: '0001',
+        });
+      }),
+    );
+    await OutlayerClient.register({ vaultId: 'vault.alice.near' });
+    expect(receivedBody).toEqual({ vault_id: 'vault.alice.near' });
+  });
+
+  it('respects explicit body.vault_id over vaultId convenience option', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/register`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          wallet_id: '00000000-0000-0000-0000-000000000001',
+          api_key: 'wk_test',
+          near_account_id: '0001',
+        });
+      }),
+    );
+    await OutlayerClient.register({
+      vaultId: 'vault.alice.near',
+      body: { vault_id: 'vault.explicit.near' },
+    });
+    expect(receivedBody).toEqual({ vault_id: 'vault.explicit.near' });
+  });
 });
 
 describe('OutlayerClient.getAddress', () => {

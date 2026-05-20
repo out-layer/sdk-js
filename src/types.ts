@@ -500,18 +500,40 @@ export interface components {
             details?: Record<string, never>;
         };
         /**
-         * @description For the common case, send empty `{}`. Optional fields are for advanced
-         *     registration flows.
+         * @description For the common case (anonymous wallet on OutLayer's shared master),
+         *     send empty `{}`. Optional fields enable advanced flows:
+         *
+         *     - `vault_id`: bind this wallet to an existing customer-owned vault,
+         *       so the wallet's master is derived through the vault's per-customer
+         *       MPC-derived master instead of OutLayer's shared default. The vault
+         *       must already be deployed and verified — **vault deployment is not
+         *       done through this endpoint**. Use the dashboard
+         *       (https://outlayer.fastnear.com/vault) or the CLI
+         *       (`outlayer vault init`) to deploy. Reference:
+         *       https://outlayer.fastnear.com/docs/vaults
+         *     - `account_id` + `pubkey` + `message` + `signature`: bind the wallet
+         *       to a verified NEAR account via NEP-413 proof-of-ownership. Used
+         *       by clients that want operational keys (`wk_...`) tied to a real
+         *       NEAR account.
          */
         RegisterRequest: {
-            /** @description NEAR account ID to bind the wallet to (requires signature). */
+            /** @description NEAR account ID to bind the wallet to (requires NEP-413 signature). */
             account_id?: string;
-            /** @description Reserved for deterministic-wallet derivation. */
+            /** @description Reserved for deterministic-wallet derivation. Most callers leave unset. */
             seed?: string;
+            /** @description NEP-413 signer pubkey (paired with `account_id` + `signature`). */
             pubkey?: string;
+            /** @description NEP-413 message that was signed. */
             message?: string;
+            /** @description NEP-413 signature over `message`. */
             signature?: string;
-            /** @description Customer vault ID (sovereign custody — advanced). */
+            /**
+             * @description ID of a deployed and verified customer vault (e.g. `vault.alice.near`).
+             *     Binding is permanent — the resulting API key is tied to this vault
+             *     for its lifetime. All subsequent operations on the API key
+             *     automatically derive keys through the per-vault master; you do
+             *     NOT pass `vault_id` on every call.
+             */
             vault_id?: string;
         };
         RegisterResponse: {

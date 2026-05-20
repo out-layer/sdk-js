@@ -177,11 +177,32 @@ export class OutlayerClient {
 
   // ------- Static factory: register a new wallet (no auth) -------
 
+  /**
+   * Register a new wallet and obtain an API key.
+   *
+   * - Empty call: anonymous wallet on OutLayer's shared master. Convenient, no setup.
+   * - With `vaultId`: bind to a deployed customer vault so keys derive through
+   *   the per-vault master. Vault binding is permanent.
+   * - With `body`: full control — pass any `RegisterRequest` field (e.g., NEP-413
+   *   account-binding fields). `vaultId` is merged into `body.vault_id` if not
+   *   already set.
+   *
+   * Vault deployment is NOT done here — use the dashboard
+   * (https://outlayer.fastnear.com/vault) or `outlayer vault init` CLI.
+   * See docs/vaults.md for the full flow.
+   */
   static async register(
-    opts: { body?: RegisterRequest } & UnauthenticatedOptions = {},
+    opts: {
+      vaultId?: string;
+      body?: RegisterRequest;
+    } & UnauthenticatedOptions = {},
   ): Promise<RegisterResponse> {
     const client = makeUnauthenticatedClient(opts);
-    const { data, error, response } = await client.POST('/register', { body: opts.body ?? {} });
+    const body: RegisterRequest = { ...(opts.body ?? {}) };
+    if (opts.vaultId !== undefined && body.vault_id === undefined) {
+      body.vault_id = opts.vaultId;
+    }
+    const { data, error, response } = await client.POST('/register', { body });
     if (!response.ok) throw await errorFromResponse(response, error);
     return data as RegisterResponse;
   }

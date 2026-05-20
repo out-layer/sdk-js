@@ -11,7 +11,12 @@
 import { OutlayerClient } from '../src/index.js';
 
 async function main(): Promise<void> {
-  // No auth needed for register
+  // No auth needed for register.
+  //
+  // For sovereign custody, pass an already-deployed vault id:
+  //   const result = await OutlayerClient.register({ vaultId: 'vault.alice.near' });
+  // Vaults are deployed via the dashboard (https://outlayer.fastnear.com/vault)
+  // or the CLI (`outlayer vault init`) — NOT through this SDK. See docs/vaults.md.
   const result = await OutlayerClient.register();
 
   console.log('━━━ Wallet created ━━━');

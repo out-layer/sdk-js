@@ -20,7 +20,12 @@ The first step creates a fresh wallet and returns an API key. The key is shown *
 ```ts
 import { OutlayerClient } from '@outlayer/sdk';
 
+// Anonymous wallet on OutLayer's shared master (most common — pick this for now)
 const { apiKey, walletId, handoffUrl, nearAccountId } = await OutlayerClient.register();
+
+// OR — bind to a customer vault for sovereign custody (advanced)
+// Vault must be deployed first via the dashboard or CLI — see docs/vaults.md
+// const wallet = await OutlayerClient.register({ vaultId: 'vault.alice.near' });
 
 console.log('API key:', apiKey);
 console.log('Wallet ID:', walletId);

@@ -55,4 +55,5 @@ export {
 
 export type { ApiErrorCode, ErrorCode } from './errors.js';
 
-export type { ClientOptions, RetryConfig, UnauthenticatedOptions } from './http.js';
+export type { ClientOptions, Network, RetryConfig, UnauthenticatedOptions } from './http.js';
+export { NETWORK_BASE_URLS } from './http.js';

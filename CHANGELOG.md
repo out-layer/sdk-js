@@ -4,6 +4,18 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] — 2026-05-20
+
+### Added
+
+- `network` option on `ClientOptions` and `UnauthenticatedOptions` — pass
+  `'mainnet'` (default) or `'testnet'` instead of writing the base URL by hand.
+  `baseUrl` still overrides if both are supplied. NEAR Intents (cross-chain
+  swaps + gasless withdrawals) only work on mainnet; use testnet for
+  register / policy / sign-message during development.
+- Exported `Network` type and `NETWORK_BASE_URLS` constant.
+- 4 new tests covering network selection (total: 56).
+
 ## [0.1.0-alpha.1] — 2026-05-20
 
 Initial alpha release.

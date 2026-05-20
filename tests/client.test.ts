@@ -79,6 +79,70 @@ describe('OutlayerClient.register', () => {
     await OutlayerClient.register({ baseUrl: 'https://staging.example.com' });
     expect(receivedUrl).toBe('https://staging.example.com/register');
   });
+
+  it('uses testnet base URL when network=testnet', async () => {
+    let receivedUrl = '';
+    server.use(
+      http.post('https://api.testnet.outlayer.fastnear.com/register', ({ request }) => {
+        receivedUrl = request.url;
+        return HttpResponse.json({
+          wallet_id: '00000000-0000-0000-0000-000000000001',
+          api_key: 'wk_test',
+          near_account_id: '0001',
+        });
+      }),
+    );
+    await OutlayerClient.register({ network: 'testnet' });
+    expect(receivedUrl).toBe('https://api.testnet.outlayer.fastnear.com/register');
+  });
+
+  it('explicit baseUrl overrides network', async () => {
+    let receivedUrl = '';
+    server.use(
+      http.post('https://custom.example.com/register', ({ request }) => {
+        receivedUrl = request.url;
+        return HttpResponse.json({
+          wallet_id: '00000000-0000-0000-0000-000000000001',
+          api_key: 'wk_test',
+          near_account_id: '0001',
+        });
+      }),
+    );
+    await OutlayerClient.register({
+      network: 'testnet',
+      baseUrl: 'https://custom.example.com',
+    });
+    expect(receivedUrl).toBe('https://custom.example.com/register');
+  });
+});
+
+describe('OutlayerClient network option', () => {
+  it('targets testnet for wallet ops when network=testnet', async () => {
+    let receivedUrl = '';
+    server.use(
+      http.get('https://api.testnet.outlayer.fastnear.com/wallet/v1/balance', ({ request }) => {
+        receivedUrl = request.url;
+        return HttpResponse.json({ balance: '0', token: 'NEAR', account_id: 'wallet.near' });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey, network: 'testnet' });
+    await client.getBalance({ chain: 'near' });
+    expect(receivedUrl).toContain('api.testnet.outlayer.fastnear.com');
+  });
+
+  it('defaults to mainnet when no network specified', async () => {
+    let receivedUrl = '';
+    server.use(
+      http.get(`${BASE}/wallet/v1/balance`, ({ request }) => {
+        receivedUrl = request.url;
+        return HttpResponse.json({ balance: '0', token: 'NEAR', account_id: 'wallet.near' });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.getBalance({ chain: 'near' });
+    expect(receivedUrl).toContain('api.outlayer.fastnear.com');
+    expect(receivedUrl).not.toContain('testnet');
+  });
 });
 
 // ============================================================================

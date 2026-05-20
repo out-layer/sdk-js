@@ -1,0 +1,1619 @@
+openapi: 3.1.0
+info:
+  title: OutLayer API
+  version: 0.1.0-alpha.1
+  summary: HTTP API for OutLayer custody wallets and policy enforcement
+  description: |
+    OutLayer Agent Custody — multi-chain wallets for AI agents with TEE-enforced
+    policy, multisig approvals, audit log, and gasless cross-chain transfers via
+    NEAR Intents.
+
+    Private keys live exclusively inside an Intel TDX TEE and are derived from
+    NEAR MPC. The wallet owner sets policy (spending limits, whitelists,
+    multisig, freeze) — all enforced inside the TEE before signing.
+
+    See [CUSTODY docs](https://outlayer.fastnear.com/docs/agent-custody) for the
+    architectural overview and [@outlayer/sdk](https://www.npmjs.com/package/@outlayer/sdk)
+    for the TypeScript client.
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: OutLayer
+    url: https://outlayer.fastnear.com
+
+servers:
+  - url: https://api.outlayer.fastnear.com
+    description: Production
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Registration
+    description: Create a new wallet and obtain an API key.
+  - name: Wallet
+    description: Multi-chain custody operations — transfer, withdraw, swap, balance, signing.
+  - name: Policy
+    description: Encrypted on-chain policy lifecycle (read, encrypt, sign, cache).
+  - name: Approvals
+    description: Multisig approval workflows for actions that exceed policy thresholds.
+  - name: Audit
+    description: Event history for the wallet.
+  - name: Requests
+    description: Async operation status tracking.
+  - name: Meta
+    description: Token catalog and helpers.
+
+paths:
+  # ============================================================================
+  # Registration
+  # ============================================================================
+  /register:
+    post:
+      tags: [Registration]
+      operationId: registerWallet
+      summary: Register a new wallet
+      description: |
+        Creates a new multi-chain wallet and returns an API key. For most
+        callers, send `{}` — an anonymous wallet is created and an API key is
+        returned in `api_key` (shown once, not retrievable later).
+
+        Optional fields enable advanced registration paths:
+        - `account_id` + `pubkey` + `message` + `signature`: bind the wallet to
+          a NEAR account via NEP-413 proof-of-ownership.
+        - `vault_id`: bind to a customer-owned vault for sovereign custody (see
+          vault docs).
+
+        Rate-limited: 30 requests per minute per IP.
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              anonymous:
+                summary: Anonymous wallet (most common)
+                value: {}
+              bound_to_near_account:
+                summary: Bind to NEAR account via NEP-413
+                value:
+                  account_id: alice.near
+                  pubkey: ed25519:7BcBZ9Z...
+                  message: "register:1716200000"
+                  signature: ed25519:5K3F...
+      responses:
+        '200':
+          description: Wallet created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+              examples:
+                anonymous:
+                  value:
+                    wallet_id: 9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20
+                    api_key: wk_2a8b1f3c4d5e6789abcdef0123456789
+                    near_account_id: 9c3c9e101c1f4f5e9c4a1d7b9a8f3c20
+                    handoff_url: https://outlayer.fastnear.com/wallet?api_key=wk_2a8b...
+                    trial:
+                      calls_remaining: 100
+                      expires_at: '2026-06-20T00:00:00Z'
+                      limits:
+                        max_instructions: 100000000
+                        max_execution_seconds: 30
+                        max_memory_mb: 64
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # Wallet — read
+  # ============================================================================
+  /wallet/v1/address:
+    get:
+      tags: [Wallet]
+      operationId: getAddress
+      summary: Derive wallet address for a chain
+      description: |
+        Returns the deterministically-derived address for the wallet on the
+        requested chain. Same `wallet_id` always produces the same addresses
+        across chains.
+      parameters:
+        - name: chain
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/Chain'
+      responses:
+        '200':
+          description: Address derived
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressResponse'
+              example:
+                wallet_id: 9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20
+                chain: near
+                address: 9c3c9e101c1f4f5e9c4a1d7b9a8f3c20
+                public_key: ed25519:7BcBZ9Z...
+                vault_id: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/balance:
+    get:
+      tags: [Wallet]
+      operationId: getBalance
+      summary: Read balance
+      description: |
+        Returns the balance for a token on the requested chain. Currently only
+        `chain=near` is supported for native balance reads; cross-chain balances
+        should be read from the upstream chain directly.
+
+        Set `source=intents` to read the wallet's intents.near balance
+        (`mt_balance_of`) instead of the on-chain account balance.
+      parameters:
+        - name: chain
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Chain'
+            default: near
+        - name: token
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Token ID (`nep141:<contract>` or `native`).
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [chain, intents]
+            default: chain
+      responses:
+        '200':
+          description: Balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceResponse'
+              example:
+                balance: '1000000000000000000000000'
+                token: NEAR
+                account_id: 9c3c9e101c1f4f5e9c4a1d7b9a8f3c20
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/tokens:
+    get:
+      tags: [Meta]
+      operationId: listTokens
+      summary: List supported tokens
+      description: |
+        Returns the token catalog supported for swaps and cross-chain withdraws
+        via NEAR Intents. Token IDs are typed as `nep141:<contract>` and map to
+        each chain via `defuse_asset_id`.
+      responses:
+        '200':
+          description: Token list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokensResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # Wallet — write
+  # ============================================================================
+  /wallet/v1/call:
+    post:
+      tags: [Wallet]
+      operationId: call
+      summary: Sign and broadcast a NEAR function call
+      description: |
+        Native NEAR contract call. Policy is enforced before signing; if the
+        call exceeds limits, the response carries `status=pending_approval`
+        and an `approval_id` for the multisig flow.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallRequest'
+            example:
+              receiver_id: usdt.tether-token.near
+              method_name: ft_transfer
+              args:
+                receiver_id: bob.near
+                amount: '1000000'
+              gas: '30000000000000'
+              deposit: '1'
+      responses:
+        '200':
+          description: Call submitted (or queued for approval)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/transfer:
+    post:
+      tags: [Wallet]
+      operationId: transfer
+      summary: Native chain transfer
+      description: |
+        Chain-agnostic native transfer (NEAR yoctoNEAR units). Currently only
+        `chain=near` is supported; other chains return `unsupported_chain`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+            example:
+              chain: near
+              receiver_id: bob.near
+              amount: '1000000000000000000000000'
+      responses:
+        '200':
+          description: Transfer submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/intents/deposit:
+    post:
+      tags: [Wallet]
+      operationId: intentsDeposit
+      summary: Deposit FT into intents.near
+      description: |
+        Wraps `ft_transfer_call` to `intents.near`, auto-handling storage
+        deposit if required. After this call, the wallet's intents.near balance
+        increases by `amount` of `token` and is available for swaps and
+        gasless cross-chain withdrawals.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntentsDepositRequest'
+            example:
+              token: wrap.near
+              amount: '5000000000000000000000000'
+      responses:
+        '200':
+          description: Deposit submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntentsDepositResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/intents/withdraw:
+    post:
+      tags: [Wallet]
+      operationId: intentsWithdraw
+      summary: Withdraw via NEAR Intents (gasless cross-chain)
+      description: |
+        Gasless cross-chain withdrawal through NEAR Intents solver relay. The
+        wallet's intents.near balance is debited; the receiver gets funds on
+        the destination chain (NEAR, Ethereum, Solana, Bitcoin) without paying
+        gas on either side.
+
+        If the policy requires approval, returns `status=pending_approval` with
+        an `approval_id`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WithdrawRequest'
+            example:
+              chain: ethereum
+              to: '0x742d35Cc6634C0532925a3b844Bc9e7595f8b4f5'
+              amount: '1000000'
+              token: nep141:usdt.tether-token.near
+      responses:
+        '200':
+          description: Withdraw submitted (or queued for approval)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WithdrawResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/intents/withdraw/dry-run:
+    post:
+      tags: [Wallet]
+      operationId: intentsWithdrawDryRun
+      summary: Simulate a withdraw (policy + balance check, no execution)
+      description: |
+        Runs the full policy and balance check for a withdraw without signing
+        or broadcasting. Useful for showing the user whether an action would
+        succeed before they confirm.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WithdrawRequest'
+      responses:
+        '200':
+          description: Dry-run result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DryRunResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/intents/swap:
+    post:
+      tags: [Wallet]
+      operationId: intentsSwap
+      summary: Swap via NEAR Intents (1Click)
+      description: |
+        Cross-chain swap via the 1Click solver. Quote → deposit to intents.near
+        → mt_transfer → poll. Returns when the swap settles or fails.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwapRequest'
+            example:
+              token_in: nep141:wrap.near
+              token_out: nep141:usdt.tether-token.near
+              amount_in: '5000000000000000000000000'
+              min_amount_out: '24000000'
+      responses:
+        '200':
+          description: Swap submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwapResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/intents/swap/quote:
+    post:
+      tags: [Wallet]
+      operationId: intentsSwapQuote
+      summary: Get a swap quote (no execution)
+      description: |
+        Returns the indicative output and deadline for a swap without executing
+        it. Use this before calling `/intents/swap` to show the user expected
+        output and allow them to set `min_amount_out`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwapRequest'
+      responses:
+        '200':
+          description: Quote
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwapQuoteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/sign-message:
+    post:
+      tags: [Wallet]
+      operationId: signMessage
+      summary: Sign an arbitrary message (NEP-413 or raw)
+      description: |
+        Signs a message with the wallet's NEAR key. Use `format=nep413` (default)
+        for the standard NEP-413 signing scheme; use `format=raw` for raw byte
+        signing.
+
+        Policy and freeze still apply — a frozen wallet cannot sign.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignMessageRequest'
+            example:
+              message: 'login:myapp:1716200000'
+              recipient: myapp.example
+              format: nep413
+      responses:
+        '200':
+          description: Signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignMessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # Requests (async tracking)
+  # ============================================================================
+  /wallet/v1/requests:
+    get:
+      tags: [Requests]
+      operationId: listRequests
+      summary: List async wallet requests
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RequestType'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RequestStatus'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Request list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/requests/{id}:
+    get:
+      tags: [Requests]
+      operationId: getRequest
+      summary: Get a single request's status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Request status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # Policy
+  # ============================================================================
+  /wallet/v1/policy:
+    get:
+      tags: [Policy]
+      operationId: getPolicy
+      summary: Get current decrypted policy
+      description: |
+        Returns the wallet's current policy (decrypted by the keystore TEE),
+        plus the current usage counters used by velocity-limit checks.
+      responses:
+        '200':
+          description: Current policy + usage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/encrypt-policy:
+    post:
+      tags: [Policy]
+      operationId: encryptPolicy
+      summary: Encrypt a policy for on-chain storage
+      description: |
+        Sends a policy JSON to the keystore TEE for encryption. The returned
+        `encrypted_base64` is what gets stored in NEAR via
+        `store_wallet_policy(...)` after the keystore signs it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EncryptPolicyRequest'
+      responses:
+        '200':
+          description: Encrypted policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EncryptPolicyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/sign-policy:
+    post:
+      tags: [Policy]
+      operationId: signPolicy
+      summary: Sign an encrypted policy (for on-chain submission)
+      description: |
+        The keystore signs `SHA256(encrypted_data)` with the wallet's key. The
+        signature + encrypted data + public key form the payload for the
+        on-chain `store_wallet_policy(...)` call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignPolicyRequest'
+      responses:
+        '200':
+          description: Signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignPolicyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/invalidate-cache:
+    post:
+      tags: [Policy]
+      operationId: invalidatePolicyCache
+      summary: Invalidate negative policy cache
+      description: |
+        Forces the coordinator to drop its cached `no_policy` flag for a wallet.
+        Call this after submitting `store_wallet_policy(...)` on-chain so that
+        subsequent operations pick up the new policy without waiting for the
+        5-minute TTL to expire.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvalidateCacheRequest'
+      responses:
+        '200':
+          description: Cache cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # Approvals (multisig)
+  # ============================================================================
+  /wallet/v1/pending_approvals:
+    get:
+      tags: [Approvals]
+      operationId: listPendingApprovals
+      summary: List pending multisig approvals
+      responses:
+        '200':
+          description: Pending approvals
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingApprovalsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/approve/{id}:
+    post:
+      tags: [Approvals]
+      operationId: approveRequest
+      summary: Approve a pending action (NEP-413 signed)
+      description: |
+        Submits an approver's NEP-413 signature for a pending action. When the
+        approval threshold is reached, the action auto-executes. No API key
+        required — auth is established by the NEP-413 signature in the body.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Nep413Auth'
+      responses:
+        '200':
+          description: Approval recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApproveResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/reject/{id}:
+    post:
+      tags: [Approvals]
+      operationId: rejectRequest
+      summary: Reject a pending action (NEP-413 signed)
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectRequest'
+      responses:
+        '200':
+          description: Rejection recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApproveResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # Audit
+  # ============================================================================
+  /wallet/v1/audit:
+    get:
+      tags: [Audit]
+      operationId: listAuditEvents
+      summary: Event history for the wallet
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Event list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+# ==============================================================================
+# Components
+# ==============================================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: wk_<32-hex-chars>
+      description: |
+        API key returned by `POST /register`. Format `wk_<hex>`. Pass as
+        `Authorization: Bearer wk_...`.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+      description: |
+        Optional idempotency token. Resubmitting a write request with the same
+        key returns the original result without re-execution. Recommended for
+        clients that retry on network failure.
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            bad_request:
+              value: { error: bad_request, message: "amount must be positive" }
+            invalid_address:
+              value: { error: invalid_address }
+            unsupported_chain:
+              value: { error: unsupported_chain }
+            unsupported_token:
+              value: { error: unsupported_token }
+            insufficient_balance:
+              value: { error: insufficient_balance }
+    Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missing_auth:
+              value: { error: missing_auth }
+            invalid_api_key:
+              value: { error: invalid_api_key }
+            timestamp_expired:
+              value: { error: timestamp_expired }
+    Forbidden:
+      description: Action blocked by policy or wallet state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            policy_denied:
+              value: { error: policy_denied, message: "daily limit exceeded" }
+            wallet_frozen:
+              value: { error: wallet_frozen }
+            not_approver:
+              value: { error: not_approver }
+    NotFound:
+      description: Resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            request_not_found:
+              value: { error: request_not_found }
+            approval_not_found:
+              value: { error: approval_not_found }
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            rate_limited:
+              value: { error: rate_limited }
+    InternalError:
+      description: Server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            internal_error:
+              value: { error: internal_error }
+
+  schemas:
+    # ----- Primitives -----
+    Chain:
+      type: string
+      enum: [near, ethereum, solana, bitcoin]
+      description: Supported chain identifier.
+
+    RequestType:
+      type: string
+      enum: [call, transfer, withdraw, deposit, swap]
+
+    RequestStatus:
+      type: string
+      enum:
+        - processing
+        - success
+        - failed
+        - pending_approval
+        - approved
+        - rejected
+
+    ErrorCode:
+      type: string
+      enum:
+        - missing_auth
+        - invalid_api_key
+        - missing_wallet_id
+        - missing_signature
+        - timestamp_expired
+        - wallet_frozen
+        - policy_denied
+        - not_approver
+        - insufficient_balance
+        - invalid_address
+        - rate_limited
+        - unsupported_chain
+        - unsupported_token
+        - request_not_found
+        - approval_not_found
+        - bad_request
+        - duplicate_idempotency_key
+        - internal_error
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+        details:
+          type: object
+
+    # ----- Registration -----
+    RegisterRequest:
+      type: object
+      description: |
+        For the common case, send empty `{}`. Optional fields are for advanced
+        registration flows.
+      properties:
+        account_id:
+          type: string
+          description: NEAR account ID to bind the wallet to (requires signature).
+        seed:
+          type: string
+          description: Reserved for deterministic-wallet derivation.
+        pubkey:
+          type: string
+        message:
+          type: string
+        signature:
+          type: string
+        vault_id:
+          type: string
+          description: Customer vault ID (sovereign custody — advanced).
+
+    RegisterResponse:
+      type: object
+      required: [wallet_id, near_account_id]
+      properties:
+        wallet_id:
+          type: string
+          format: uuid
+        api_key:
+          type: string
+          description: Shown once. Not retrievable later — save it now.
+        near_account_id:
+          type: string
+        handoff_url:
+          type: string
+          format: uri
+          description: Dashboard URL where the controller sets policy.
+        trial:
+          $ref: '#/components/schemas/TrialInfo'
+
+    TrialInfo:
+      type: object
+      properties:
+        calls_remaining:
+          type: integer
+        expires_at:
+          type: string
+          format: date-time
+        limits:
+          type: object
+          properties:
+            max_instructions:
+              type: integer
+            max_execution_seconds:
+              type: integer
+            max_memory_mb:
+              type: integer
+
+    # ----- Wallet read -----
+    AddressResponse:
+      type: object
+      required: [wallet_id, chain, address, public_key]
+      properties:
+        wallet_id:
+          type: string
+        chain:
+          $ref: '#/components/schemas/Chain'
+        address:
+          type: string
+        public_key:
+          type: string
+        vault_id:
+          type: [string, 'null']
+
+    BalanceResponse:
+      type: object
+      required: [balance, token, account_id]
+      properties:
+        balance:
+          type: string
+          description: Amount in token's smallest unit.
+        token:
+          type: string
+        account_id:
+          type: string
+
+    TokenInfo:
+      type: object
+      required: [id, symbol, chains, decimals]
+      properties:
+        id:
+          type: string
+        symbol:
+          type: string
+        chains:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chain'
+        decimals:
+          type: integer
+        defuse_asset_id:
+          type: string
+
+    TokensResponse:
+      type: object
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenInfo'
+
+    # ----- Wallet write -----
+    CallRequest:
+      type: object
+      required: [receiver_id, method_name]
+      properties:
+        receiver_id:
+          type: string
+        method_name:
+          type: string
+        args:
+          type: object
+          description: Method arguments as a JSON object. Mutually exclusive with `args_base64`.
+        args_base64:
+          type: string
+          description: Pre-encoded base64 args. Use for non-JSON encodings.
+        gas:
+          type: string
+          default: '30000000000000'
+        deposit:
+          type: string
+          default: '0'
+
+    CallResponse:
+      type: object
+      required: [request_id, status]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        tx_hash:
+          type: [string, 'null']
+        result:
+          type: [object, 'null']
+        approval_id:
+          type: [string, 'null']
+          format: uuid
+        required:
+          type: [integer, 'null']
+        approved:
+          type: [integer, 'null']
+
+    TransferRequest:
+      type: object
+      required: [receiver_id, amount]
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+          default: near
+        receiver_id:
+          type: string
+        amount:
+          type: string
+
+    IntentsDepositRequest:
+      type: object
+      required: [token, amount]
+      properties:
+        token:
+          type: string
+        amount:
+          type: string
+
+    IntentsDepositResponse:
+      type: object
+      required: [request_id, status]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        tx_hash:
+          type: [string, 'null']
+
+    WithdrawRequest:
+      type: object
+      required: [chain, amount]
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        to:
+          type: string
+          description: Destination address on the target chain.
+        amount:
+          type: string
+        token:
+          type: string
+          description: Token ID, e.g. `nep141:usdt.tether-token.near`. Omit for native asset.
+
+    WithdrawResponse:
+      type: object
+      required: [request_id, status]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        approval_id:
+          type: [string, 'null']
+          format: uuid
+        required:
+          type: [integer, 'null']
+        approved:
+          type: [integer, 'null']
+
+    DryRunResponse:
+      type: object
+      properties:
+        would_succeed:
+          type: boolean
+        reason:
+          type: string
+        message:
+          type: string
+        estimated_fee:
+          type: string
+        fee_token:
+          type: string
+        policy_check:
+          type: object
+          properties:
+            decision:
+              type: string
+              enum: [allowed, denied, requires_approval, frozen, no_policy_allow]
+            reason:
+              type: string
+            required_approvals:
+              type: integer
+
+    SwapRequest:
+      type: object
+      required: [token_in, token_out, amount_in]
+      properties:
+        token_in:
+          type: string
+        token_out:
+          type: string
+        amount_in:
+          type: string
+        min_amount_out:
+          type: string
+
+    SwapResponse:
+      type: object
+      required: [request_id, status]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        amount_out:
+          type: string
+        intent_hash:
+          type: string
+
+    SwapQuoteResponse:
+      type: object
+      properties:
+        amount_out:
+          type: string
+        min_amount_out:
+          type: string
+        deadline:
+          type: string
+          format: date-time
+        time_estimate_seconds:
+          type: integer
+
+    SignMessageRequest:
+      type: object
+      required: [message, recipient]
+      properties:
+        message:
+          type: string
+        recipient:
+          type: string
+        nonce:
+          type: string
+          description: Base64-encoded 32-byte nonce. Auto-generated if omitted.
+        format:
+          type: string
+          enum: [nep413, raw]
+          default: nep413
+
+    SignMessageResponse:
+      type: object
+      properties:
+        account_id:
+          type: string
+        signature:
+          type: string
+        signature_base64:
+          type: string
+        public_key:
+          type: string
+        nonce:
+          type: string
+
+    # ----- Policy -----
+    PolicyRules:
+      type: object
+      properties:
+        limits:
+          $ref: '#/components/schemas/PolicyLimits'
+        addresses:
+          $ref: '#/components/schemas/AddressList'
+        transaction_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/RequestType'
+        time_restrictions:
+          $ref: '#/components/schemas/TimeRestrictions'
+        rate_limit:
+          $ref: '#/components/schemas/RateLimit'
+
+    PolicyLimits:
+      type: object
+      description: |
+        Per-period spending limits. Each field is a map of `token_id → amount`.
+        Use `"*"` as the key to match all tokens.
+      properties:
+        per_transaction:
+          type: object
+          additionalProperties:
+            type: string
+        hourly:
+          type: object
+          additionalProperties:
+            type: string
+        daily:
+          type: object
+          additionalProperties:
+            type: string
+        monthly:
+          type: object
+          additionalProperties:
+            type: string
+
+    AddressList:
+      type: object
+      required: [mode, list]
+      properties:
+        mode:
+          type: string
+          enum: [whitelist, blacklist]
+        list:
+          type: array
+          items:
+            type: string
+
+    TimeRestrictions:
+      type: object
+      properties:
+        timezone:
+          type: string
+          description: IANA timezone name, e.g. `UTC` or `Europe/Berlin`.
+        allowed_hours:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+            maximum: 23
+        allowed_days:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+            maximum: 6
+          description: 0 = Sunday, 6 = Saturday.
+
+    RateLimit:
+      type: object
+      properties:
+        max_per_hour:
+          type: integer
+
+    ApprovalConfig:
+      type: object
+      properties:
+        threshold:
+          type: object
+          required: [required, of]
+          properties:
+            required:
+              type: integer
+            of:
+              type: integer
+        above_usd:
+          type: number
+          description: Approval gate triggers when transaction value exceeds this USD amount.
+        approvers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Approver'
+
+    Approver:
+      type: object
+      required: [id, role]
+      properties:
+        id:
+          type: string
+          description: Public key, e.g. `ed25519:...`.
+        role:
+          type: string
+          enum: [admin, signer]
+
+    AdminQuorum:
+      type: object
+      required: [required, admins]
+      properties:
+        required:
+          type: integer
+        admins:
+          type: array
+          items:
+            type: string
+
+    PolicyResponse:
+      type: object
+      required: [wallet_id, controller, frozen]
+      properties:
+        wallet_id:
+          type: string
+        controller:
+          type: string
+          description: NEAR account that owns the policy.
+        frozen:
+          type: boolean
+        rules:
+          $ref: '#/components/schemas/PolicyRules'
+        approval:
+          $ref: '#/components/schemas/ApprovalConfig'
+        authorized_key_hashes:
+          type: array
+          items:
+            type: string
+        usage:
+          type: object
+          description: |
+            Current accumulated usage per token, per period. Same shape as
+            `PolicyLimits` — used for client-side velocity-limit visualization.
+
+    EncryptPolicyRequest:
+      type: object
+      required: [wallet_id, rules]
+      properties:
+        wallet_id:
+          type: string
+        rules:
+          $ref: '#/components/schemas/PolicyRules'
+        approval:
+          $ref: '#/components/schemas/ApprovalConfig'
+        admin_quorum:
+          $ref: '#/components/schemas/AdminQuorum'
+        webhook_url:
+          type: string
+          format: uri
+        authorized_key_hashes:
+          type: array
+          items:
+            type: string
+
+    EncryptPolicyResponse:
+      type: object
+      required: [encrypted_base64, wallet_pubkey]
+      properties:
+        encrypted_base64:
+          type: string
+        wallet_pubkey:
+          type: string
+
+    SignPolicyRequest:
+      type: object
+      required: [encrypted_data]
+      properties:
+        encrypted_data:
+          type: string
+
+    SignPolicyResponse:
+      type: object
+      required: [signature_hex, public_key_hex]
+      properties:
+        signature_hex:
+          type: string
+        public_key_hex:
+          type: string
+
+    InvalidateCacheRequest:
+      type: object
+      required: [wallet_id]
+      properties:
+        wallet_id:
+          type: string
+
+    # ----- Approvals -----
+    PendingApproval:
+      type: object
+      required: [approval_id, type, request_data, required, approved, expires_at]
+      properties:
+        approval_id:
+          type: string
+          format: uuid
+        request_id:
+          type: [string, 'null']
+          format: uuid
+        type:
+          $ref: '#/components/schemas/RequestType'
+        request_data:
+          type: object
+        required:
+          type: integer
+        approved:
+          type: integer
+        expires_at:
+          type: string
+          format: date-time
+
+    PendingApprovalsResponse:
+      type: object
+      required: [approvals]
+      properties:
+        approvals:
+          type: array
+          items:
+            $ref: '#/components/schemas/PendingApproval'
+
+    Nep413Auth:
+      type: object
+      description: |
+        NEP-413 signed authentication payload. The signed message is
+        `approve:{approval_id}:{request_hash}` for approve or
+        `reject:{approval_id}:{request_hash}` for reject.
+      required: [signature, public_key, account_id, nonce]
+      properties:
+        signature:
+          type: string
+        public_key:
+          type: string
+        account_id:
+          type: string
+        nonce:
+          type: string
+
+    RejectRequest:
+      allOf:
+        - $ref: '#/components/schemas/Nep413Auth'
+        - type: object
+          properties:
+            reason:
+              type: string
+
+    ApproveResponse:
+      type: object
+      required: [approval_id, status, approved, required]
+      properties:
+        approval_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, approved, rejected, expired]
+        approved:
+          type: integer
+        required:
+          type: integer
+        request_id:
+          type: [string, 'null']
+          format: uuid
+
+    # ----- Audit & requests -----
+    AuditEvent:
+      type: object
+      required: [type, details, at]
+      properties:
+        type:
+          type: string
+        request_id:
+          type: [string, 'null']
+        status:
+          type: [string, 'null']
+        details:
+          type: object
+        at:
+          type: string
+          format: date-time
+
+    AuditResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+
+    RequestStatusResponse:
+      type: object
+      required: [request_id, type, status, created_at]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/RequestType'
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        result:
+          type: [object, 'null']
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+
+    RequestListResponse:
+      type: object
+      required: [requests, total]
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/RequestStatusResponse'
+        total:
+          type: integer

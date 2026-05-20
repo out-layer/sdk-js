@@ -1,0 +1,68 @@
+{
+  "name": "@outlayer/sdk",
+  "version": "0.1.0-alpha.1",
+  "description": "TypeScript SDK for OutLayer Agent Custody — multi-chain wallets with TEE-enforced policy.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/out-layer/sdk-js.git"
+  },
+  "homepage": "https://outlayer.fastnear.com/docs/agent-custody",
+  "bugs": {
+    "url": "https://github.com/out-layer/sdk-js/issues"
+  },
+  "keywords": [
+    "outlayer",
+    "near",
+    "custody",
+    "wallet",
+    "tee",
+    "agent",
+    "ai",
+    "policy",
+    "multisig"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "spec/openapi.yaml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "gen": "openapi-typescript spec/openapi.yaml -o src/types.ts",
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check src tests",
+    "format": "biome format --write src tests",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run gen && npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.13.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.0.0",
+    "msw": "^2.6.0",
+    "openapi-typescript": "^7.4.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

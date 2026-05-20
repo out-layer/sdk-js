@@ -96,17 +96,16 @@ Full reference: [API spec](https://api.outlayer.fastnear.com/docs).
 
 Runnable scripts in [`examples/`](examples/):
 
-- `01-register.ts` — register a wallet, print credentials
-- `02-withdraw.ts` — gasless cross-chain withdraw
-- `03-set-policy.ts` — encrypt + sign a policy for on-chain storage
-- `04-multisig.ts` — submit a withdraw that hits the approval threshold
-- `05-cross-chain.ts` — swap NEAR → USDC on Ethereum
-- `06-agent-loop.ts` — minimal autonomous agent that respects policy
+- `01-register.ts` — register a wallet, derive addresses on 4 chains, check balance
+- `02-withdraw.ts` — gasless cross-chain withdraw with dry-run + polling
+- `03-multisig.ts` — submit a withdraw that triggers the approval flow
+- `04-agent-loop.ts` — minimal autonomous agent that respects policy
 
 Run with:
 
 ```bash
-OUTLAYER_API_KEY=wk_... npx tsx examples/01-register.ts
+npx tsx examples/01-register.ts                            # no auth needed
+OUTLAYER_API_KEY=wk_... npx tsx examples/02-withdraw.ts    # needs API key
 ```
 
 ## Errors

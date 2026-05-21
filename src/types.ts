@@ -179,11 +179,25 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Withdraw via NEAR Intents (gasless cross-chain)
-         * @description Gasless cross-chain withdrawal through NEAR Intents solver relay. The
-         *     wallet's intents.near balance is debited; the receiver gets funds on
-         *     the destination chain (NEAR, Ethereum, Solana, Bitcoin) without paying
+         * Withdraw via NEAR Intents (native NEAR / wNEAR / cross-chain)
+         * @description Gasless withdrawal through NEAR Intents solver relay. The wallet's
+         *     intents.near balance is debited; the receiver gets funds without paying
          *     gas on either side.
+         *
+         *     **`chain=near`** — the `token` field selects what the recipient receives:
+         *       - omitted / `near` / `native` (default): **native NEAR**. intents.near
+         *         unwraps the wallet's wNEAR (`native_withdraw` intent) and sends native
+         *         NEAR. The recipient needs **no** `wrap.near` storage. The recipient
+         *         account must already exist (or be a 64-char implicit account) —
+         *         withdrawing to a non-existent named account is rejected (the unwrapped
+         *         wNEAR would otherwise be burned).
+         *       - `nep141:wrap.near`: **wNEAR** (NEP-141). Recipient must be
+         *         storage-registered on `wrap.near`.
+         *       - other `nep141:<token>`: that NEP-141. Recipient must be storage-registered.
+         *
+         *     **Other chains** (`ethereum`, `solana`, `bitcoin`, ...) — `token` is the
+         *     source Intents asset; 1Click bridges and delivers the destination chain's
+         *     native asset.
          *
          *     If the policy requires approval, returns `status=pending_approval` with
          *     an `approval_id`.
@@ -675,7 +689,7 @@ export interface components {
             /** @description Destination address on the target chain. */
             to?: string;
             amount: string;
-            /** @description Token ID, e.g. `nep141:usdt.tether-token.near`. Omit for native asset. */
+            /** @description Token ID, e.g. `nep141:usdt.tether-token.near`. For `chain=near`, omit (or use `near`/`native`) to deliver **native NEAR** (unwraps the wallet's wNEAR); use `nep141:wrap.near` to deliver wNEAR instead. For other chains, this is the source Intents asset bridged via 1Click. */
             token?: string;
         };
         WithdrawResponse: {
@@ -689,6 +703,7 @@ export interface components {
         };
         DryRunResponse: {
             would_succeed?: boolean;
+            /** @description Present when `would_succeed` is false. One of: `wallet_frozen`, `policy_denied`, `storage_not_registered` (wNEAR/NEP-141 recipient has no token storage), `recipient_not_found` (native NEAR to a non-existent named account — would burn the wNEAR). */
             reason?: string;
             message?: string;
             estimated_fee?: string;
@@ -1274,14 +1289,6 @@ export interface operations {
         };
         requestBody: {
             content: {
-                /**
-                 * @example {
-                 *       "chain": "ethereum",
-                 *       "to": "0x742d35Cc6634C0532925a3b844Bc9e7595f8b4f5",
-                 *       "amount": "1000000",
-                 *       "token": "nep141:usdt.tether-token.near"
-                 *     }
-                 */
                 "application/json": components["schemas"]["WithdrawRequest"];
             };
         };

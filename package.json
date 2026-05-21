@@ -1,6 +1,6 @@
 {
   "name": "@outlayer/sdk",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "description": "TypeScript SDK for OutLayer Agent Custody — multi-chain wallets with TEE-enforced policy.",
   "license": "MIT",
   "repository": {

@@ -260,6 +260,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/deposit-intent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a cross-chain deposit intent (1Click)
+         * @description Requests a one-time deposit address on a source chain via NEAR Intents
+         *     1Click. The caller sends `amount` of `token` to the returned
+         *     `deposit_address` on `chain`; the solver bridges it and credits the
+         *     wallet's intents.near balance. Poll `getDepositStatus` until `success`.
+         *
+         *     Amounts are in the token's smallest unit. There's a small bridge fee,
+         *     so `amount_out` < `amount`.
+         */
+        post: operations["createDepositIntent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/deposit-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll a cross-chain deposit intent's status */
+        get: operations["getDepositStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/v1/sign-message": {
         parameters: {
             query?: never;
@@ -676,6 +719,37 @@ export interface components {
             /** Format: date-time */
             deadline?: string;
             time_estimate_seconds?: number;
+        };
+        DepositIntentRequest: {
+            /**
+             * @description Source chain to bridge from. Common values: `ethereum`, `solana`,
+             *     `base`, `arbitrum`, `polygon`, `optimism`, `avalanche`.
+             */
+            chain: string;
+            /** @description Amount in the token's smallest unit (e.g. `5000000` = 5 USDC). */
+            amount: string;
+            /** @description Token symbol to deposit, e.g. `USDC`. */
+            token: string;
+        };
+        DepositIntentResponse: {
+            intent_id: string;
+            /** @description One-time address on the source chain — send funds here. */
+            deposit_address: string;
+            amount: string;
+            /** @description Amount credited after the bridge fee. */
+            amount_out: string;
+            min_amount_out: string;
+            /** Format: date-time */
+            expires_at: string;
+            estimated_time_secs: number;
+        };
+        DepositStatusResponse: {
+            intent_id: string;
+            /** @enum {string} */
+            status: "pending" | "bridging" | "success" | "failed" | "expired";
+            result?: {
+                [key: string]: unknown;
+            } | null;
         };
         SignMessageRequest: {
             message: string;
@@ -1321,6 +1395,66 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createDepositIntent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "chain": "ethereum",
+                 *       "amount": "5000000",
+                 *       "token": "USDC"
+                 *     }
+                 */
+                "application/json": components["schemas"]["DepositIntentRequest"];
+            };
+        };
+        responses: {
+            /** @description Deposit intent created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositIntentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getDepositStatus: {
+        parameters: {
+            query: {
+                /** @description The `intent_id` from `createDepositIntent`. */
+                id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deposit status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositStatusResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
     };

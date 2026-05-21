@@ -4,6 +4,17 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] — 2026-05-21
+
+### Added
+
+- `client.createDepositIntent({ chain, amount, token })` — cross-chain deposit
+  via NEAR Intents 1Click. Returns a one-time deposit address on the source
+  chain (Ethereum, Solana, Base, Arbitrum, …).
+- `client.getDepositStatus(intentId)` — poll a deposit intent until `success`.
+- Spec: `POST /wallet/v1/deposit-intent`, `GET /wallet/v1/deposit-status`,
+  plus `DepositIntentRequest` / `DepositIntentResponse` / `DepositStatusResponse`.
+
 ## [0.1.0-alpha.2] — 2026-05-20
 
 ### Added

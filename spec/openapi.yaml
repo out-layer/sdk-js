@@ -477,6 +477,69 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /wallet/v1/deposit-intent:
+    post:
+      tags: [Wallet]
+      operationId: createDepositIntent
+      summary: Create a cross-chain deposit intent (1Click)
+      description: |
+        Requests a one-time deposit address on a source chain via NEAR Intents
+        1Click. The caller sends `amount` of `token` to the returned
+        `deposit_address` on `chain`; the solver bridges it and credits the
+        wallet's intents.near balance. Poll `getDepositStatus` until `success`.
+
+        Amounts are in the token's smallest unit. There's a small bridge fee,
+        so `amount_out` < `amount`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DepositIntentRequest'
+            example:
+              chain: ethereum
+              amount: '5000000'
+              token: USDC
+      responses:
+        '200':
+          description: Deposit intent created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositIntentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/deposit-status:
+    get:
+      tags: [Wallet]
+      operationId: getDepositStatus
+      summary: Poll a cross-chain deposit intent's status
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The `intent_id` from `createDepositIntent`.
+      responses:
+        '200':
+          description: Deposit status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /wallet/v1/sign-message:
     post:
       tags: [Wallet]
@@ -1284,6 +1347,64 @@ components:
           format: date-time
         time_estimate_seconds:
           type: integer
+
+    DepositIntentRequest:
+      type: object
+      required: [chain, amount, token]
+      properties:
+        chain:
+          type: string
+          description: |
+            Source chain to bridge from. Common values: `ethereum`, `solana`,
+            `base`, `arbitrum`, `polygon`, `optimism`, `avalanche`.
+        amount:
+          type: string
+          description: Amount in the token's smallest unit (e.g. `5000000` = 5 USDC).
+        token:
+          type: string
+          description: Token symbol to deposit, e.g. `USDC`.
+
+    DepositIntentResponse:
+      type: object
+      required:
+        - intent_id
+        - deposit_address
+        - amount
+        - amount_out
+        - min_amount_out
+        - expires_at
+        - estimated_time_secs
+      properties:
+        intent_id:
+          type: string
+        deposit_address:
+          type: string
+          description: One-time address on the source chain — send funds here.
+        amount:
+          type: string
+        amount_out:
+          type: string
+          description: Amount credited after the bridge fee.
+        min_amount_out:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        estimated_time_secs:
+          type: integer
+
+    DepositStatusResponse:
+      type: object
+      required: [intent_id, status]
+      properties:
+        intent_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, bridging, success, failed, expired]
+        result:
+          type: [object, 'null']
+          additionalProperties: {}
 
     SignMessageRequest:
       type: object

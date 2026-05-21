@@ -524,6 +524,45 @@ describe('Wallet writes: swap + swapQuote', () => {
   });
 });
 
+describe('Wallet: cross-chain deposit (1Click)', () => {
+  it('createDepositIntent posts chain/amount/token and returns a deposit address', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/deposit-intent`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          intent_id: 'int-1',
+          deposit_address: '0xDEADBEEF',
+          amount: '5000000',
+          amount_out: '4999490',
+          min_amount_out: '4949495',
+          expires_at: '2026-05-24T00:00:00Z',
+          estimated_time_secs: 45,
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.createDepositIntent({ chain: 'ethereum', amount: '5000000', token: 'USDC' });
+    expect(receivedBody).toEqual({ chain: 'ethereum', amount: '5000000', token: 'USDC' });
+    expect(r.deposit_address).toBe('0xDEADBEEF');
+    expect(r.intent_id).toBe('int-1');
+  });
+
+  it('getDepositStatus passes intentId as the id query param', async () => {
+    let receivedQuery = '';
+    server.use(
+      http.get(`${BASE}/wallet/v1/deposit-status`, ({ request }) => {
+        receivedQuery = new URL(request.url).search;
+        return HttpResponse.json({ intent_id: 'int-1', status: 'success', result: { amountOut: '4999490' } });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.getDepositStatus('int-1');
+    expect(receivedQuery).toContain('id=int-1');
+    expect(r.status).toBe('success');
+  });
+});
+
 describe('Wallet writes: signMessage', () => {
   it('defaults to NEP-413 format and returns signature', async () => {
     let receivedBody: Record<string, unknown> = {};

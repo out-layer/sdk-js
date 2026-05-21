@@ -45,6 +45,10 @@ export type SwapQuoteResponse = Schemas['SwapQuoteResponse'];
 export type SignMessageRequest = Schemas['SignMessageRequest'];
 export type SignMessageResponse = Schemas['SignMessageResponse'];
 
+export type DepositIntentRequest = Schemas['DepositIntentRequest'];
+export type DepositIntentResponse = Schemas['DepositIntentResponse'];
+export type DepositStatusResponse = Schemas['DepositStatusResponse'];
+
 export type RequestStatusResponse = Schemas['RequestStatusResponse'];
 export type RequestListResponse = Schemas['RequestListResponse'];
 
@@ -308,6 +312,26 @@ export class OutlayerClient {
   signMessage(opts: SignMessageRequest): Promise<SignMessageResponse> {
     return runWithRetry(
       () => this.client.POST('/wallet/v1/sign-message', { body: opts }),
+      this.retry,
+    );
+  }
+
+  // ------- Cross-chain deposit (1Click) -------
+
+  /**
+   * Create a one-time deposit address on a source chain. Send funds there,
+   * then poll {@link getDepositStatus} until `success`.
+   */
+  createDepositIntent(opts: DepositIntentRequest): Promise<DepositIntentResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/deposit-intent', { body: opts }),
+      this.retry,
+    );
+  }
+
+  getDepositStatus(intentId: string): Promise<DepositStatusResponse> {
+    return runWithRetry(
+      () => this.client.GET('/wallet/v1/deposit-status', { params: { query: { id: intentId } } }),
       this.retry,
     );
   }

@@ -56,18 +56,35 @@ const result = await client.call({
 
 `result.status` is `processing` on submission, `success` / `failed` after settlement, or `pending_approval` if the call exceeds policy limits.
 
-## Cross-chain withdraw (gasless, via Intents)
+## Withdraw (gasless, via Intents)
+
+`withdraw` moves a position out of `intents.near`. The **`token` field decides what the recipient receives**:
 
 ```ts
-const result = await client.withdraw({
+// Cross-chain: deliver USDT on Ethereum (1Click bridges + delivers native asset)
+await client.withdraw({
   chain: 'ethereum',
   to: '0x742d35Cc6634C0532925a3b844Bc9e7595f8b4f5',
   amount: '1000000',
   token: 'nep141:usdt.tether-token.near',
 });
+
+// To NEAR, native NEAR: unwraps the wallet's wNEAR via the intents
+// `native_withdraw` intent. Recipient needs NO wrap.near storage.
+await client.withdraw({
+  chain: 'near',
+  to: 'recipient.near',
+  amount: '1000000000000000000000000', // yoctoNEAR
+  token: 'near', // or 'native', or omit
+});
+
+// To NEAR, wNEAR (NEP-141): recipient must be storage-registered on wrap.near
+await client.withdraw({ chain: 'near', to: 'recipient.near', amount: '...', token: 'nep141:wrap.near' });
 ```
 
-The wallet must first have the source token deposited in intents.near (see `intentsDeposit` below). No gas is required on either chain — the solver relay covers it, and the cost is folded into the swap rate.
+The wallet must hold the source position in intents.near first (see `intentsDeposit` / `createDepositIntent` below). No gas is required from the wallet — the solver relay covers it.
+
+For `chain=near, token=near`, the recipient must already exist (or be a 64-char implicit account); withdrawing native NEAR to a non-existent named account is rejected (the unwrapped wNEAR would otherwise burn).
 
 ### Simulate before executing
 
@@ -118,6 +135,32 @@ await client.intentsDeposit({
 ```
 
 Wraps `ft_transfer_call` to `intents.near` with auto storage-deposit if the wallet hasn't registered there yet. Required once per token before swaps or cross-chain withdraws.
+
+## Cross-chain deposit (bring funds in via 1Click)
+
+To fund the wallet from another chain, create a deposit intent — 1Click returns a one-time address on the source chain. Send funds there; poll until they land in `intents.near`.
+
+```ts
+// 1. Request a deposit address on the source chain
+const intent = await client.createDepositIntent({
+  chain: 'ethereum', // ethereum, solana, base, arbitrum, polygon, optimism, avalanche, …
+  token: 'USDC',
+  amount: '5000000', // 5 USDC, smallest unit
+});
+
+console.log('Send', intent.amount, 'to', intent.deposit_address, 'on', 'ethereum');
+console.log('You will receive ~', intent.amount_out); // minus bridge fee
+
+// 2. After sending, poll until credited
+for (let i = 0; i < 120; i++) {
+  const status = await client.getDepositStatus(intent.intent_id);
+  if (status.status === 'success') break;
+  if (status.status === 'failed' || status.status === 'expired') throw new Error(status.status);
+  await new Promise((r) => setTimeout(r, 3000));
+}
+```
+
+> **⚠️ One-time addresses, exact amounts.** Send exactly the quoted token+amount on exactly that chain. Deposit addresses expire and are single-use. Sending the wrong asset/chain is unrecoverable — see the asset warning in the README.
 
 ## Sign a message (NEP-413)
 

@@ -71,7 +71,9 @@ That's the whole flow. The wallet has no policy yet, so withdraws are unrestrict
 | `client.withdrawDryRun({...})` | Policy + balance check without execution |
 | `client.swap({...})` | Cross-chain swap via 1Click |
 | `client.swapQuote({...})` | Price preview without execution |
-| `client.intentsDeposit({...})` | Move FT into intents.near for cross-chain ops |
+| `client.intentsDeposit({...})` | Move an on-NEAR FT into intents.near |
+| `client.createDepositIntent({...})` | Cross-chain deposit: one-time 1Click address to fund from another chain |
+| `client.getDepositStatus(id)` | Poll a cross-chain deposit intent |
 | `client.signMessage({...})` | NEP-413 or raw message signing |
 | `client.getRequest(id)` | Status of an async operation |
 | `client.listRequests({...})` | List recent operations |

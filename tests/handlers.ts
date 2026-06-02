@@ -1,4 +1,4 @@
-import { HttpResponse, http } from 'msw';
+import { http, HttpResponse } from 'msw';
 
 const BASE = 'https://api.outlayer.fastnear.com';
 

@@ -91,14 +91,18 @@ const codeToCtor: Partial<Record<ErrorCode, new (opts: OutlayerErrorOptions) => 
 export function makeError(body: ErrorBody, status: number): OutlayerError {
   const code: ErrorCode = body.error ?? 'parse_error';
   const message = body.message ?? `HTTP ${status}`;
-  const opts: OutlayerErrorOptions = body.details !== undefined
-    ? { code, message, status, details: body.details }
-    : { code, message, status };
+  const opts: OutlayerErrorOptions =
+    body.details !== undefined
+      ? { code, message, status, details: body.details }
+      : { code, message, status };
   const Ctor = codeToCtor[code] ?? OutlayerError;
   return new Ctor(opts);
 }
 
-export async function errorFromResponse(response: Response, parsed?: unknown): Promise<OutlayerError> {
+export async function errorFromResponse(
+  response: Response,
+  parsed?: unknown,
+): Promise<OutlayerError> {
   let body: ErrorBody;
   if (parsed && typeof parsed === 'object') {
     body = parsed as ErrorBody;

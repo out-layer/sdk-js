@@ -1,6 +1,6 @@
 import createClient, { type Client } from 'openapi-fetch';
-import type { paths } from './types.js';
 import { OutlayerError, errorFromResponse } from './errors.js';
+import type { paths } from './types.js';
 
 export type Network = 'mainnet' | 'testnet';
 
@@ -51,7 +51,10 @@ export const DEFAULT_RETRY: Required<RetryConfig> = {
 
 export type FetchClient = Client<paths, `${string}/${string}`>;
 
-export function makeClient(opts: ClientOptions): { client: FetchClient; retry: Required<RetryConfig> } {
+export function makeClient(opts: ClientOptions): {
+  client: FetchClient;
+  retry: Required<RetryConfig>;
+} {
   const init: Parameters<typeof createClient<paths>>[0] = {
     baseUrl: resolveBaseUrl(opts),
     headers: { Authorization: `Bearer ${opts.apiKey}` },

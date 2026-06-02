@@ -44,6 +44,16 @@ export type {
   ApproveResponse,
   AuditEvent,
   AuditResponse,
+  ConfidentialShieldRequest,
+  ConfidentialUnshieldRequest,
+  ConfidentialWithdrawRequest,
+  ConfidentialTransferRequest,
+  ConfidentialSwapRequest,
+  ConfidentialDepositIntentRequest,
+  ConfidentialDepositIntentResponse,
+  ConfidentialOpResponse,
+  ConfidentialBalanceResponse,
+  ConfidentialBalancesResponse,
 } from './client.js';
 
 export {

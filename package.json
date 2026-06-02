@@ -1,6 +1,6 @@
 {
   "name": "@outlayer/sdk",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "description": "TypeScript SDK for OutLayer Agent Custody — multi-chain wallets with TEE-enforced policy.",
   "license": "MIT",
   "repository": {
@@ -40,6 +40,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "sync-spec": "cp ../outlayer-coordinator/vendor/api-spec/openapi.yaml spec/openapi.yaml && npm run gen",
     "gen": "openapi-typescript spec/openapi.yaml -o src/types.ts",
     "build": "tsup",
     "dev": "tsup --watch",

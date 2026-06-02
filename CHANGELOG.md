@@ -4,6 +4,34 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] — 2026-06-02
+
+### Added
+
+- **Confidential Intents** — 9 new methods on `OutlayerClient`, mirroring the
+  public `/intents/*` surface against the Defuse confidential shard
+  (`intents.far` on a private NEAR shard with no public RPC):
+  `confidentialDeposit` (SHIELD), `confidentialUnshield`, `confidentialWithdraw`,
+  `confidentialWithdrawDryRun`, `confidentialTransfer`, `confidentialSwap`,
+  `confidentialSwapQuote`, `confidentialDepositIntent`, and `confidentialBalance`.
+  Action methods are async (return a `request_id` to poll via `getRequest`);
+  dry-run / quote / balance are read-only. See the README's *Confidential
+  Intents* section and the coordinator's
+  [CONFIDENTIAL_INTENTS.md](https://github.com/out-layer/coordinator/blob/main/docs/CONFIDENTIAL_INTENTS.md)
+  for the mental model and threat model.
+- Spec: `POST /wallet/v1/confidential/{deposit,unshield,withdraw,withdraw/dry-run,transfer,swap,swap/quote,deposit-intent}`
+  and `GET /wallet/v1/confidential/balance`.
+- Exported types: `ConfidentialShieldRequest`, `ConfidentialUnshieldRequest`,
+  `ConfidentialWithdrawRequest`, `ConfidentialTransferRequest`,
+  `ConfidentialSwapRequest`, `ConfidentialDepositIntentRequest`,
+  `ConfidentialDepositIntentResponse`, `ConfidentialOpResponse`,
+  `ConfidentialBalanceResponse`, `ConfidentialBalancesResponse`. Read-only
+  quotes reuse `SwapQuoteResponse`. The `503 confidential_unavailable` /
+  `502 confidential_jwt_expired` upstream errors surface as `OutlayerError`
+  with the matching `code`.
+- 22 new tests covering all 9 methods (happy path, idempotency, query
+  forwarding, union narrowing, and 503/502/403/400 error mapping).
+
 ## [0.1.0-alpha.3] — 2026-05-21
 
 ### Added

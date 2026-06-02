@@ -274,6 +274,236 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/confidential/deposit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * SHIELD — move public intents balance into the confidential shard
+         * @description Moves the wallet's **public** `intents.near` balance into its
+         *     confidential balance (deposit-type `INTENTS` → recipient-type
+         *     `CONFIDENTIAL_INTENTS`).
+         *
+         *     **Privacy note:** SHIELD links the wallet to the confidential pool
+         *     **on-chain** (an `execute_intents` call signed by the wallet, with the
+         *     public asset id visible). It is a convenience hop, not an unlinkable
+         *     operation — for unlinkability fund the confidential balance via
+         *     `confidentialDepositIntent` (cross-chain) instead. See CUSTODY docs.
+         *
+         *     Async: returns `status=pending_deposit` with a `request_id`; poll
+         *     `GET /wallet/v1/requests/{id}` until terminal.
+         */
+        post: operations["confidentialDeposit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/unshield": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * UNSHIELD — move confidential balance back to public intents
+         * @description Reverse of SHIELD (deposit-type `CONFIDENTIAL_INTENTS` → recipient-type
+         *     `INTENTS`). Like SHIELD, this links the wallet on-chain (exit-to-public
+         *     reveal). Async — poll `GET /wallet/v1/requests/{id}`.
+         */
+        post: operations["confidentialUnshield"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw a confidential balance to an external chain
+         * @description Moves a confidential balance out to a destination chain
+         *     (`CONFIDENTIAL_INTENTS` → `DESTINATION_CHAIN`). The wallet's NEAR address
+         *     never appears on chain — only the destination-chain receiver does, on the
+         *     destination chain.
+         *
+         *     `chain="near"` is supported and delivers **native NEAR** to the named
+         *     NEAR account: 1Click runs a `native_withdraw` intent on `intents.near`
+         *     that unwraps the wNEAR and sends native NEAR directly to the recipient's
+         *     wallet (verified live: settlement
+         *     `FVzan8XRMwHYPe2hgX4GffwG3bdndxETWb2FKVFzFdur`). To send funds back to
+         *     your **own** public intents balance use `confidentialUnshield` (different
+         *     semantics — self vs. external recipient).
+         *
+         *     `token` is **required** — the source confidential asset to deliver on the
+         *     destination chain. The same per-chain whitelist / spending-limit policy
+         *     as `intentsWithdraw` is enforced. Async — poll
+         *     `GET /wallet/v1/requests/{id}`.
+         *
+         *     **Delivery to a NEAR named account via `DESTINATION_CHAIN` lands an
+         *     `mt_balance` credit on `intents.near` (NEP-245), not a direct FT
+         *     balance** — see CUSTODY docs.
+         */
+        post: operations["confidentialWithdraw"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/withdraw/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Quote a confidential withdraw (no execution)
+         * @description Returns the indicative output for a confidential withdraw without
+         *     signing or submitting. Read-only.
+         */
+        post: operations["confidentialWithdrawDryRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Private transfer inside the confidential shard
+         * @description Transfers a confidential balance to another NEAR account, fully inside
+         *     the confidential shard (`CONFIDENTIAL_INTENTS` → `CONFIDENTIAL_INTENTS`).
+         *     Settles on the private shard, so it leaves no public-chain trace.
+         *     NEAR-only context — no `chain` field; `token`
+         *     required. Async — poll `GET /wallet/v1/requests/{id}`.
+         */
+        post: operations["confidentialTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/swap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Swap between two assets inside the confidential shard
+         * @description Confidential swap with distinct `token_in`/`token_out`, both settled
+         *     inside the confidential shard. Settles on the private shard, so it leaves
+         *     no public-chain trace. Async — poll
+         *     `GET /wallet/v1/requests/{id}`.
+         */
+        post: operations["confidentialSwap"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/swap/quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Quote a confidential swap (no execution)
+         * @description Read-only price preview for a confidential swap.
+         */
+        post: operations["confidentialSwapQuote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/deposit-intent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cross-chain deposit into the confidential shard (quote only)
+         * @description Requests a one-time bridge deposit address to fund the confidential
+         *     balance from an external chain (`ORIGIN_CHAIN` → `CONFIDENTIAL_INTENTS`).
+         *     The caller sends `amount` of the source asset to the returned
+         *     `deposit_address` out-of-band; the solver bridges it and credits the
+         *     confidential balance. **The wallet's NEAR address never touches the
+         *     public side** — this is the most private way to fund a confidential
+         *     balance. Poll `GET /wallet/v1/requests/{id}` for status.
+         */
+        post: operations["confidentialDepositIntent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read confidential balances
+         * @description Returns the wallet's confidential balances from the private shard
+         *     (`intents.far`), which has no public RPC of its own. With `?token=`
+         *     returns a single asset; without it returns the
+         *     full list. Accepts both `wrap.near` and `nep141:wrap.near` forms.
+         */
+        get: operations["confidentialBalance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/v1/deposit-intent": {
         parameters: {
             query?: never;
@@ -286,12 +516,31 @@ export interface paths {
         /**
          * Create a cross-chain deposit intent (1Click)
          * @description Requests a one-time deposit address on a source chain via NEAR Intents
-         *     1Click. The caller sends `amount` of `token` to the returned
-         *     `deposit_address` on `chain`; the solver bridges it and credits the
-         *     wallet's intents.near balance. Poll `getDepositStatus` until `success`.
+         *     1Click. The caller sends `amount` of the source token to the returned
+         *     `deposit_address`; the solver bridges it and credits the wallet's
+         *     intents.near balance. Poll `getDepositStatus` until `success`.
+         *
+         *     Two request shapes are accepted (see
+         *     [`DepositIntentRequest`](#/components/schemas/DepositIntentRequest)):
+         *
+         *     - **By asset id (preferred)** — `{ source_asset, destination_asset?,
+         *       amount }`. The source chain is derived from the
+         *       [`defuse_asset_id`](#/components/schemas/TokenInfo) prefix. This is
+         *       the shape returned by `listTokens` and used by the dashboard.
+         *     - **By chain + symbol (legacy)** — `{ chain, token?, amount }`. The
+         *       coordinator resolves `(chain, symbol)` to an asset id via the
+         *       1Click token catalog.
+         *
+         *     If both shapes are present and disagree, `source_asset` wins and the
+         *     coordinator logs a warning. `near` is a valid source chain — a
+         *     NEAR-origin deposit returns a 64-char hex implicit account.
          *
          *     Amounts are in the token's smallest unit. There's a small bridge fee,
          *     so `amount_out` < `amount`.
+         *
+         *     The returned `deposit_address` is chain-specific — see the
+         *     [`DepositIntentResponse.deposit_address`](#/components/schemas/DepositIntentResponse)
+         *     description for per-chain address formats.
          */
         post: operations["createDepositIntent"];
         delete?: never;
@@ -548,9 +797,9 @@ export interface components {
         /** @enum {string} */
         RequestType: "call" | "transfer" | "withdraw" | "deposit" | "swap";
         /** @enum {string} */
-        RequestStatus: "processing" | "success" | "failed" | "pending_approval" | "approved" | "rejected";
+        RequestStatus: "pending_deposit" | "processing" | "success" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "missing_signature" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "bad_request" | "duplicate_idempotency_key" | "internal_error";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "missing_signature" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "bad_request" | "duplicate_idempotency_key" | "internal_error" | "keystore_error" | "confidential_unavailable" | "confidential_jwt_expired";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -668,10 +917,32 @@ export interface components {
             required?: number | null;
             approved?: number | null;
         };
+        /**
+         * @description Native transfer on a single chain. Canonical recipient field is
+         *     `to` — matches `WithdrawRequest.to` and the dashboard. The legacy
+         *     field name `receiver_id` is still accepted as an alias for
+         *     backward compatibility with clients that predate the rename;
+         *     sending BOTH in the same body is rejected as a deserialization
+         *     error.
+         */
         TransferRequest: {
             /** @description Chain to transfer on. Defaults to `near` server-side. */
             chain?: components["schemas"]["Chain"];
-            receiver_id: string;
+            /**
+             * @description Recipient account id on `chain`. For NEAR, accepts both named
+             *     accounts (`alice.near`) and 64-char implicit hex accounts.
+             * @example alice.near
+             */
+            to: string;
+            /**
+             * @deprecated
+             * @description **Deprecated alias for `to`.** Existing clients sending
+             *     `receiver_id` continue to work; new clients should use `to`.
+             *     Sending both `to` and `receiver_id` in the same body is
+             *     rejected with a 400.
+             */
+            receiver_id?: string;
+            /** @description Amount in the chain's smallest unit (yoctoNEAR, wei, …). */
             amount: string;
         };
         IntentsDepositRequest: {
@@ -735,28 +1006,114 @@ export interface components {
             deadline?: string;
             time_estimate_seconds?: number;
         };
+        /**
+         * @description NEAR Intents `defuse_asset_id`. Currently always a NEP-141 token
+         *     identifier of the form `nep141:<contract>`. Format matches the
+         *     [`TokenInfo.defuse_asset_id`](#/components/schemas/TokenInfo) field
+         *     returned by `listTokens`.
+         * @example nep141:wrap.near
+         */
+        DefuseAssetId: string;
+        /**
+         * @description Defuse asset id the recipient will hold after the bridge. Defaults
+         *     to NEAR USDC.
+         * @default nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1
+         */
+        DestinationAsset: components["schemas"]["DefuseAssetId"];
+        /**
+         * @description Request body for `createDepositIntent`. Two shapes accepted; see the
+         *     `anyOf` branches below. `amount` is always required. The
+         *     `destination_asset` field defaults to NEAR USDC
+         *     (`nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1`)
+         *     when omitted — see
+         *     [`DestinationAsset`](#/components/schemas/DestinationAsset).
+         *
+         *     Uses `anyOf` (not `oneOf`) deliberately — a request that supplies
+         *     both `source_asset` and `chain` matches both branches; the
+         *     coordinator resolves the conflict by preferring `source_asset` and
+         *     logging a warning, so `oneOf`'s strict "exactly one match" rule
+         *     would needlessly reject valid requests.
+         */
         DepositIntentRequest: {
             /**
-             * @description Source chain to bridge from. Common values: `ethereum`, `solana`,
-             *     `base`, `arbitrum`, `polygon`, `optimism`, `avalanche`.
+             * @description NEAR Intents `defuse_asset_id` of the source token. The
+             *     source chain is derived from this id.
+             * @example nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near
+             */
+            source_asset: components["schemas"]["DefuseAssetId"];
+            destination_asset?: components["schemas"]["DestinationAsset"];
+            /** @description Amount in the source token's smallest unit (e.g. `5000000` = 5 USDC). */
+            amount: string;
+            /**
+             * @description Address on the source chain to refund to if the bridge
+             *     fails. Defaults to the wallet's derived address on that
+             *     chain.
+             */
+            refund_address?: string;
+        } | {
+            /**
+             * @description Source chain. Supported: `near`, `ethereum`, `base`,
+             *     `arbitrum`, `solana`, `bitcoin`, `bsc`, `polygon`,
+             *     `optimism`, `avalanche`.
+             * @example ethereum
              */
             chain: string;
-            /** @description Amount in the token's smallest unit (e.g. `5000000` = 5 USDC). */
-            amount: string;
-            /** @description Token symbol to deposit, e.g. `USDC`. */
+            /**
+             * @description Source token symbol on the origin chain. Defaults to `USDC`.
+             * @default USDC
+             */
             token: string;
+            destination_asset?: components["schemas"]["DestinationAsset"];
+            amount: string;
+            refund_address?: string;
         };
         DepositIntentResponse: {
             intent_id: string;
-            /** @description One-time address on the source chain — send funds here. */
+            /**
+             * @description One-time address on the source chain — send funds here. The
+             *     address format depends on the resolved source chain:
+             *
+             *     - `near` — 64-char hex (NEAR implicit account), e.g.
+             *       `f51768dc0c4d4bbb78890262da9882dee2ee5b6c2fcf2c527e56c6eadcb54353`
+             *     - `ethereum` / `base` / `arbitrum` / `bsc` / `polygon` /
+             *       `optimism` / `avalanche` — `0x` + 40 hex (EVM), e.g.
+             *       `0x582290c0b2Cb60989B35FFF66049f3e3247355bc`
+             *     - `solana` — base58, 32-44 chars (Solana), e.g.
+             *       `5AmGa2Bcfajbytg55UUb4vCAAzKBMYKZNQwx5S2BH2qf`
+             *     - `bitcoin` — `bc1…` (segwit) or `1…` / `3…` (legacy)
+             *
+             *     Sending tokens to an address whose format doesn't match the
+             *     source chain will lose the funds — always verify the format
+             *     client-side before initiating the transfer.
+             */
             deposit_address: string;
             amount: string;
             /** @description Amount credited after the bridge fee. */
             amount_out: string;
             min_amount_out: string;
-            /** Format: date-time */
-            expires_at: string;
-            estimated_time_secs: number;
+            /**
+             * Format: date-time
+             * @description Deadline after which the deposit address is no longer
+             *     guaranteed to be honored by 1Click. Absent if 1Click did not
+             *     return a deadline.
+             */
+            expires_at?: string;
+            /**
+             * @description Solver's estimate of bridge settlement time, in seconds. Absent
+             *     if 1Click did not return an estimate.
+             */
+            estimated_time_secs?: number;
+            /**
+             * @description Non-binding advisory when a faster / cheaper endpoint exists
+             *     for the same logical operation. Present only when the resolved
+             *     source chain is `near` — in that case the caller's funds are
+             *     already on NEAR and `POST /wallet/v1/intents/deposit` would do
+             *     the deposit in one direct `ft_transfer_call` without the
+             *     1Click solver hop. Clients that don't read this field are
+             *     unaffected; clients that prefer the most direct path can
+             *     switch endpoints on receiving it.
+             */
+            hint?: string;
         };
         DepositStatusResponse: {
             intent_id: string;
@@ -941,17 +1298,117 @@ export interface components {
             request_id: string;
             type: components["schemas"]["RequestType"];
             status: components["schemas"]["RequestStatus"];
-            result?: {
+            /**
+             * @description Operation-specific result payload, present once `status` is
+             *     `success` (otherwise `null` or an `{ "error": "<reason>" }` object
+             *     on `failed`). The shape depends on `type`:
+             *
+             *     - `type = "withdraw"` — conforms to
+             *       [`WithdrawResult`](#/components/schemas/WithdrawResult).
+             *     - Other request types are not yet schema-documented; treat the
+             *       object as opaque until added in a later spec release.
+             *
+             *     Uses `anyOf` (not `oneOf`) deliberately — `WithdrawResult` is also
+             *     a valid `object`, and `oneOf` would require exactly one match,
+             *     so a successful withdraw would fail strict validators.
+             */
+            result?: components["schemas"]["WithdrawResult"] | null | {
                 [key: string]: unknown;
-            } | null;
+            };
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at?: string | null;
         };
+        /**
+         * @description Result payload for a successful `withdraw` request — what the
+         *     recipient actually received on-chain. Emitted in the `result` field of
+         *     `GET /wallet/v1/requests/{id}` and in the `result` field of the
+         *     `request_completed` webhook for withdraw requests.
+         */
+        WithdrawResult: {
+            /**
+             * @description Base58-encoded NEAR Intents hash returned by `solver-relay`.
+             *     Empty string if the relay did not return one — the field is
+             *     always present so clients can index it without `Option` handling.
+             * @example 4GArqMi1WJwsw7p4tWHAbYG2Se5Wp6YSb8Ab3C8cUTJg
+             */
+            intent_hash: string;
+            /**
+             * @description Canonical identifier of the asset the recipient received on-chain.
+             *     Format mirrors the request `token` field of
+             *     `POST /wallet/v1/intents/withdraw`, so clients can compare request
+             *     vs. response directly:
+             *
+             *     - `"native_near"` — the wallet emitted a `native_withdraw` intent
+             *       that unwrapped wNEAR and sent native NEAR. The recipient
+             *       received native NEAR regardless of what the request `token`
+             *       field named (`""`, `"near"`, or `"native"`).
+             *     - `"nep141:<contract>"` — the wallet emitted a NEP-141 `transfer`
+             *       intent. The recipient received that token, including wNEAR
+             *       (`"nep141:wrap.near"`), USDC, USDT, etc.
+             *
+             *     Never returned: the legacy short symbol `"wnear"` (was emitted
+             *     in error by coordinator versions prior to the
+             *     `WithdrawResult`-typed response — see api-spec CHANGELOG).
+             */
+            delivered: "native_near" | string;
+        };
         RequestListResponse: {
             requests: components["schemas"]["RequestStatusResponse"][];
             total: number;
+        };
+        /** @description SHIELD body — same shape as `IntentsDepositRequest`. */
+        ConfidentialShieldRequest: components["schemas"]["IntentsDepositRequest"];
+        /** @description UNSHIELD body — same shape as `IntentsDepositRequest`. */
+        ConfidentialUnshieldRequest: components["schemas"]["IntentsDepositRequest"];
+        /** @description Confidential withdraw body — same shape as `WithdrawRequest`; `token` is required (the source confidential asset to deliver). `chain="near"` is supported and delivers native NEAR via `intents.near native_withdraw` (use `confidentialUnshield` if you want to send to your own public balance instead). */
+        ConfidentialWithdrawRequest: components["schemas"]["WithdrawRequest"];
+        /** @description Confidential swap body — same shape as `SwapRequest`. */
+        ConfidentialSwapRequest: components["schemas"]["SwapRequest"];
+        /** @description Cross-chain deposit-intent body — same shape as `DepositIntentRequest` (`source_asset` or `chain`+`token`). NOTE: for the confidential endpoint `destination_asset` and `refund_address` are **ignored** — the destination is forced to the origin asset (same-asset bridge into the confidential shard) and refund is forced to the wallet's 64-hex intentsUserId (the `refundType=CONFIDENTIAL_INTENTS` invariant). */
+        ConfidentialDepositIntentRequest: components["schemas"]["DepositIntentRequest"];
+        /** @description Bridge deposit address — same shape as `DepositIntentResponse`. */
+        ConfidentialDepositIntentResponse: components["schemas"]["DepositIntentResponse"];
+        /** @description Private confidential→confidential transfer. No `chain` (NEAR-only context); `token` required (no native-asset concept inside the confidential shard). */
+        ConfidentialTransferRequest: {
+            /** @description Recipient NEAR account id (intentsUserId / 64-hex implicit account). */
+            to: string;
+            /** @description Amount in minimal units. */
+            amount: string;
+            /** @description Defuse asset id, e.g. `nep141:wrap.near`. */
+            token: string;
+        };
+        /** @description Result of a confidential shield / unshield / withdraw / transfer / swap. The op is asynchronous — the user's signed intent settles on the private shard (`intents.far`, no public RPC), so there is no public `tx_hash`; track via `intent_hash` / `deposit_address` and poll `GET /wallet/v1/requests/{id}`. */
+        ConfidentialOpResponse: {
+            /** Format: uuid */
+            request_id: string;
+            /**
+             * @description Normalized lifecycle status (1Click's UPPERCASE state machine mapped to lowercase): `pending_deposit` → `processing` → `success` / `failed` / `refunded`. The raw upstream status is in the request row's `result.oneclick_status`.
+             * @enum {string}
+             */
+            status: "pending_deposit" | "processing" | "success" | "failed" | "refunded";
+            /** @description Confidential-shard intent hash (never appears on the public chain). */
+            intent_hash?: string | null;
+            /** @description Opaque 1Click hop address — the status primary key. */
+            deposit_address?: string | null;
+        };
+        /** @description A single confidential balance (response to `?token=`). */
+        ConfidentialBalanceResponse: {
+            /** @description Minimal units; `"0"` if the wallet holds none of this asset. */
+            balance: string;
+            token: string;
+            /** @description Wallet's 64-hex NEAR implicit account (intentsUserId). */
+            account_id: string;
+        };
+        ConfidentialBalanceEntry: {
+            token: string;
+            balance: string;
+        };
+        /** @description All confidential balances (response when `token` is omitted). */
+        ConfidentialBalancesResponse: {
+            balances: components["schemas"]["ConfidentialBalanceEntry"][];
+            account_id: string;
         };
     };
     responses: {
@@ -1002,6 +1459,24 @@ export interface components {
         };
         /** @description Server error */
         InternalError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Feature not enabled/configured on this deployment. Returned by the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off or the confidential upstream is not configured. */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Upstream dependency failed. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed. */
+        BadGateway: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1206,13 +1681,6 @@ export interface operations {
         };
         requestBody: {
             content: {
-                /**
-                 * @example {
-                 *       "chain": "near",
-                 *       "receiver_id": "bob.near",
-                 *       "amount": "1000000000000000000000000"
-                 *     }
-                 */
                 "application/json": components["schemas"]["TransferRequest"];
             };
         };
@@ -1405,7 +1873,284 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    createDepositIntent: {
+    confidentialDeposit: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "token": "nep141:wrap.near",
+                 *       "amount": "10000000000000000000000"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ConfidentialShieldRequest"];
+            };
+        };
+        responses: {
+            /** @description Shield submitted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfidentialOpResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    confidentialUnshield: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "token": "nep141:wrap.near",
+                 *       "amount": "10000000000000000000000"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ConfidentialUnshieldRequest"];
+            };
+        };
+        responses: {
+            /** @description Unshield submitted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfidentialOpResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    confidentialWithdraw: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "chain": "solana",
+                 *       "to": "Esf7JS1sM46vEHtk75ik7N7UD5FJ13TXVKGWEd2kksiw",
+                 *       "amount": "500000",
+                 *       "token": "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ConfidentialWithdrawRequest"];
+            };
+        };
+        responses: {
+            /** @description Withdraw submitted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfidentialOpResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    confidentialWithdrawDryRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfidentialWithdrawRequest"];
+            };
+        };
+        responses: {
+            /** @description Quote */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SwapQuoteResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    confidentialTransfer: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "to": "950c134ec86a21a8525d16d1dbae79258b923cabdaa8d32da284d931f74bdcb2",
+                 *       "amount": "1000000",
+                 *       "token": "nep141:wrap.near"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ConfidentialTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description Transfer submitted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfidentialOpResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    confidentialSwap: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "token_in": "nep141:wrap.near",
+                 *       "token_out": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+                 *       "amount_in": "5000000000000000000000000"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ConfidentialSwapRequest"];
+            };
+        };
+        responses: {
+            /** @description Swap submitted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfidentialOpResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    confidentialSwapQuote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfidentialSwapRequest"];
+            };
+        };
+        responses: {
+            /** @description Quote */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SwapQuoteResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    confidentialDepositIntent: {
         parameters: {
             query?: never;
             header?: never;
@@ -1416,11 +2161,68 @@ export interface operations {
             content: {
                 /**
                  * @example {
-                 *       "chain": "ethereum",
-                 *       "amount": "5000000",
-                 *       "token": "USDC"
+                 *       "source_asset": "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near",
+                 *       "amount": "500000"
                  *     }
                  */
+                "application/json": components["schemas"]["ConfidentialDepositIntentRequest"];
+            };
+        };
+        responses: {
+            /** @description Deposit address issued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfidentialDepositIntentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    confidentialBalance: {
+        parameters: {
+            query?: {
+                /** @description Defuse asset id to filter to (e.g. `nep141:wrap.near`). Omit for all. */
+                token?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Confidential balance(s) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfidentialBalanceResponse"] | components["schemas"]["ConfidentialBalancesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    createDepositIntent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
                 "application/json": components["schemas"]["DepositIntentRequest"];
             };
         };

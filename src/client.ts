@@ -1,16 +1,16 @@
-import type { components } from './types.js';
+import { errorFromResponse } from './errors.js';
 import {
   type ClientOptions,
+  DEFAULT_RETRY,
   type FetchClient,
   type RetryConfig,
   type UnauthenticatedOptions,
-  DEFAULT_RETRY,
   makeClient,
   makeUnauthenticatedClient,
   newIdempotencyKey,
   runWithRetry,
 } from './http.js';
-import { errorFromResponse } from './errors.js';
+import type { components } from './types.js';
 
 type Schemas = components['schemas'];
 
@@ -66,6 +66,21 @@ export type ApproveResponse = Schemas['ApproveResponse'];
 
 export type AuditEvent = Schemas['AuditEvent'];
 export type AuditResponse = Schemas['AuditResponse'];
+
+// === Confidential Intents ===
+// Request bodies are structural aliases of their public /intents/* siblings
+// (allOf in the spec); the alias just adds documentation. Read-only quotes
+// reuse SwapQuoteResponse; async actions return ConfidentialOpResponse.
+export type ConfidentialShieldRequest = Schemas['ConfidentialShieldRequest'];
+export type ConfidentialUnshieldRequest = Schemas['ConfidentialUnshieldRequest'];
+export type ConfidentialWithdrawRequest = Schemas['ConfidentialWithdrawRequest'];
+export type ConfidentialTransferRequest = Schemas['ConfidentialTransferRequest'];
+export type ConfidentialSwapRequest = Schemas['ConfidentialSwapRequest'];
+export type ConfidentialDepositIntentRequest = Schemas['ConfidentialDepositIntentRequest'];
+export type ConfidentialDepositIntentResponse = Schemas['ConfidentialDepositIntentResponse'];
+export type ConfidentialOpResponse = Schemas['ConfidentialOpResponse'];
+export type ConfidentialBalanceResponse = Schemas['ConfidentialBalanceResponse'];
+export type ConfidentialBalancesResponse = Schemas['ConfidentialBalancesResponse'];
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -350,6 +365,141 @@ export class OutlayerClient {
   ): Promise<RequestListResponse> {
     return runWithRetry(
       () => this.client.GET('/wallet/v1/requests', { params: { query: opts } }),
+      this.retry,
+    );
+  }
+
+  // ------- Confidential Intents (Defuse confidential shard) -------
+  //
+  // Operate on the confidential shard (`intents.far` on a private NEAR shard,
+  // no public RPC). Mirror the public /intents/* methods in shape — same
+  // wk_ API key, no extra signing. Async actions return a `request_id` to poll
+  // via getRequest(); read-only quotes return immediately.
+  //
+  // All routes return 503 confidential_unavailable unless the deployment has
+  // ENABLE_CONFIDENTIAL_INTENTS + the confidential partner agreement. See the
+  // coordinator's CONFIDENTIAL_INTENTS.md for the mental model and threat model.
+
+  /** SHIELD — move the wallet's public intents balance into the confidential shard. */
+  confidentialDeposit(
+    opts: ConfidentialShieldRequest & Idempotent,
+  ): Promise<ConfidentialOpResponse> {
+    const { idempotencyKey, ...body } = opts;
+    return runWithRetry(
+      () =>
+        this.client.POST('/wallet/v1/confidential/deposit', {
+          body: body as ConfidentialShieldRequest,
+          headers: idempotencyHeader(idempotencyKey),
+        }),
+      this.retry,
+    );
+  }
+
+  /** UNSHIELD — move the confidential balance back to the public intents balance. */
+  confidentialUnshield(
+    opts: ConfidentialUnshieldRequest & Idempotent,
+  ): Promise<ConfidentialOpResponse> {
+    const { idempotencyKey, ...body } = opts;
+    return runWithRetry(
+      () =>
+        this.client.POST('/wallet/v1/confidential/unshield', {
+          body: body as ConfidentialUnshieldRequest,
+          headers: idempotencyHeader(idempotencyKey),
+        }),
+      this.retry,
+    );
+  }
+
+  /**
+   * Withdraw a confidential balance to an external chain. `chain="near"`
+   * delivers native NEAR to the named account via 1Click's `native_withdraw`
+   * (use {@link confidentialUnshield} to return funds to your own public balance).
+   */
+  confidentialWithdraw(
+    opts: ConfidentialWithdrawRequest & Idempotent,
+  ): Promise<ConfidentialOpResponse> {
+    const { idempotencyKey, ...body } = opts;
+    return runWithRetry(
+      () =>
+        this.client.POST('/wallet/v1/confidential/withdraw', {
+          body: body as ConfidentialWithdrawRequest,
+          headers: idempotencyHeader(idempotencyKey),
+        }),
+      this.retry,
+    );
+  }
+
+  /** Quote a confidential withdraw without signing or submitting. Read-only. */
+  confidentialWithdrawDryRun(opts: ConfidentialWithdrawRequest): Promise<SwapQuoteResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/confidential/withdraw/dry-run', { body: opts }),
+      this.retry,
+    );
+  }
+
+  /** Private transfer to another account's confidential balance — no public-chain trace. */
+  confidentialTransfer(
+    opts: ConfidentialTransferRequest & Idempotent,
+  ): Promise<ConfidentialOpResponse> {
+    const { idempotencyKey, ...body } = opts;
+    return runWithRetry(
+      () =>
+        this.client.POST('/wallet/v1/confidential/transfer', {
+          body: body as ConfidentialTransferRequest,
+          headers: idempotencyHeader(idempotencyKey),
+        }),
+      this.retry,
+    );
+  }
+
+  /** Swap between two distinct assets inside the confidential shard. */
+  confidentialSwap(opts: ConfidentialSwapRequest & Idempotent): Promise<ConfidentialOpResponse> {
+    const { idempotencyKey, ...body } = opts;
+    return runWithRetry(
+      () =>
+        this.client.POST('/wallet/v1/confidential/swap', {
+          body: body as ConfidentialSwapRequest,
+          headers: idempotencyHeader(idempotencyKey),
+        }),
+      this.retry,
+    );
+  }
+
+  /** Quote a confidential swap without executing. Read-only. */
+  confidentialSwapQuote(opts: ConfidentialSwapRequest): Promise<SwapQuoteResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/confidential/swap/quote', { body: opts }),
+      this.retry,
+    );
+  }
+
+  /**
+   * Cross-chain deposit into the confidential shard (quote only): returns a
+   * one-time bridge `deposit_address`. Send funds there out-of-band, then poll
+   * getRequest(). The wallet's NEAR address never touches the public side —
+   * the most private way to fund a confidential balance.
+   */
+  confidentialDepositIntent(
+    opts: ConfidentialDepositIntentRequest,
+  ): Promise<ConfidentialDepositIntentResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/confidential/deposit-intent', { body: opts }),
+      this.retry,
+    );
+  }
+
+  /**
+   * Read confidential balance(s) from the private shard.
+   * - Pass `{ token }` to get a single balance ({@link ConfidentialBalanceResponse}).
+   * - Omit to get the full list ({@link ConfidentialBalancesResponse}).
+   *
+   * Narrow on `'balances' in result` to discriminate the union.
+   */
+  confidentialBalance(
+    opts: { token?: string } = {},
+  ): Promise<ConfidentialBalanceResponse | ConfidentialBalancesResponse> {
+    return runWithRetry(
+      () => this.client.GET('/wallet/v1/confidential/balance', { params: { query: opts } }),
       this.retry,
     );
   }

@@ -1,18 +1,18 @@
+import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import { HttpResponse, http } from 'msw';
-import { server } from './setup.js';
-import { errorHandlers } from './handlers.js';
 import {
+  BadRequestError,
+  type Nep413Auth,
+  NotFoundError,
   OutlayerClient,
   OutlayerError,
   PolicyDeniedError,
   RateLimitedError,
-  WalletFrozenError,
   UnauthorizedError,
-  NotFoundError,
-  BadRequestError,
-  type Nep413Auth,
+  WalletFrozenError,
 } from '../src/index.js';
+import { errorHandlers } from './handlers.js';
+import { server } from './setup.js';
 
 const apiKey = 'wk_test_xxx';
 const BASE = 'https://api.outlayer.fastnear.com';
@@ -542,7 +542,11 @@ describe('Wallet: cross-chain deposit (1Click)', () => {
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    const r = await client.createDepositIntent({ chain: 'ethereum', amount: '5000000', token: 'USDC' });
+    const r = await client.createDepositIntent({
+      chain: 'ethereum',
+      amount: '5000000',
+      token: 'USDC',
+    });
     expect(receivedBody).toEqual({ chain: 'ethereum', amount: '5000000', token: 'USDC' });
     expect(r.deposit_address).toBe('0xDEADBEEF');
     expect(r.intent_id).toBe('int-1');
@@ -553,7 +557,11 @@ describe('Wallet: cross-chain deposit (1Click)', () => {
     server.use(
       http.get(`${BASE}/wallet/v1/deposit-status`, ({ request }) => {
         receivedQuery = new URL(request.url).search;
-        return HttpResponse.json({ intent_id: 'int-1', status: 'success', result: { amountOut: '4999490' } });
+        return HttpResponse.json({
+          intent_id: 'int-1',
+          status: 'success',
+          result: { amountOut: '4999490' },
+        });
       }),
     );
     const client = new OutlayerClient({ apiKey });
@@ -866,10 +874,7 @@ describe('Error mapping', () => {
   it('unknown error code falls back to OutlayerError base class', async () => {
     server.use(
       http.post(`${BASE}/wallet/v1/intents/withdraw`, () => {
-        return HttpResponse.json(
-          { error: 'mystery_code', message: 'unhandled' },
-          { status: 418 },
-        );
+        return HttpResponse.json({ error: 'mystery_code', message: 'unhandled' }, { status: 418 });
       }),
     );
     const client = new OutlayerClient({ apiKey });
@@ -1053,5 +1058,494 @@ describe('Idempotency-Key', () => {
     const client = new OutlayerClient({ apiKey });
     await client.getBalance();
     expect(receivedKey).toBeNull();
+  });
+});
+
+// ============================================================================
+// Confidential Intents (Defuse confidential shard)
+// ============================================================================
+
+describe('Confidential Intents: confidentialDeposit (SHIELD)', () => {
+  it('forwards token + amount and returns a ConfidentialOpResponse', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/deposit`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          request_id: 'aaaaaaaa-0000-0000-0000-000000000001',
+          status: 'pending_deposit',
+          intent_hash: 'cintent-shield',
+          deposit_address: 'hop-addr-1',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialDeposit({
+      token: 'nep141:wrap.near',
+      amount: '10000000000000000000000',
+    });
+    expect(receivedBody).toEqual({
+      token: 'nep141:wrap.near',
+      amount: '10000000000000000000000',
+    });
+    expect(r.status).toBe('pending_deposit');
+    expect(r.request_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(r.intent_hash).toBe('cintent-shield');
+  });
+
+  it('auto-attaches an Idempotency-Key header', async () => {
+    let receivedKey: string | null = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/deposit`, ({ request }) => {
+        receivedKey = request.headers.get('Idempotency-Key');
+        return HttpResponse.json({
+          request_id: 'aaaaaaaa-0000-0000-0000-000000000002',
+          status: 'pending_deposit',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.confidentialDeposit({ token: 'nep141:wrap.near', amount: '1' });
+    expect(receivedKey).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('strips idempotencyKey from the request body', async () => {
+    let receivedBody: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/deposit`, async ({ request }) => {
+        receivedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({
+          request_id: 'aaaaaaaa-0000-0000-0000-000000000003',
+          status: 'pending_deposit',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.confidentialDeposit({
+      token: 'nep141:wrap.near',
+      amount: '1',
+      idempotencyKey: 'shield-key',
+    });
+    expect(receivedBody.idempotencyKey).toBeUndefined();
+  });
+
+  it('throws OutlayerError with code confidential_unavailable on 503', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/deposit`, () => {
+        return HttpResponse.json({ error: 'confidential_unavailable' }, { status: 503 });
+      }),
+    );
+    const client = new OutlayerClient({
+      apiKey,
+      retry: { maxAttempts: 1, initialDelayMs: 1, maxDelayMs: 10 },
+    });
+    try {
+      await client.confidentialDeposit({ token: 'nep141:wrap.near', amount: '1' });
+      throw new Error('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(OutlayerError);
+      expect((e as OutlayerError).code).toBe('confidential_unavailable');
+      expect((e as OutlayerError).status).toBe(503);
+    }
+  });
+});
+
+describe('Confidential Intents: confidentialUnshield', () => {
+  it('forwards token + amount and returns a ConfidentialOpResponse', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/unshield`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          request_id: 'bbbbbbbb-0000-0000-0000-000000000001',
+          status: 'pending_deposit',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialUnshield({ token: 'nep141:wrap.near', amount: '500' });
+    expect(receivedBody).toEqual({ token: 'nep141:wrap.near', amount: '500' });
+    expect(r.status).toBe('pending_deposit');
+  });
+
+  it('throws OutlayerError with code confidential_jwt_expired on 502', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/unshield`, () => {
+        return HttpResponse.json({ error: 'confidential_jwt_expired' }, { status: 502 });
+      }),
+    );
+    const client = new OutlayerClient({
+      apiKey,
+      retry: { maxAttempts: 1, initialDelayMs: 1, maxDelayMs: 10 },
+    });
+    try {
+      await client.confidentialUnshield({ token: 'nep141:wrap.near', amount: '1' });
+      throw new Error('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(OutlayerError);
+      expect((e as OutlayerError).code).toBe('confidential_jwt_expired');
+      expect((e as OutlayerError).status).toBe(502);
+    }
+  });
+});
+
+describe('Confidential Intents: confidentialWithdraw', () => {
+  it('returns a ConfidentialOpResponse (intent_hash / deposit_address, no tx_hash)', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/withdraw`, () => {
+        return HttpResponse.json({
+          request_id: 'cccccccc-0000-0000-0000-000000000001',
+          status: 'processing',
+          intent_hash: 'cintent-wd',
+          deposit_address: 'hop-addr-wd',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialWithdraw({
+      chain: 'solana',
+      to: 'Esf7JS1sM46vEHtk75ik7N7UD5FJ13TXVKGWEd2kksiw',
+      amount: '500000',
+      token: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+    });
+    expect(r.status).toBe('processing');
+    expect(r.deposit_address).toBe('hop-addr-wd');
+  });
+
+  it('passes chain="near" through (native NEAR delivery, not rejected)', async () => {
+    let receivedBody: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/withdraw`, async ({ request }) => {
+        receivedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({
+          request_id: 'cccccccc-0000-0000-0000-000000000002',
+          status: 'pending_deposit',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialWithdraw({
+      chain: 'near',
+      to: 'zavodil.near',
+      amount: '10000000000000000000000',
+      token: 'nep141:wrap.near',
+    });
+    expect(receivedBody.chain).toBe('near');
+    expect(receivedBody.to).toBe('zavodil.near');
+    expect(r.status).toBe('pending_deposit');
+  });
+
+  it('respects a user-supplied Idempotency-Key', async () => {
+    let receivedKey: string | null = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/withdraw`, ({ request }) => {
+        receivedKey = request.headers.get('Idempotency-Key');
+        return HttpResponse.json({
+          request_id: 'cccccccc-0000-0000-0000-000000000003',
+          status: 'processing',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.confidentialWithdraw({
+      chain: 'near',
+      to: 'bob.near',
+      amount: '1',
+      token: 'nep141:wrap.near',
+      idempotencyKey: 'wd-job-1',
+    });
+    expect(receivedKey).toBe('wd-job-1');
+  });
+
+  it('throws PolicyDeniedError on 403 (same policy engine as public withdraw)', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/withdraw`, () => {
+        return HttpResponse.json(
+          { error: 'policy_denied', message: 'address not whitelisted' },
+          { status: 403 },
+        );
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(
+      client.confidentialWithdraw({
+        chain: 'solana',
+        to: 'x',
+        amount: '1',
+        token: 'nep141:wrap.near',
+      }),
+    ).rejects.toBeInstanceOf(PolicyDeniedError);
+  });
+});
+
+describe('Confidential Intents: confidentialWithdrawDryRun', () => {
+  it('returns a quote and does NOT attach Idempotency-Key', async () => {
+    let receivedKey: string | null = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/withdraw/dry-run`, ({ request }) => {
+        receivedKey = request.headers.get('idempotency-key');
+        return HttpResponse.json({
+          amount_out: '498000',
+          min_amount_out: '495000',
+          time_estimate_seconds: 30,
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialWithdrawDryRun({
+      chain: 'solana',
+      to: 'x',
+      amount: '500000',
+      token: 'nep141:wrap.near',
+    });
+    expect(r.amount_out).toBe('498000');
+    expect(receivedKey).toBeNull();
+  });
+
+  it('throws BadRequestError on 400 bad_request', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/withdraw/dry-run`, () => {
+        return HttpResponse.json(
+          { error: 'bad_request', message: 'missing token' },
+          { status: 400 },
+        );
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(
+      client.confidentialWithdrawDryRun({
+        chain: 'solana',
+        to: 'x',
+        amount: '1',
+        token: 'nep141:wrap.near',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestError);
+  });
+});
+
+describe('Confidential Intents: confidentialTransfer', () => {
+  it('forwards to + amount + token and returns a ConfidentialOpResponse', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/transfer`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          request_id: 'dddddddd-0000-0000-0000-000000000001',
+          status: 'success',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialTransfer({
+      to: '950c134ec86a21a8525d16d1dbae79258b923cabdaa8d32da284d931f74bdcb2',
+      amount: '1000000',
+      token: 'nep141:wrap.near',
+    });
+    expect(receivedBody).toEqual({
+      to: '950c134ec86a21a8525d16d1dbae79258b923cabdaa8d32da284d931f74bdcb2',
+      amount: '1000000',
+      token: 'nep141:wrap.near',
+    });
+    expect(r.status).toBe('success');
+  });
+
+  it('strips idempotencyKey from the request body (keeps token)', async () => {
+    let receivedBody: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/transfer`, async ({ request }) => {
+        receivedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({
+          request_id: 'dddddddd-0000-0000-0000-000000000002',
+          status: 'success',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.confidentialTransfer({
+      to: 'bob-hex',
+      amount: '1',
+      token: 'nep141:wrap.near',
+      idempotencyKey: 'transfer-key',
+    });
+    expect(receivedBody.idempotencyKey).toBeUndefined();
+    expect(receivedBody.token).toBe('nep141:wrap.near');
+  });
+
+  it('throws WalletFrozenError on 403 wallet_frozen', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/transfer`, () => {
+        return HttpResponse.json({ error: 'wallet_frozen' }, { status: 403 });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(
+      client.confidentialTransfer({ to: 'bob-hex', amount: '1', token: 'nep141:wrap.near' }),
+    ).rejects.toBeInstanceOf(WalletFrozenError);
+  });
+});
+
+describe('Confidential Intents: confidentialSwap + confidentialSwapQuote', () => {
+  it('confidentialSwap returns a ConfidentialOpResponse', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/swap`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          request_id: 'eeeeeeee-0000-0000-0000-000000000001',
+          status: 'processing',
+          intent_hash: 'cintent-swap',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialSwap({
+      token_in: 'nep141:wrap.near',
+      token_out: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+      amount_in: '5000000000000000000000000',
+    });
+    expect(receivedBody).toMatchObject({ token_in: 'nep141:wrap.near' });
+    expect(r.status).toBe('processing');
+    expect(r.intent_hash).toBe('cintent-swap');
+  });
+
+  it('confidentialSwap throws BadRequestError on 400 (e.g. token_in == token_out)', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/swap`, () => {
+        return HttpResponse.json(
+          { error: 'bad_request', message: 'token_in == token_out' },
+          { status: 400 },
+        );
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(
+      client.confidentialSwap({
+        token_in: 'nep141:wrap.near',
+        token_out: 'nep141:wrap.near',
+        amount_in: '1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it('confidentialSwapQuote returns a quote and does NOT attach Idempotency-Key', async () => {
+    let receivedKey: string | null = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/swap/quote`, ({ request }) => {
+        receivedKey = request.headers.get('idempotency-key');
+        return HttpResponse.json({
+          amount_out: '950000',
+          min_amount_out: '940000',
+          time_estimate_seconds: 12,
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialSwapQuote({
+      token_in: 'nep141:wrap.near',
+      token_out: 'nep141:usdt.tether-token.near',
+      amount_in: '1000',
+    });
+    expect(r.amount_out).toBe('950000');
+    expect(receivedKey).toBeNull();
+  });
+});
+
+describe('Confidential Intents: confidentialDepositIntent', () => {
+  it('forwards source_asset + amount and returns a bridge deposit_address', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/deposit-intent`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          intent_id: 'cdi-1',
+          deposit_address: '5AmGa2Bcfajbytg55UUb4vCAAzKBMYKZNQwx5S2BH2qf',
+          amount: '500000',
+          amount_out: '499490',
+          min_amount_out: '494495',
+          expires_at: '2026-06-02T00:00:00Z',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialDepositIntent({
+      source_asset: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+      amount: '500000',
+    });
+    expect(receivedBody).toEqual({
+      source_asset: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+      amount: '500000',
+    });
+    expect(r.deposit_address).toBe('5AmGa2Bcfajbytg55UUb4vCAAzKBMYKZNQwx5S2BH2qf');
+    expect(r.intent_id).toBe('cdi-1');
+  });
+
+  it('surfaces the optional hint field when present (NEAR-source path)', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/deposit-intent`, () => {
+        return HttpResponse.json({
+          intent_id: 'cdi-2',
+          deposit_address: 'f51768dc0c4d4bbb78890262da9882dee2ee5b6c2fcf2c527e56c6eadcb54353',
+          amount: '500000',
+          amount_out: '500000',
+          min_amount_out: '500000',
+          hint: 'source chain is near; POST /wallet/v1/intents/deposit is more direct',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialDepositIntent({
+      chain: 'near',
+      token: 'nep141:wrap.near',
+      amount: '500000',
+    });
+    expect(r.hint).toContain('near');
+  });
+});
+
+describe('Confidential Intents: confidentialBalance', () => {
+  it('forwards the token query param and returns a single balance', async () => {
+    let receivedToken: string | null = null;
+    server.use(
+      http.get(`${BASE}/wallet/v1/confidential/balance`, ({ request }) => {
+        receivedToken = new URL(request.url).searchParams.get('token');
+        return HttpResponse.json({
+          balance: '1000000',
+          token: 'nep141:wrap.near',
+          account_id: '950c134ec86a21a8525d16d1dbae79258b923cabdaa8d32da284d931f74bdcb2',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialBalance({ token: 'nep141:wrap.near' });
+    expect(receivedToken).toBe('nep141:wrap.near');
+    expect('balances' in r).toBe(false);
+    if (!('balances' in r)) {
+      expect(r.balance).toBe('1000000');
+      expect(r.token).toBe('nep141:wrap.near');
+    }
+  });
+
+  it('returns the full balances list when no token is given', async () => {
+    let receivedQuery = '';
+    server.use(
+      http.get(`${BASE}/wallet/v1/confidential/balance`, ({ request }) => {
+        receivedQuery = new URL(request.url).search;
+        return HttpResponse.json({
+          balances: [
+            { token: 'nep141:wrap.near', balance: '1000000' },
+            { token: 'nep141:usdt.tether-token.near', balance: '250000' },
+          ],
+          account_id: '950c134ec86a21a8525d16d1dbae79258b923cabdaa8d32da284d931f74bdcb2',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialBalance();
+    expect(receivedQuery).not.toContain('token=');
+    expect('balances' in r).toBe(true);
+    if ('balances' in r) {
+      expect(r.balances).toHaveLength(2);
+      expect(r.balances[0]?.token).toBe('nep141:wrap.near');
+    }
   });
 });

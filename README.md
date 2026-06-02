@@ -74,6 +74,7 @@ That's the whole flow. The wallet has no policy yet, so withdraws are unrestrict
 | `client.intentsDeposit({...})` | Move an on-NEAR FT into intents.near |
 | `client.createDepositIntent({...})` | Cross-chain deposit: one-time 1Click address to fund from another chain |
 | `client.getDepositStatus(id)` | Poll a cross-chain deposit intent |
+| `client.confidential*({...})` | Same operations against the private **confidential shard** — shield / unshield / withdraw / swap / transfer / cross-chain deposit / balance ([see below](#confidential-intents)) |
 | `client.signMessage({...})` | NEP-413 or raw message signing |
 | `client.getRequest(id)` | Status of an async operation |
 | `client.listRequests({...})` | List recent operations |
@@ -82,6 +83,65 @@ That's the whole flow. The wallet has no policy yet, so withdraws are unrestrict
 | `client.audit.list({...})` | Event history |
 
 Full reference: [API spec](https://api.outlayer.fastnear.com/docs).
+
+## Confidential Intents
+
+Mirror of the wallet's NEAR Intents operations against the **Defuse confidential
+shard** (`intents.far` on a private NEAR shard with no public RPC). Same SDK
+shape, same `wk_` API key, no extra signing on your side — just a different
+balance shard. Every action is async: it returns a `request_id` you poll with
+`client.getRequest(id)` until the status is terminal
+(`success` / `failed` / `refunded`).
+
+Routes return `503 confidential_unavailable` unless the deployment has
+confidential intents enabled — treat that as "not offered here", not a retryable
+error (it surfaces as an `OutlayerError` with `code === 'confidential_unavailable'`).
+
+```ts
+// SHIELD — move a public intents balance into the confidential shard.
+// Links your wallet on chain (a convenience hop, NOT a private operation).
+const shield = await client.confidentialDeposit({
+  token: 'nep141:wrap.near',
+  amount: '10000000000000000000000', // 0.01 wNEAR
+});
+// Async: poll client.getRequest(shield.request_id) until status is success / failed / refunded.
+
+// Cross-chain DEPOSIT — fund the confidential balance from Solana USDC.
+// The private path: your NEAR wallet never touches the public side.
+const intent = await client.confidentialDepositIntent({
+  source_asset: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+  amount: '500000', // 0.5 USDC (6 decimals)
+});
+console.log('Send 0.5 USDC on Solana to:', intent.deposit_address);
+// then poll client.getRequest(intent.intent_id) until it settles.
+// NB: deposit-intent's poll key is `intent_id` (the action methods return `request_id`).
+
+// Withdraw a confidential balance to a NEAR account as native NEAR
+// (chain="near" runs a native_withdraw via 1Click).
+await client.confidentialWithdraw({
+  chain: 'near',
+  to: 'zavodil.near',
+  amount: '10000000000000000000000',
+  token: 'nep141:wrap.near',
+});
+
+// Read your confidential balance(s). Pass a token for one; omit for the full list.
+const one = await client.confidentialBalance({ token: 'nep141:wrap.near' });
+if (!('balances' in one)) console.log('wNEAR (confidential):', one.balance);
+
+const all = await client.confidentialBalance();
+if ('balances' in all) {
+  for (const b of all.balances) console.log(b.token, b.balance);
+}
+```
+
+**Privacy, in one line:** SHIELD / UNSHIELD publicly link your wallet to a
+"moved into the shielded pool" event; cross-chain DEPOSIT / WITHDRAW keep your
+NEAR wallet invisible on chain. It is a shielded pool, not a mixer — the shard
+operator, auditors, and law enforcement with a warrant can still read
+confidential state. See the
+[full agent integration guide](https://github.com/out-layer/coordinator/blob/main/docs/CONFIDENTIAL_INTENTS.md)
+for the mental model, threat model, and privacy recipes.
 
 ## Documentation
 
@@ -114,6 +174,7 @@ Runnable scripts in [`examples/`](examples/):
 - `03-multisig.ts` — submit a withdraw that triggers the approval flow
 - `04-agent-loop.ts` — minimal autonomous agent that respects policy
 - `05-cross-chain-app.ts` — end-to-end DeFi flow: cross-chain login pattern, deposit instructions, swap USDT → NEAR, stake with a validator, gasless withdraw back to Ethereum. CLI with sub-commands (`addresses | balances | buy-near | stake | unstake | withdraw-eth | login-demo`).
+- `06-confidential-roundtrip.ts` — confidential shard round-trip: SHIELD → read balance → UNSHIELD, with `503 confidential_unavailable` handling.
 
 Run with:
 

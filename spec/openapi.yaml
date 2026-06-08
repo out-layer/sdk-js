@@ -329,6 +329,87 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /wallet/v1/delete:
+    post:
+      tags: [Wallet]
+      operationId: deleteWallet
+      summary: Delete the wallet account, sweeping its full balance to a beneficiary
+      description: |
+        Irreversible. Signs and broadcasts NEAR's native `DeleteAccount`
+        action, which sends the wallet account's **entire** remaining NEAR
+        balance to `beneficiary`, revokes all API keys, and marks the wallet
+        deleted. Guards: the beneficiary cannot be the wallet's own account,
+        the wallet must have a non-zero on-chain balance (a zero-balance
+        implicit account does not exist on-chain), and the wallet must not be
+        already deleted. Policy is enforced before signing; on a multisig
+        wallet the response carries `status=pending_approval` and an
+        `approval_id` for the multisig flow.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteRequest'
+            example:
+              beneficiary: treasury.near
+              chain: near
+      responses:
+        '200':
+          description: Account deleted (or queued for approval)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/storage-deposit:
+    post:
+      tags: [Wallet]
+      operationId: storageDeposit
+      summary: Register storage on a NEP-141 token contract
+      description: |
+        Calls `storage_deposit` (with `registration_only: true`) on a NEP-141
+        token contract so `account_id` (defaults to the wallet's own NEAR
+        address) can hold that token. Idempotent: if the account is already
+        registered the call returns `already_registered: true` without signing
+        a transaction. The wallet must have NEAR to pay gas when a transaction
+        is required. Policy gates this as a `call`; multisig is not supported
+        for this endpoint.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageDepositRequest'
+            example:
+              token: wrap.near
+      responses:
+        '200':
+          description: Storage registered (or already registered)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageDepositResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /wallet/v1/intents/deposit:
     post:
       tags: [Wallet]
@@ -537,10 +618,10 @@ paths:
   # ============================================================================
   # Confidential intents (Defuse confidential shard)
   # ============================================================================
-  /wallet/v1/confidential/deposit:
+  /wallet/v1/confidential/shield:
     post:
       tags: [Confidential]
-      operationId: confidentialDeposit
+      operationId: confidentialShield
       summary: SHIELD — move public intents balance into the confidential shard
       description: |
         Moves the wallet's **public** `intents.near` balance into its
@@ -551,10 +632,56 @@ paths:
         **on-chain** (an `execute_intents` call signed by the wallet, with the
         public asset id visible). It is a convenience hop, not an unlinkable
         operation — for unlinkability fund the confidential balance via
-        `confidentialDepositIntent` (cross-chain) instead. See CUSTODY docs.
+        `confidentialDepositCrossChain` (cross-chain) instead. See CUSTODY docs.
 
         Async: returns `status=pending_deposit` with a `request_id`; poll
         `GET /wallet/v1/requests/{id}` until terminal.
+
+        **Legacy alias:** `POST /wallet/v1/confidential/deposit` still works and
+        resolves to the same handler.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfidentialShieldRequest'
+            example:
+              token: nep141:wrap.near
+              amount: '10000000000000000000000'
+      responses:
+        '200':
+          description: Shield submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfidentialOpResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /wallet/v1/confidential/deposit:
+    post:
+      tags: [Confidential]
+      operationId: confidentialDeposit
+      deprecated: true
+      summary: '[Deprecated] SHIELD into the confidential shard (use /wallet/v1/confidential/shield)'
+      description: |
+        **Deprecated legacy alias.** Use
+        [`confidentialShield`](#tag/Confidential/operation/confidentialShield)
+        (`POST /wallet/v1/confidential/shield`) instead. Retained for backward
+        compatibility; resolves to the same handler with identical
+        request/response shapes.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -833,19 +960,63 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
+  /wallet/v1/confidential/deposit/cross-chain:
+    post:
+      tags: [Confidential]
+      operationId: confidentialDepositCrossChain
+      summary: Cross-chain deposit into the confidential shard (quote only)
+      description: |
+        Requests a one-time deposit address to fund the confidential balance
+        from an external chain (`ORIGIN_CHAIN` → `CONFIDENTIAL_INTENTS`) via
+        1Click / NEAR Intents. The caller sends `amount` of the source asset to
+        the returned `deposit_address` out-of-band; the solver delivers it and
+        credits the confidential balance. **The wallet's NEAR address never
+        touches the public side** — this is the most private way to fund a
+        confidential balance. Poll `GET /wallet/v1/requests/{id}` for status.
+
+        **Legacy alias:** `POST /wallet/v1/confidential/deposit-intent` still
+        works and resolves to the same handler.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfidentialDepositIntentRequest'
+            example:
+              source_asset: nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near
+              amount: '500000'
+      responses:
+        '200':
+          description: Deposit address issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfidentialDepositIntentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
   /wallet/v1/confidential/deposit-intent:
     post:
       tags: [Confidential]
       operationId: confidentialDepositIntent
-      summary: Cross-chain deposit into the confidential shard (quote only)
+      deprecated: true
+      summary: '[Deprecated] Cross-chain deposit into the confidential shard (use /wallet/v1/confidential/deposit/cross-chain)'
       description: |
-        Requests a one-time bridge deposit address to fund the confidential
-        balance from an external chain (`ORIGIN_CHAIN` → `CONFIDENTIAL_INTENTS`).
-        The caller sends `amount` of the source asset to the returned
-        `deposit_address` out-of-band; the solver bridges it and credits the
-        confidential balance. **The wallet's NEAR address never touches the
-        public side** — this is the most private way to fund a confidential
-        balance. Poll `GET /wallet/v1/requests/{id}` for status.
+        **Deprecated legacy alias.** Use
+        [`confidentialDepositCrossChain`](#tag/Confidential/operation/confidentialDepositCrossChain)
+        (`POST /wallet/v1/confidential/deposit/cross-chain`) instead. Retained
+        for backward compatibility; resolves to the same handler with identical
+        request/response shapes.
       requestBody:
         required: true
         content:
@@ -912,16 +1083,20 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
-  /wallet/v1/deposit-intent:
+  /wallet/v1/intents/deposit/cross-chain:
     post:
       tags: [Wallet]
-      operationId: createDepositIntent
-      summary: Create a cross-chain deposit intent (1Click)
+      operationId: intentsDepositCrossChain
+      summary: Create a cross-chain deposit (via 1Click / NEAR Intents)
       description: |
         Requests a one-time deposit address on a source chain via NEAR Intents
         1Click. The caller sends `amount` of the source token to the returned
-        `deposit_address`; the solver bridges it and credits the wallet's
-        intents.near balance. Poll `getDepositStatus` until `success`.
+        `deposit_address`; the solver delivers it and credits the wallet's
+        intents.near balance. Poll `getCrossChainDepositStatus` until `success`.
+
+        This is a **cross-chain deposit via 1Click / NEAR Intents** — the
+        wallet's NEAR address receives the intents.near credit once the solver
+        settles the source-chain deposit.
 
         Two request shapes are accepted (see
         [`DepositIntentRequest`](#/components/schemas/DepositIntentRequest)):
@@ -938,12 +1113,15 @@ paths:
         coordinator logs a warning. `near` is a valid source chain — a
         NEAR-origin deposit returns a 64-char hex implicit account.
 
-        Amounts are in the token's smallest unit. There's a small bridge fee,
+        Amounts are in the token's smallest unit. There's a small solver fee,
         so `amount_out` < `amount`.
 
         The returned `deposit_address` is chain-specific — see the
         [`DepositIntentResponse.deposit_address`](#/components/schemas/DepositIntentResponse)
         description for per-chain address formats.
+
+        **Legacy alias:** `POST /wallet/v1/deposit-intent` still works and
+        resolves to the same handler.
       requestBody:
         required: true
         content:
@@ -982,18 +1160,58 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /wallet/v1/deposit-status:
+  /wallet/v1/deposit-intent:
+    post:
+      tags: [Wallet]
+      operationId: createDepositIntent
+      deprecated: true
+      summary: '[Deprecated] Create a cross-chain deposit (use /wallet/v1/intents/deposit/cross-chain)'
+      description: |
+        **Deprecated legacy alias.** Use
+        [`intentsDepositCrossChain`](#tag/Wallet/operation/intentsDepositCrossChain)
+        (`POST /wallet/v1/intents/deposit/cross-chain`) instead. This path is
+        retained for backward compatibility and resolves to the same handler
+        with identical request/response shapes — existing clients continue to
+        work unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DepositIntentRequest'
+      responses:
+        '200':
+          description: Deposit intent created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositIntentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/intents/deposit/cross-chain/status:
     get:
       tags: [Wallet]
-      operationId: getDepositStatus
-      summary: Poll a cross-chain deposit intent's status
+      operationId: getCrossChainDepositStatus
+      summary: Poll a cross-chain deposit's status
+      description: |
+        Returns the live status of a cross-chain deposit (from
+        `intentsDepositCrossChain`), lazily refreshing it against 1Click on each
+        call.
+
+        **Legacy alias:** `GET /wallet/v1/deposit-status` still works and
+        resolves to the same handler.
       parameters:
         - name: id
           in: query
           required: true
           schema:
             type: string
-          description: The `intent_id` from `createDepositIntent`.
+          description: The `intent_id` from `intentsDepositCrossChain`.
       responses:
         '200':
           description: Deposit status
@@ -1008,17 +1226,415 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /wallet/v1/deposit-status:
+    get:
+      tags: [Wallet]
+      operationId: getDepositStatus
+      deprecated: true
+      summary: '[Deprecated] Poll a cross-chain deposit''s status (use /wallet/v1/intents/deposit/cross-chain/status)'
+      description: |
+        **Deprecated legacy alias.** Use
+        [`getCrossChainDepositStatus`](#tag/Wallet/operation/getCrossChainDepositStatus)
+        (`GET /wallet/v1/intents/deposit/cross-chain/status`) instead. Retained
+        for backward compatibility; resolves to the same handler.
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The `intent_id` from the cross-chain deposit call.
+      responses:
+        '200':
+          description: Deposit status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/intents/deposit/cross-chain/list:
+    get:
+      tags: [Wallet]
+      operationId: listCrossChainDeposits
+      summary: List this wallet's cross-chain deposits
+      description: |
+        Returns the wallet's cross-chain deposits (from
+        `intentsDepositCrossChain`), most recent first. Each entry has the same
+        shape as `getCrossChainDepositStatus`, but the list endpoint does NOT
+        lazily refresh in-flight deposits against 1Click — statuses are read
+        straight from storage as last persisted. Poll
+        `getCrossChainDepositStatus` for a single deposit when you need its live
+        status.
+
+        **Legacy alias:** `GET /wallet/v1/deposits` still works and resolves to
+        the same handler.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+          description: Max rows to return (server caps at 100). Defaults to 20.
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+          description: Number of rows to skip for pagination.
+      responses:
+        '200':
+          description: Cross-chain deposits (most recent first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DepositStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/deposits:
+    get:
+      tags: [Wallet]
+      operationId: listDeposits
+      deprecated: true
+      summary: '[Deprecated] List cross-chain deposits (use /wallet/v1/intents/deposit/cross-chain/list)'
+      description: |
+        **Deprecated legacy alias.** Use
+        [`listCrossChainDeposits`](#tag/Wallet/operation/listCrossChainDeposits)
+        (`GET /wallet/v1/intents/deposit/cross-chain/list`) instead. Retained
+        for backward compatibility; resolves to the same handler.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+          description: Max rows to return (server caps at 100). Defaults to 20.
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+          description: Number of rows to skip for pagination.
+      responses:
+        '200':
+          description: Cross-chain deposits (most recent first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DepositStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # Payment checks — agent-to-agent gasless payments via ephemeral intents keys
+  # ============================================================================
+  /wallet/v1/payment-check/create:
+    post:
+      tags: [Wallet]
+      operationId: createPaymentCheck
+      summary: Create a payment check (bearer-claimable transfer)
+      description: |
+        Creates a "payment check": the wallet's intents balance is moved to a
+        fresh ephemeral intents account (gaslessly, via the solver relay), and
+        the ephemeral account's private key is returned as `check_key`. Whoever
+        holds `check_key` can `claimPaymentCheck` the funds; the creator can
+        `reclaimPaymentCheck` them back. Fund the wallet's intents balance first
+        via `intentsDeposit`.
+
+        **Security model:** this is NOT gated by multisig. The keystore signs the
+        transfer-to-ephemeral only when the wallet policy grants the default-DENY
+        `payment_check` capability and the per-transaction amount is within the
+        capability's per-token amount cap. `claimPaymentCheck` / `reclaimPaymentCheck`
+        are signed by the ephemeral `check_key` itself (NEP-413), never by the
+        keystore.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCheckCreateRequest'
+            example:
+              token: nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1
+              amount: '1000000'
+              memo: coffee
+              expires_in: 86400
+      responses:
+        '200':
+          description: Payment check created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCheckCreateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/payment-check/batch-create:
+    post:
+      tags: [Wallet]
+      operationId: batchCreatePaymentChecks
+      summary: Create up to 10 payment checks in one call
+      description: |
+        Creates between 1 and 10 payment checks in a single request, each backed
+        by its own ephemeral intents account. The wallet's intents balance must
+        cover the sum per token across the batch.
+
+        **Security model:** identical to `createPaymentCheck` — gated by the
+        default-DENY `payment_check` capability and its per-transaction amount cap
+        (NOT multisig); each check's claim/reclaim is signed by that check's
+        ephemeral key, not the keystore.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCheckBatchCreateRequest'
+            example:
+              checks:
+                - token: nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1
+                  amount: '1000000'
+                  memo: invoice-1
+                - token: nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1
+                  amount: '2000000'
+      responses:
+        '200':
+          description: Payment checks created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCheckBatchCreateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/payment-check/claim:
+    post:
+      tags: [Wallet]
+      operationId: claimPaymentCheck
+      summary: Claim a payment check
+      description: |
+        Claims the funds held by a payment check into the authenticated wallet's
+        intents balance. Signed by the ephemeral `check_key` (NEP-413), so the
+        caller need only hold the key. Omit `amount` for a full claim, or pass a
+        partial amount (minimal units) to claim part and leave the remainder
+        claimable. Expired or already-settled checks are rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCheckClaimRequest'
+            example:
+              check_key: 9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a
+      responses:
+        '200':
+          description: Claim settled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCheckClaimResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/payment-check/reclaim:
+    post:
+      tags: [Wallet]
+      operationId: reclaimPaymentCheck
+      summary: Reclaim an unclaimed payment check
+      description: |
+        Returns the (remaining) funds of a payment check the wallet created back
+        to the wallet's own intents balance — used to cancel/expire a check that
+        was never claimed. Identified by `check_id` and scoped to the creating
+        wallet. Signed by the ephemeral check key (re-derived inside the
+        keystore), not the keystore's wallet key. Omit `amount` for a full
+        reclaim or pass a partial amount.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCheckReclaimRequest'
+            example:
+              check_id: 3a2b1c0d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
+      responses:
+        '200':
+          description: Reclaim settled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCheckReclaimResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/payment-check/status:
+    get:
+      tags: [Wallet]
+      operationId: getPaymentCheckStatus
+      summary: Get a payment check's status
+      description: |
+        Returns the full lifecycle state of a payment check the wallet created,
+        identified by `check_id`. `status` is normalized to `expired` when an
+        `unclaimed` check is past its `expires_at`.
+      parameters:
+        - name: check_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The `check_id` returned by `createPaymentCheck`.
+      responses:
+        '200':
+          description: Payment check status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCheckStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/payment-check/list:
+    get:
+      tags: [Wallet]
+      operationId: listPaymentChecks
+      summary: List the wallet's payment checks
+      description: |
+        Lists payment checks created by the authenticated wallet, most recent
+        first. Optionally filter by `status` (including the virtual `expired`
+        status: unclaimed checks past their `expires_at`).
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Optional status filter. Accepts stored statuses (`unclaimed`,
+            `claimed`, `partially_claimed`, `reclaimed`, `partially_reclaimed`)
+            plus the virtual `expired` (unclaimed + past expiry).
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+          description: Max rows to return (server caps at 100). Defaults to 50.
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+          description: Number of rows to skip for pagination.
+      responses:
+        '200':
+          description: Payment checks (most recent first)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCheckListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/payment-check/peek:
+    post:
+      tags: [Wallet]
+      operationId: peekPaymentCheck
+      summary: Inspect a payment check by its key (without claiming)
+      description: |
+        Reads a payment check's on-chain balance and metadata using its
+        `check_key`, without moving any funds. Use this before
+        `claimPaymentCheck` to see what a key is worth. Returns the live
+        on-chain `balance` of the ephemeral account plus the stored `token` /
+        `memo` / `status` / `expires_at`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCheckPeekRequest'
+            example:
+              check_key: 9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a
+      responses:
+        '200':
+          description: Payment check snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCheckPeekResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /wallet/v1/sign-message:
     post:
       tags: [Wallet]
       operationId: signMessage
-      summary: Sign an arbitrary message (NEP-413 or raw)
+      summary: Sign a generic NEP-413 message
       description: |
-        Signs a message with the wallet's NEAR key. Use `format=nep413` (default)
-        for the standard NEP-413 signing scheme; use `format=raw` for raw byte
-        signing.
+        Signs a NEP-413 message with the wallet's NEAR key (e.g. dApp login).
+        Gated by the `sign_message` capability: `allowed_recipients` is a
+        default-DENY allowlist of verifier recipients, and `intents.near` /
+        `intents.far` are always excluded. Policy and freeze still apply — a
+        frozen wallet cannot sign.
 
-        Policy and freeze still apply — a frozen wallet cannot sign.
+        **`format` is now NEP-413 only.** `format=raw` is **rejected** with
+        `400 bad_request` — OutLayer NEAR-key auth (the old raw-ed25519
+        `auth:`/`register:`/`api-key:` token) moved to
+        [`POST /wallet/v1/auth-sign`](#tag/Wallet/operation/authSign), which
+        builds the challenge with a fresh server timestamp. This is NOT OutLayer
+        auth signing.
       requestBody:
         required: true
         content:
@@ -1044,6 +1660,67 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/auth-sign:
+    post:
+      tags: [Wallet]
+      operationId: authSign
+      summary: Sign an OutLayer NEAR-key auth challenge (Bearer / register / api-key)
+      description: |
+        Produces the OutLayer authentication signature used to construct a
+        `Bearer near:` token, or to authenticate `POST /register` /
+        `PUT /wallet/v1/api-key` from a deterministic wallet's own NEAR key.
+
+        The keystore **builds** the exact challenge string
+        `<prefix>:<seed>:<ts>` (where `prefix` is `auth` for `bearer`, else the
+        purpose) with a **fresh server timestamp** and signs it raw ed25519. The
+        client does NOT supply or control the timestamp — the fresh `ts` is what
+        the coordinator's verifier requires. Send the returned `auth_message`
+        verbatim.
+
+        This is the replacement for the old
+        `POST /wallet/v1/sign-message {format:"raw"}`. It maps to an always-allowed,
+        non-fund `Op::Auth` (domain-separated from a tx hash) — no capability and
+        no multisig gate it, but a frozen wallet still cannot sign.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthSignRequest'
+            examples:
+              bearer:
+                summary: Bearer-near auth token
+                value:
+                  purpose: bearer
+                  seed: my-app-session
+              register:
+                summary: Authenticate POST /register
+                value:
+                  purpose: register
+                  seed: my-app-session
+              apiKey:
+                summary: Authenticate PUT /api-key
+                value:
+                  purpose: api-key
+                  seed: my-app-session
+      responses:
+        '200':
+          description: Auth signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSignResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/BadGateway'
 
   # ============================================================================
   # Requests (async tracking)
@@ -1248,6 +1925,38 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /wallet/v1/approval/{id}:
+    get:
+      tags: [Approvals]
+      operationId: getApprovalDetail
+      summary: Get a single pending approval's detail (public, read-only)
+      description: |
+        Returns non-sensitive detail for one pending approval — used by the
+        dashboard approval-detail page. No auth: rate-limited by IP, returns only
+        public metadata. The `wallet_pubkey` and `request_hash` are the values an
+        approver binds into the NEP-413 vote message
+        (`approve:{id}:{wallet_pubkey}:{request_hash}` /
+        `reject:{id}:{wallet_pubkey}:{request_hash}`); the dashboard renders `op`.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Approval detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /wallet/v1/approve/{id}:
     post:
       tags: [Approvals]
@@ -1306,11 +2015,11 @@ paths:
               $ref: '#/components/schemas/RejectRequest'
       responses:
         '200':
-          description: Rejection recorded
+          description: Reject vote recorded (request cancelled if from a real approver)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApproveResponse'
+                $ref: '#/components/schemas/RejectResponse'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
@@ -1460,9 +2169,9 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           examples:
-            confidential_unavailable:
+            service_unavailable:
               value:
-                error: confidential_unavailable
+                error: service_unavailable
                 message: Confidential intents are not configured on this deployment
     BadGateway:
       description: >-
@@ -1489,7 +2198,22 @@ components:
 
     RequestType:
       type: string
-      enum: [call, transfer, withdraw, deposit, swap]
+      description: |
+        Tracked async request / policy transaction type. `withdraw` is a
+        same-chain intents withdrawal; `cross_chain_withdraw` is a separate type
+        for 1Click bridge-out (a policy must list it explicitly — it is NOT
+        folded into `withdraw`). `confidential` covers every confidential-shard
+        op (shield / unshield / withdraw / transfer / swap). The deposit family
+        (`intents/deposit`, `storage-deposit`, cross-chain deposit) all gate as
+        `call`.
+      enum:
+        - call
+        - transfer
+        - withdraw
+        - cross_chain_withdraw
+        - deposit
+        - swap
+        - confidential
 
     RequestStatus:
       type: string
@@ -1521,11 +2245,13 @@ components:
         - unsupported_token
         - request_not_found
         - approval_not_found
+        - already_approved
         - bad_request
+        - conflict
         - duplicate_idempotency_key
         - internal_error
         - keystore_error
-        - confidential_unavailable
+        - service_unavailable
         - confidential_jwt_expired
 
     ErrorResponse:
@@ -1719,6 +2445,11 @@ components:
           type: [integer, 'null']
         approved:
           type: [integer, 'null']
+        request_hash:
+          type: [string, 'null']
+          description: >-
+            Present on `pending_approval` — sha256(canonical_json(op)); sign to
+            approve.
 
     TransferRequest:
       type: object
@@ -1752,6 +2483,103 @@ components:
         amount:
           type: string
           description: Amount in the chain's smallest unit (yoctoNEAR, wei, …).
+
+    DeleteRequest:
+      type: object
+      description: |-
+        Irreversibly delete the wallet account and sweep its full NEAR balance
+        to `beneficiary` (NEAR's native `DeleteAccount`).
+      required: [beneficiary]
+      properties:
+        beneficiary:
+          type: string
+          description: |-
+            Account that receives the deleted wallet's entire remaining
+            balance. Must not be the wallet's own account.
+          example: treasury.near
+        chain:
+          allOf:
+            - $ref: '#/components/schemas/Chain'
+          description: Chain the account lives on. Defaults to `near` server-side.
+
+    DeleteResponse:
+      type: object
+      required: [request_id, status, beneficiary]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        tx_hash:
+          type: [string, 'null']
+        beneficiary:
+          type: string
+        approval_id:
+          type: [string, 'null']
+          format: uuid
+        required:
+          type: [integer, 'null']
+        approved:
+          type: [integer, 'null']
+        request_hash:
+          type: [string, 'null']
+          description: >-
+            Present on `pending_approval` — sha256(canonical_json(op)); sign to
+            approve.
+
+    StorageDepositRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: NEP-141 token contract (e.g. `wrap.near`). A `nep141:` prefix is stripped if present.
+        account_id:
+          type: [string, 'null']
+          description: Account to register. Defaults to the wallet's own NEAR address.
+
+    StorageDepositResponse:
+      type: object
+      description: |
+        Response for `storageDeposit`. `storage_deposit` is multisig-capable: on
+        a multisig wallet that requires approval the response carries
+        `status=pending_approval` with the `approval_id` / `required` / `approved`
+        / `request_hash` fields populated (same shape as `CallResponse`); the
+        deposit executes only after the approval threshold is met. On the direct
+        path those fields are omitted and the single-sig response is byte-identical
+        to before.
+      required: [request_id, status, token, account_id, already_registered]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        tx_hash:
+          type: [string, 'null']
+        token:
+          type: string
+        account_id:
+          type: string
+        already_registered:
+          type: boolean
+          description: True when the account was already storage-registered; no transaction was sent.
+        approval_id:
+          type: [string, 'null']
+          format: uuid
+          description: Present only on `pending_approval` (multisig) — the approval to vote on.
+        required:
+          type: [integer, 'null']
+          description: Present only on `pending_approval` — approvals needed.
+        approved:
+          type: [integer, 'null']
+          description: Present only on `pending_approval` — approvals collected so far.
+        request_hash:
+          type: [string, 'null']
+          description: >-
+            Present on `pending_approval` — sha256(canonical_json(op)); sign to
+            approve.
 
     IntentsDepositRequest:
       type: object
@@ -1795,6 +2623,12 @@ components:
 
     WithdrawResponse:
       type: object
+      description: |
+        Response for `intentsWithdraw` (same-chain AND cross-chain). On a
+        multisig wallet that requires approval, `status=pending_approval` and the
+        `approval_id` / `required` / `approved` / `request_hash` fields are
+        populated; approvers sign `request_hash` (see `Nep413Auth`). On the
+        direct path these fields are omitted/null.
       required: [request_id, status]
       properties:
         request_id:
@@ -1809,6 +2643,11 @@ components:
           type: [integer, 'null']
         approved:
           type: [integer, 'null']
+        request_hash:
+          type: [string, 'null']
+          description: >-
+            Canonical request hash to sign when `status=pending_approval`
+            (otherwise absent).
 
     DryRunResponse:
       type: object
@@ -1829,15 +2668,27 @@ components:
         fee_token:
           type: string
         policy_check:
-          type: object
-          properties:
-            decision:
-              type: string
-              enum: [allowed, denied, requires_approval, frozen, no_policy_allow]
-            reason:
-              type: string
-            required_approvals:
-              type: integer
+          $ref: '#/components/schemas/PolicyCheckResult'
+
+    PolicyCheckResult:
+      type: object
+      description: |
+        Policy evaluation summary attached to a dry-run. Present whenever the
+        policy engine ran (i.e. not on a `wallet_frozen` short-circuit). On a
+        `policy_denied` result `within_limits` is false and the optional fields
+        are omitted; on an allowed / requires-approval result `within_limits` is
+        true and `address_allowed` is populated.
+      required: [within_limits]
+      properties:
+        within_limits:
+          type: boolean
+          description: True when the op is within the wallet's spending limits.
+        daily_remaining:
+          type: [string, 'null']
+          description: Remaining daily allowance in minimal units, when the policy tracks one.
+        address_allowed:
+          type: [boolean, 'null']
+          description: True when the destination address passed the policy allowlist.
 
     SwapRequest:
       type: object
@@ -1854,6 +2705,13 @@ components:
 
     SwapResponse:
       type: object
+      description: |
+        Response for `intentsSwap`. Swap is a **Trusted** op, so on a multisig
+        wallet it can return `status=pending_approval` with the
+        `approval_id` / `required` / `approved` / `request_hash` fields populated
+        (same shape as `WithdrawResponse`); the swap executes only after the
+        approval threshold is met. On the direct path those fields are omitted and
+        `amount_out` / `intent_hash` carry the settled result.
       required: [request_id, status]
       properties:
         request_id:
@@ -1865,6 +2723,18 @@ components:
           type: string
         intent_hash:
           type: string
+        approval_id:
+          type: [string, 'null']
+          format: uuid
+        required:
+          type: [integer, 'null']
+        approved:
+          type: [integer, 'null']
+        request_hash:
+          type: [string, 'null']
+          description: >-
+            Canonical request hash to sign when `status=pending_approval`
+            (otherwise absent).
 
     SwapQuoteResponse:
       type: object
@@ -1892,8 +2762,8 @@ components:
       allOf:
         - $ref: '#/components/schemas/DefuseAssetId'
       description: |-
-        Defuse asset id the recipient will hold after the bridge. Defaults
-        to NEAR USDC.
+        Defuse asset id the recipient will hold after the cross-chain deposit
+        settles. Defaults to NEAR USDC.
       default: nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1
 
     DepositIntentRequest:
@@ -1935,8 +2805,8 @@ components:
             refund_address:
               type: string
               description: |-
-                Address on the source chain to refund to if the bridge
-                fails. Defaults to the wallet's derived address on that
+                Address on the source chain to refund to if the cross-chain
+                deposit fails. Defaults to the wallet's derived address on that
                 chain.
         - title: ByChainAndToken
           description: |-
@@ -1997,7 +2867,7 @@ components:
           type: string
         amount_out:
           type: string
-          description: Amount credited after the bridge fee.
+          description: Amount credited after the cross-chain deposit fee.
         min_amount_out:
           type: string
         expires_at:
@@ -2010,7 +2880,7 @@ components:
         estimated_time_secs:
           type: integer
           description: |-
-            Solver's estimate of bridge settlement time, in seconds. Absent
+            Solver's estimate of deposit settlement time, in seconds. Absent
             if 1Click did not return an estimate.
         hint:
           type: string
@@ -2026,16 +2896,247 @@ components:
 
     DepositStatusResponse:
       type: object
-      required: [intent_id, status]
+      required: [intent_id, status, amount, deposit_address, created_at]
       properties:
         intent_id:
           type: string
         status:
           type: string
           enum: [pending, bridging, success, failed, expired]
+        amount:
+          type: string
+          description: Deposit amount in the source token's minimal units.
+        deposit_address:
+          type: string
+          description: The one-time source-chain address funds were to be sent to.
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+          description: 1Click deadline after which the deposit address is no longer honored.
         result:
           type: [object, 'null']
           additionalProperties: {}
+
+    # ----- Payment checks -----
+    PaymentCheckCreateRequest:
+      type: object
+      required: [token, amount]
+      properties:
+        token:
+          type: string
+          description: >-
+            Token to fund the check with. Accepts a `defuse_asset_id`
+            (`nep141:<contract>`) or a bare NEP-141 contract id; normalized
+            server-side.
+        amount:
+          type: string
+          description: Amount in the token's minimal units. Must be > 0.
+        memo:
+          type: [string, 'null']
+          description: Optional note (max 256 chars) surfaced to whoever peeks/claims the check.
+        expires_in:
+          type: [integer, 'null']
+          format: int64
+          minimum: 0
+          description: >-
+            Optional time-to-live in seconds from creation. After it elapses an
+            unclaimed check reports `expired` and can no longer be claimed (only
+            reclaimed by the creator).
+
+    PaymentCheckCreateResponse:
+      type: object
+      required: [check_id, check_key, token, amount, created_at]
+      properties:
+        check_id:
+          type: string
+          format: uuid
+          description: Server-side identifier for the check (used by status / reclaim).
+        check_key:
+          type: string
+          description: >-
+            The ephemeral account's ed25519 private key (64 hex chars). Bearer
+            secret — whoever holds it can claim the funds. Returned ONCE.
+        token:
+          type: string
+        amount:
+          type: string
+        memo:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+
+    PaymentCheckBatchCreateRequest:
+      type: object
+      required: [checks]
+      properties:
+        checks:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/PaymentCheckCreateRequest'
+
+    PaymentCheckBatchCreateResponse:
+      type: object
+      required: [checks]
+      properties:
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentCheckCreateResponse'
+
+    PaymentCheckClaimRequest:
+      type: object
+      required: [check_key]
+      properties:
+        check_key:
+          type: string
+          description: The check's ephemeral private key (64 hex chars).
+        amount:
+          type: [string, 'null']
+          description: >-
+            Optional partial claim amount in minimal units. Omit to claim the
+            full remaining balance.
+
+    PaymentCheckClaimResponse:
+      type: object
+      required: [token, amount_claimed, remaining, claimed_at]
+      properties:
+        token:
+          type: string
+        amount_claimed:
+          type: string
+        remaining:
+          type: string
+          description: Amount still claimable on the check after this claim (minimal units).
+        memo:
+          type: [string, 'null']
+        claimed_at:
+          type: string
+          format: date-time
+        intent_hash:
+          type: [string, 'null']
+          description: base58 solver-relay intent hash for the claim transfer, if returned.
+
+    PaymentCheckReclaimRequest:
+      type: object
+      required: [check_id]
+      properties:
+        check_id:
+          type: string
+          format: uuid
+          description: The `check_id` of a check the authenticated wallet created.
+        amount:
+          type: [string, 'null']
+          description: >-
+            Optional partial reclaim amount in minimal units. Omit to reclaim the
+            full remaining balance.
+
+    PaymentCheckReclaimResponse:
+      type: object
+      required: [token, amount_reclaimed, remaining, reclaimed_at]
+      properties:
+        token:
+          type: string
+        amount_reclaimed:
+          type: string
+        remaining:
+          type: string
+          description: Amount still outstanding on the check after this reclaim (minimal units).
+        reclaimed_at:
+          type: string
+          format: date-time
+        intent_hash:
+          type: [string, 'null']
+          description: base58 solver-relay intent hash for the reclaim transfer, if returned.
+
+    PaymentCheckStatusResponse:
+      type: object
+      required:
+        - check_id
+        - token
+        - amount
+        - claimed_amount
+        - reclaimed_amount
+        - status
+        - created_at
+      properties:
+        check_id:
+          type: string
+          format: uuid
+        token:
+          type: string
+        amount:
+          type: string
+          description: Original check amount in minimal units.
+        claimed_amount:
+          type: string
+          description: Total claimed so far (minimal units).
+        reclaimed_amount:
+          type: string
+          description: Total reclaimed so far (minimal units).
+        status:
+          type: string
+          description: >-
+            Lifecycle state: `unclaimed`, `claiming`, `partially_claimed`,
+            `claimed`, `reclaiming`, `partially_reclaimed`, `reclaimed`, or the
+            virtual `expired` (unclaimed and past `expires_at`).
+        memo:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+        claimed_at:
+          type: [string, 'null']
+          format: date-time
+        claimed_by:
+          type: [string, 'null']
+          description: Wallet id that claimed the check, if any.
+
+    PaymentCheckListResponse:
+      type: object
+      required: [checks]
+      properties:
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentCheckStatusResponse'
+
+    PaymentCheckPeekRequest:
+      type: object
+      required: [check_key]
+      properties:
+        check_key:
+          type: string
+          description: The check's ephemeral private key (64 hex chars).
+
+    PaymentCheckPeekResponse:
+      type: object
+      required: [token, balance, status]
+      properties:
+        token:
+          type: string
+        balance:
+          type: string
+          description: Live on-chain balance of the check's ephemeral account (minimal units).
+        memo:
+          type: [string, 'null']
+        status:
+          type: string
+          description: Same status vocabulary as `PaymentCheckStatusResponse`.
+        expires_at:
+          type: [string, 'null']
+          format: date-time
 
     SignMessageRequest:
       type: object
@@ -2050,7 +3151,11 @@ components:
           description: Base64-encoded 32-byte nonce. Auto-generated if omitted.
         format:
           type: string
-          enum: [nep413, raw]
+          description: >-
+            NEP-413 only. `raw` is **rejected** (`400 bad_request`) — use
+            [`authSign`](#tag/Wallet/operation/authSign) for OutLayer NEAR-key
+            auth. The field is retained only to return that redirect error.
+          enum: [nep413]
           default: nep413
 
     SignMessageResponse:
@@ -2067,18 +3172,67 @@ components:
         nonce:
           type: string
 
+    AuthSignRequest:
+      type: object
+      required: [purpose, seed]
+      properties:
+        purpose:
+          type: string
+          description: >-
+            `bearer` → challenge `auth:<seed>:<ts>` (+`:<vault>` when `vault_id`
+            set); `register` → `register:<seed>:<ts>`; `api-key` →
+            `api-key:<seed>:<ts>`.
+          enum: [bearer, register, api-key]
+        seed:
+          type: string
+          description: Wallet seed — selects which sub-wallet's key signs.
+        vault_id:
+          type: string
+          description: Vault scope — only valid for `purpose=bearer`.
+
+    AuthSignResponse:
+      type: object
+      required: [auth_message, auth_timestamp, signature, public_key]
+      properties:
+        auth_message:
+          type: string
+          description: >-
+            The exact challenge string the keystore built and signed — send this
+            verbatim.
+        auth_timestamp:
+          type: integer
+          format: int64
+          description: Fresh server timestamp (unix seconds) baked into `auth_message`.
+        signature:
+          type: string
+          description: Raw ed25519 signature over `auth_message`, base58 (no `ed25519:` prefix).
+        public_key:
+          type: string
+          description: Signer public key in `ed25519:<base58>` form.
+
     # ----- Policy -----
     PolicyRules:
       type: object
       properties:
-        limits:
-          $ref: '#/components/schemas/PolicyLimits'
-        addresses:
-          $ref: '#/components/schemas/AddressList'
         transaction_types:
           type: array
+          description: >-
+            Allowed op types (allowlist). Omit to allow all. `cross_chain_withdraw`
+            must be listed explicitly to permit bridging out (it is NOT covered by
+            `withdraw`). The deposit family gates as `call`.
           items:
             $ref: '#/components/schemas/RequestType'
+        allowed_tokens:
+          type: array
+          description: >-
+            Token allowlist (defuse asset ids, or `"*"` for any). Omit or use
+            `["*"]` to allow all tokens.
+          items:
+            type: string
+        addresses:
+          $ref: '#/components/schemas/AddressList'
+        limits:
+          $ref: '#/components/schemas/PolicyLimits'
         time_restrictions:
           $ref: '#/components/schemas/TimeRestrictions'
         rate_limit:
@@ -2087,8 +3241,12 @@ components:
     PolicyLimits:
       type: object
       description: |
-        Per-period spending limits. Each field is a map of `token_id → amount`.
-        Use `"*"` as the key to match all tokens.
+        Per-period spending limits. The amount fields are maps of
+        `token_id → amount` (use `"*"` as the key to match all tokens).
+        `per_transaction` is STATELESS (enforced on every signature inside the
+        TEE); `hourly` / `daily` / `monthly` and `hourly_tx_count` are STATEFUL
+        velocity limits (checked against coordinator-supplied usage; best-effort
+        under concurrency).
       properties:
         per_transaction:
           type: object
@@ -2106,6 +3264,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        hourly_tx_count:
+          type: integer
+          description: >-
+            Max number of transactions per rolling hour (transaction-count rate
+            limit; equivalent to `rate_limit.max_per_hour`).
 
     AddressList:
       type: object
@@ -2147,32 +3310,53 @@ components:
 
     ApprovalConfig:
       type: object
+      description: |
+        Multisig approval configuration. When set, an op that trips the approval
+        trigger returns `pending_approval` and executes only after `threshold`
+        approvers sign. Applies to fund ops including the Trusted kinds (swap,
+        confidential, cross_chain_withdraw); `payment_check` is excluded from the
+        generic trigger (cap-gated instead).
       properties:
         threshold:
-          type: object
-          required: [required, of]
-          properties:
-            required:
-              type: integer
-            of:
-              type: integer
-        above_usd:
-          type: number
-          description: Approval gate triggers when transaction value exceeds this USD amount.
+          description: >-
+            Number of approvals required — either a bare integer (e.g. `2`) or an
+            object `{ "required": N }`.
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: object
+              required: [required]
+              properties:
+                required:
+                  type: integer
+                  minimum: 1
         approvers:
           type: array
           items:
             $ref: '#/components/schemas/Approver'
+        excluded_types:
+          type: array
+          description: Op types exempt from the generic approval trigger.
+          items:
+            $ref: '#/components/schemas/RequestType'
 
     Approver:
       type: object
-      required: [id, role]
+      required: [id, pubkey]
       properties:
         id:
           type: string
-          description: Public key, e.g. `ed25519:...`.
+          description: Approver's NEAR account id, e.g. `alice.near`.
+        pubkey:
+          type: string
+          description: >-
+            Approver's NEAR public key (`ed25519:<base58>`), pinned on-chain. The
+            approver's NEP-413 vote signature is verified against this key.
         role:
           type: string
+          description: >-
+            Optional. `admin` may also modify policy / freeze; `signer` may only
+            approve transactions. Defaults to `signer` when omitted.
           enum: [admin, signer]
 
     AdminQuorum:
@@ -2185,6 +3369,71 @@ components:
           type: array
           items:
             type: string
+
+    Capability:
+      type: object
+      description: >-
+        A single non-Built primitive toggle. All capabilities default to DENY
+        except `sign_message`. `requires_approval` opts that primitive into
+        multisig specifically.
+      properties:
+        allowed:
+          type: boolean
+        requires_approval:
+          type: boolean
+
+    RawSignCapability:
+      type: object
+      description: >-
+        `raw_sign` — sign arbitrary raw bytes. `chains` is an optional allowlist;
+        when absent, ALL chains (including `near`, which can sign a NEAR tx/intent
+        outside the structured policy — enable with care).
+      properties:
+        allowed:
+          type: boolean
+        requires_approval:
+          type: boolean
+        chains:
+          type: array
+          items:
+            type: string
+
+    SignMessageCapability:
+      type: object
+      description: >-
+        `sign_message` — generic non-fund NEP-413 (e.g. dApp login). Defaults
+        ALLOWED. `allowed_recipients` is a default-DENY allowlist of verifier
+        recipients (NOT a blocklist); `intents.near` / `intents.far` are always
+        excluded. This is NOT OutLayer auth (that is `authSign`).
+      properties:
+        allowed:
+          type: boolean
+        requires_approval:
+          type: boolean
+        allowed_recipients:
+          type: array
+          items:
+            type: string
+
+    Capabilities:
+      type: object
+      description: |
+        Default-DENY opt-ins for the non-Built primitives, stored alongside
+        `rules` / `approval` in the encrypted policy. Every capability defaults to
+        DENY **except** `sign_message` (defaults allowed).
+      properties:
+        raw_sign:
+          $ref: '#/components/schemas/RawSignCapability'
+        confidential:
+          $ref: '#/components/schemas/Capability'
+        swap:
+          $ref: '#/components/schemas/Capability'
+        cross_chain_withdraw:
+          $ref: '#/components/schemas/Capability'
+        payment_check:
+          $ref: '#/components/schemas/Capability'
+        sign_message:
+          $ref: '#/components/schemas/SignMessageCapability'
 
     PolicyResponse:
       type: object
@@ -2201,6 +3450,8 @@ components:
           $ref: '#/components/schemas/PolicyRules'
         approval:
           $ref: '#/components/schemas/ApprovalConfig'
+        capabilities:
+          $ref: '#/components/schemas/Capabilities'
         authorized_key_hashes:
           type: array
           items:
@@ -2222,6 +3473,8 @@ components:
           $ref: '#/components/schemas/PolicyRules'
         approval:
           $ref: '#/components/schemas/ApprovalConfig'
+        capabilities:
+          $ref: '#/components/schemas/Capabilities'
         admin_quorum:
           $ref: '#/components/schemas/AdminQuorum'
         webhook_url:
@@ -2267,7 +3520,7 @@ components:
     # ----- Approvals -----
     PendingApproval:
       type: object
-      required: [approval_id, type, request_data, required, approved, expires_at]
+      required: [approval_id, type, request_data, request_hash, decision, required, approved, expires_at]
       properties:
         approval_id:
           type: string
@@ -2280,6 +3533,23 @@ components:
         request_data:
           type: object
           additionalProperties: {}
+        op:
+          type: [object, 'null']
+          additionalProperties: {}
+          description: >-
+            Canonical op to RENDER (parsed from the stored canonical JSON). The
+            dashboard renders this directly. `null` for legacy rows predating
+            canonical-op storage.
+        request_hash:
+          type: string
+          description: >-
+            Canonical request hash to SIGN — approvers sign
+            `approve:{approval_id}:{wallet_pubkey}:{request_hash}` (see
+            `Nep413Auth`).
+        decision:
+          type: string
+          description: Always `requires_approval` for a pending row.
+          enum: [requires_approval]
         required:
           type: integer
         approved:
@@ -2297,12 +3567,83 @@ components:
           items:
             $ref: '#/components/schemas/PendingApproval'
 
+    ApprovalDetail:
+      type: object
+      description: >-
+        Public, read-only detail for one pending approval (`getApprovalDetail`).
+        Returns only non-sensitive metadata. `wallet_pubkey` + `request_hash` are
+        what an approver binds into the NEP-413 vote (see `Nep413Auth`); the
+        dashboard renders `op`.
+      required:
+        - id
+        - wallet_id
+        - request_type
+        - request_data
+        - status
+        - required_approvals
+        - request_hash
+        - wallet_pubkey
+        - expires_at
+        - created_at
+        - approvers
+      properties:
+        id:
+          type: string
+          format: uuid
+        wallet_id:
+          type: string
+        request_type:
+          $ref: '#/components/schemas/RequestType'
+        request_data:
+          type: object
+          additionalProperties: {}
+        status:
+          type: string
+          enum: [pending, approved, rejected, expired]
+        required_approvals:
+          type: integer
+        request_hash:
+          type: string
+        op:
+          type: [object, 'null']
+          additionalProperties: {}
+          description: Canonical op for the dashboard to render. `null` for legacy rows.
+        wallet_pubkey:
+          type: string
+          description: On-chain wallet pubkey bound into the approve/reject vote message.
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        approvers:
+          type: array
+          description: Signatures collected so far.
+          items:
+            type: object
+            required: [approver_id, approver_role, signature, created_at]
+            properties:
+              approver_id:
+                type: string
+              approver_role:
+                type: string
+              signature:
+                type: string
+              created_at:
+                type: string
+                format: date-time
+
     Nep413Auth:
       type: object
       description: |
-        NEP-413 signed authentication payload. The signed message is
-        `approve:{approval_id}:{request_hash}` for approve or
-        `reject:{approval_id}:{request_hash}` for reject.
+        NEP-413 signed authentication payload. The signed message binds the
+        wallet's on-chain pubkey so a vote can't be replayed onto another wallet:
+        `approve:{approval_id}:{wallet_pubkey}:{request_hash}` for approve, or
+        `reject:{approval_id}:{wallet_pubkey}:{request_hash}` for reject. The
+        `wallet_pubkey` and `request_hash` come from `getApprovalDetail` (or
+        `listPendingApprovals`). `recipient` for the NEP-413 signature is the
+        wallet contract id.
       required: [signature, public_key, account_id, nonce]
       properties:
         signature:
@@ -2339,6 +3680,22 @@ components:
         request_id:
           type: [string, 'null']
           format: uuid
+
+    RejectResponse:
+      type: object
+      required: [approval_id, status]
+      properties:
+        approval_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: >-
+            `rejected` — the reject came from a REAL policy approver, so the request is
+            cancelled (a real reject vetoes it irrevocably). `reject_vote_recorded` — the
+            signer is not a configured approver: the vote is stored and the request stays
+            `pending_approval` (the keystore still vetoes execution at sign time).
+          enum: [rejected, reject_vote_recorded]
 
     # ----- Audit & requests -----
     AuditEvent:
@@ -2475,21 +3832,27 @@ components:
       allOf:
         - $ref: '#/components/schemas/WithdrawRequest'
     ConfidentialSwapRequest:
-      description: Confidential swap body — same shape as `SwapRequest`.
+      description: >-
+        Confidential swap body — same shape as `SwapRequest`
+        (`token_in` / `amount_in` / `token_out` / optional `min_amount_out`).
+        On a multisig wallet the confidential swap binds `token_out` and
+        `min_amount_out` into the approved op (like a public swap), so approvers
+        commit to the output terms — a compromised coordinator cannot change them
+        after approval.
       allOf:
         - $ref: '#/components/schemas/SwapRequest'
     ConfidentialDepositIntentRequest:
       description: >-
-        Cross-chain deposit-intent body — same shape as `DepositIntentRequest`
+        Cross-chain deposit body — same shape as `DepositIntentRequest`
         (`source_asset` or `chain`+`token`). NOTE: for the confidential endpoint
         `destination_asset` and `refund_address` are **ignored** — the
-        destination is forced to the origin asset (same-asset bridge into the
-        confidential shard) and refund is forced to the wallet's 64-hex
+        destination is forced to the origin asset (same-asset cross-chain deposit
+        into the confidential shard) and refund is forced to the wallet's 64-hex
         intentsUserId (the `refundType=CONFIDENTIAL_INTENTS` invariant).
       allOf:
         - $ref: '#/components/schemas/DepositIntentRequest'
     ConfidentialDepositIntentResponse:
-      description: Bridge deposit address — same shape as `DepositIntentResponse`.
+      description: Cross-chain deposit address — same shape as `DepositIntentResponse`.
       allOf:
         - $ref: '#/components/schemas/DepositIntentResponse'
 
@@ -2513,12 +3876,18 @@ components:
 
     ConfidentialOpResponse:
       type: object
-      description: >-
+      description: |
         Result of a confidential shield / unshield / withdraw / transfer / swap.
         The op is asynchronous — the user's signed intent settles on the private
         shard (`intents.far`, no public RPC), so there is no public `tx_hash`;
-        track via
-        `intent_hash` / `deposit_address` and poll `GET /wallet/v1/requests/{id}`.
+        track via `intent_hash` / `deposit_address` and poll
+        `GET /wallet/v1/requests/{id}`.
+
+        **Multisig:** the Trusted confidential ops (withdraw / transfer / swap)
+        are subject to the wallet's approval policy. When approval is required the
+        response inlines `approval_id` / `required` / `approved` / `request_hash`
+        (same shape as `WithdrawResponse` / `SwapResponse`) — sign `request_hash`
+        and submit your approval vote; the op executes after the threshold is met.
       required: [request_id, status]
       properties:
         request_id:
@@ -2529,15 +3898,29 @@ components:
           description: >-
             Normalized lifecycle status (1Click's UPPERCASE state machine mapped
             to lowercase): `pending_deposit` → `processing` → `success` /
-            `failed` / `refunded`. The raw upstream status is in the request
-            row's `result.oneclick_status`.
-          enum: [pending_deposit, processing, success, failed, refunded]
+            `failed` / `refunded`. `pending_approval` is returned instead when a
+            multisig wallet must approve the op first. The raw upstream status is
+            in the request row's `result.oneclick_status`.
+          enum: [pending_deposit, processing, success, failed, refunded, pending_approval]
         intent_hash:
           type: [string, 'null']
           description: Confidential-shard intent hash (never appears on the public chain).
         deposit_address:
           type: [string, 'null']
           description: Opaque 1Click hop address — the status primary key.
+        approval_id:
+          type: string
+          format: uuid
+          description: Present only on `pending_approval` (multisig) — the approval to vote on.
+        required:
+          type: integer
+          description: Present only on `pending_approval` — approvals needed.
+        approved:
+          type: integer
+          description: Present only on `pending_approval` — approvals collected so far (0 at creation).
+        request_hash:
+          type: string
+          description: Present only on `pending_approval` — sha256(canonical_json(op)); sign this to approve.
 
     ConfidentialBalanceResponse:
       type: object

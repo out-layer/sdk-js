@@ -146,6 +146,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete the wallet account, sweeping its full balance to a beneficiary
+         * @description Irreversible. Signs and broadcasts NEAR's native `DeleteAccount`
+         *     action, which sends the wallet account's **entire** remaining NEAR
+         *     balance to `beneficiary`, revokes all API keys, and marks the wallet
+         *     deleted. Guards: the beneficiary cannot be the wallet's own account,
+         *     the wallet must have a non-zero on-chain balance (a zero-balance
+         *     implicit account does not exist on-chain), and the wallet must not be
+         *     already deleted. Policy is enforced before signing; on a multisig
+         *     wallet the response carries `status=pending_approval` and an
+         *     `approval_id` for the multisig flow.
+         */
+        post: operations["deleteWallet"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/storage-deposit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register storage on a NEP-141 token contract
+         * @description Calls `storage_deposit` (with `registration_only: true`) on a NEP-141
+         *     token contract so `account_id` (defaults to the wallet's own NEAR
+         *     address) can hold that token. Idempotent: if the account is already
+         *     registered the call returns `already_registered: true` without signing
+         *     a transaction. The wallet must have NEAR to pay gas when a transaction
+         *     is required. Policy gates this as a `call`; multisig is not supported
+         *     for this endpoint.
+         */
+        post: operations["storageDeposit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/v1/intents/deposit": {
         parameters: {
             query?: never;
@@ -274,7 +328,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/wallet/v1/confidential/deposit": {
+    "/wallet/v1/confidential/shield": {
         parameters: {
             query?: never;
             header?: never;
@@ -293,10 +347,38 @@ export interface paths {
          *     **on-chain** (an `execute_intents` call signed by the wallet, with the
          *     public asset id visible). It is a convenience hop, not an unlinkable
          *     operation — for unlinkability fund the confidential balance via
-         *     `confidentialDepositIntent` (cross-chain) instead. See CUSTODY docs.
+         *     `confidentialDepositCrossChain` (cross-chain) instead. See CUSTODY docs.
          *
          *     Async: returns `status=pending_deposit` with a `request_id`; poll
          *     `GET /wallet/v1/requests/{id}` until terminal.
+         *
+         *     **Legacy alias:** `POST /wallet/v1/confidential/deposit` still works and
+         *     resolves to the same handler.
+         */
+        post: operations["confidentialShield"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/deposit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * [Deprecated] SHIELD into the confidential shard (use /wallet/v1/confidential/shield)
+         * @deprecated
+         * @description **Deprecated legacy alias.** Use
+         *     [`confidentialShield`](#tag/Confidential/operation/confidentialShield)
+         *     (`POST /wallet/v1/confidential/shield`) instead. Retained for backward
+         *     compatibility; resolves to the same handler with identical
+         *     request/response shapes.
          */
         post: operations["confidentialDeposit"];
         delete?: never;
@@ -455,7 +537,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/wallet/v1/confidential/deposit-intent": {
+    "/wallet/v1/confidential/deposit/cross-chain": {
         parameters: {
             query?: never;
             header?: never;
@@ -466,13 +548,41 @@ export interface paths {
         put?: never;
         /**
          * Cross-chain deposit into the confidential shard (quote only)
-         * @description Requests a one-time bridge deposit address to fund the confidential
-         *     balance from an external chain (`ORIGIN_CHAIN` → `CONFIDENTIAL_INTENTS`).
-         *     The caller sends `amount` of the source asset to the returned
-         *     `deposit_address` out-of-band; the solver bridges it and credits the
-         *     confidential balance. **The wallet's NEAR address never touches the
-         *     public side** — this is the most private way to fund a confidential
-         *     balance. Poll `GET /wallet/v1/requests/{id}` for status.
+         * @description Requests a one-time deposit address to fund the confidential balance
+         *     from an external chain (`ORIGIN_CHAIN` → `CONFIDENTIAL_INTENTS`) via
+         *     1Click / NEAR Intents. The caller sends `amount` of the source asset to
+         *     the returned `deposit_address` out-of-band; the solver delivers it and
+         *     credits the confidential balance. **The wallet's NEAR address never
+         *     touches the public side** — this is the most private way to fund a
+         *     confidential balance. Poll `GET /wallet/v1/requests/{id}` for status.
+         *
+         *     **Legacy alias:** `POST /wallet/v1/confidential/deposit-intent` still
+         *     works and resolves to the same handler.
+         */
+        post: operations["confidentialDepositCrossChain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/confidential/deposit-intent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * [Deprecated] Cross-chain deposit into the confidential shard (use /wallet/v1/confidential/deposit/cross-chain)
+         * @deprecated
+         * @description **Deprecated legacy alias.** Use
+         *     [`confidentialDepositCrossChain`](#tag/Confidential/operation/confidentialDepositCrossChain)
+         *     (`POST /wallet/v1/confidential/deposit/cross-chain`) instead. Retained
+         *     for backward compatibility; resolves to the same handler with identical
+         *     request/response shapes.
          */
         post: operations["confidentialDepositIntent"];
         delete?: never;
@@ -504,7 +614,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/wallet/v1/deposit-intent": {
+    "/wallet/v1/intents/deposit/cross-chain": {
         parameters: {
             query?: never;
             header?: never;
@@ -514,11 +624,15 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Create a cross-chain deposit intent (1Click)
+         * Create a cross-chain deposit (via 1Click / NEAR Intents)
          * @description Requests a one-time deposit address on a source chain via NEAR Intents
          *     1Click. The caller sends `amount` of the source token to the returned
-         *     `deposit_address`; the solver bridges it and credits the wallet's
-         *     intents.near balance. Poll `getDepositStatus` until `success`.
+         *     `deposit_address`; the solver delivers it and credits the wallet's
+         *     intents.near balance. Poll `getCrossChainDepositStatus` until `success`.
+         *
+         *     This is a **cross-chain deposit via 1Click / NEAR Intents** — the
+         *     wallet's NEAR address receives the intents.near credit once the solver
+         *     settles the source-chain deposit.
          *
          *     Two request shapes are accepted (see
          *     [`DepositIntentRequest`](#/components/schemas/DepositIntentRequest)):
@@ -535,14 +649,68 @@ export interface paths {
          *     coordinator logs a warning. `near` is a valid source chain — a
          *     NEAR-origin deposit returns a 64-char hex implicit account.
          *
-         *     Amounts are in the token's smallest unit. There's a small bridge fee,
+         *     Amounts are in the token's smallest unit. There's a small solver fee,
          *     so `amount_out` < `amount`.
          *
          *     The returned `deposit_address` is chain-specific — see the
          *     [`DepositIntentResponse.deposit_address`](#/components/schemas/DepositIntentResponse)
          *     description for per-chain address formats.
+         *
+         *     **Legacy alias:** `POST /wallet/v1/deposit-intent` still works and
+         *     resolves to the same handler.
+         */
+        post: operations["intentsDepositCrossChain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/deposit-intent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * [Deprecated] Create a cross-chain deposit (use /wallet/v1/intents/deposit/cross-chain)
+         * @deprecated
+         * @description **Deprecated legacy alias.** Use
+         *     [`intentsDepositCrossChain`](#tag/Wallet/operation/intentsDepositCrossChain)
+         *     (`POST /wallet/v1/intents/deposit/cross-chain`) instead. This path is
+         *     retained for backward compatibility and resolves to the same handler
+         *     with identical request/response shapes — existing clients continue to
+         *     work unchanged.
          */
         post: operations["createDepositIntent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/intents/deposit/cross-chain/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Poll a cross-chain deposit's status
+         * @description Returns the live status of a cross-chain deposit (from
+         *     `intentsDepositCrossChain`), lazily refreshing it against 1Click on each
+         *     call.
+         *
+         *     **Legacy alias:** `GET /wallet/v1/deposit-status` still works and
+         *     resolves to the same handler.
+         */
+        get: operations["getCrossChainDepositStatus"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -556,10 +724,246 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Poll a cross-chain deposit intent's status */
+        /**
+         * [Deprecated] Poll a cross-chain deposit's status (use /wallet/v1/intents/deposit/cross-chain/status)
+         * @deprecated
+         * @description **Deprecated legacy alias.** Use
+         *     [`getCrossChainDepositStatus`](#tag/Wallet/operation/getCrossChainDepositStatus)
+         *     (`GET /wallet/v1/intents/deposit/cross-chain/status`) instead. Retained
+         *     for backward compatibility; resolves to the same handler.
+         */
         get: operations["getDepositStatus"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/intents/deposit/cross-chain/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List this wallet's cross-chain deposits
+         * @description Returns the wallet's cross-chain deposits (from
+         *     `intentsDepositCrossChain`), most recent first. Each entry has the same
+         *     shape as `getCrossChainDepositStatus`, but the list endpoint does NOT
+         *     lazily refresh in-flight deposits against 1Click — statuses are read
+         *     straight from storage as last persisted. Poll
+         *     `getCrossChainDepositStatus` for a single deposit when you need its live
+         *     status.
+         *
+         *     **Legacy alias:** `GET /wallet/v1/deposits` still works and resolves to
+         *     the same handler.
+         */
+        get: operations["listCrossChainDeposits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/deposits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * [Deprecated] List cross-chain deposits (use /wallet/v1/intents/deposit/cross-chain/list)
+         * @deprecated
+         * @description **Deprecated legacy alias.** Use
+         *     [`listCrossChainDeposits`](#tag/Wallet/operation/listCrossChainDeposits)
+         *     (`GET /wallet/v1/intents/deposit/cross-chain/list`) instead. Retained
+         *     for backward compatibility; resolves to the same handler.
+         */
+        get: operations["listDeposits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/payment-check/create": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a payment check (bearer-claimable transfer)
+         * @description Creates a "payment check": the wallet's intents balance is moved to a
+         *     fresh ephemeral intents account (gaslessly, via the solver relay), and
+         *     the ephemeral account's private key is returned as `check_key`. Whoever
+         *     holds `check_key` can `claimPaymentCheck` the funds; the creator can
+         *     `reclaimPaymentCheck` them back. Fund the wallet's intents balance first
+         *     via `intentsDeposit`.
+         *
+         *     **Security model:** this is NOT gated by multisig. The keystore signs the
+         *     transfer-to-ephemeral only when the wallet policy grants the default-DENY
+         *     `payment_check` capability and the per-transaction amount is within the
+         *     capability's per-token amount cap. `claimPaymentCheck` / `reclaimPaymentCheck`
+         *     are signed by the ephemeral `check_key` itself (NEP-413), never by the
+         *     keystore.
+         */
+        post: operations["createPaymentCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/payment-check/batch-create": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create up to 10 payment checks in one call
+         * @description Creates between 1 and 10 payment checks in a single request, each backed
+         *     by its own ephemeral intents account. The wallet's intents balance must
+         *     cover the sum per token across the batch.
+         *
+         *     **Security model:** identical to `createPaymentCheck` — gated by the
+         *     default-DENY `payment_check` capability and its per-transaction amount cap
+         *     (NOT multisig); each check's claim/reclaim is signed by that check's
+         *     ephemeral key, not the keystore.
+         */
+        post: operations["batchCreatePaymentChecks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/payment-check/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim a payment check
+         * @description Claims the funds held by a payment check into the authenticated wallet's
+         *     intents balance. Signed by the ephemeral `check_key` (NEP-413), so the
+         *     caller need only hold the key. Omit `amount` for a full claim, or pass a
+         *     partial amount (minimal units) to claim part and leave the remainder
+         *     claimable. Expired or already-settled checks are rejected.
+         */
+        post: operations["claimPaymentCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/payment-check/reclaim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reclaim an unclaimed payment check
+         * @description Returns the (remaining) funds of a payment check the wallet created back
+         *     to the wallet's own intents balance — used to cancel/expire a check that
+         *     was never claimed. Identified by `check_id` and scoped to the creating
+         *     wallet. Signed by the ephemeral check key (re-derived inside the
+         *     keystore), not the keystore's wallet key. Omit `amount` for a full
+         *     reclaim or pass a partial amount.
+         */
+        post: operations["reclaimPaymentCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/payment-check/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a payment check's status
+         * @description Returns the full lifecycle state of a payment check the wallet created,
+         *     identified by `check_id`. `status` is normalized to `expired` when an
+         *     `unclaimed` check is past its `expires_at`.
+         */
+        get: operations["getPaymentCheckStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/payment-check/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the wallet's payment checks
+         * @description Lists payment checks created by the authenticated wallet, most recent
+         *     first. Optionally filter by `status` (including the virtual `expired`
+         *     status: unclaimed checks past their `expires_at`).
+         */
+        get: operations["listPaymentChecks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/payment-check/peek": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Inspect a payment check by its key (without claiming)
+         * @description Reads a payment check's on-chain balance and metadata using its
+         *     `check_key`, without moving any funds. Use this before
+         *     `claimPaymentCheck` to see what a key is worth. Returns the live
+         *     on-chain `balance` of the ephemeral account plus the stored `token` /
+         *     `memo` / `status` / `expires_at`.
+         */
+        post: operations["peekPaymentCheck"];
         delete?: never;
         options?: never;
         head?: never;
@@ -576,14 +980,55 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Sign an arbitrary message (NEP-413 or raw)
-         * @description Signs a message with the wallet's NEAR key. Use `format=nep413` (default)
-         *     for the standard NEP-413 signing scheme; use `format=raw` for raw byte
-         *     signing.
+         * Sign a generic NEP-413 message
+         * @description Signs a NEP-413 message with the wallet's NEAR key (e.g. dApp login).
+         *     Gated by the `sign_message` capability: `allowed_recipients` is a
+         *     default-DENY allowlist of verifier recipients, and `intents.near` /
+         *     `intents.far` are always excluded. Policy and freeze still apply — a
+         *     frozen wallet cannot sign.
          *
-         *     Policy and freeze still apply — a frozen wallet cannot sign.
+         *     **`format` is now NEP-413 only.** `format=raw` is **rejected** with
+         *     `400 bad_request` — OutLayer NEAR-key auth (the old raw-ed25519
+         *     `auth:`/`register:`/`api-key:` token) moved to
+         *     [`POST /wallet/v1/auth-sign`](#tag/Wallet/operation/authSign), which
+         *     builds the challenge with a fresh server timestamp. This is NOT OutLayer
+         *     auth signing.
          */
         post: operations["signMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/auth-sign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign an OutLayer NEAR-key auth challenge (Bearer / register / api-key)
+         * @description Produces the OutLayer authentication signature used to construct a
+         *     `Bearer near:` token, or to authenticate `POST /register` /
+         *     `PUT /wallet/v1/api-key` from a deterministic wallet's own NEAR key.
+         *
+         *     The keystore **builds** the exact challenge string
+         *     `<prefix>:<seed>:<ts>` (where `prefix` is `auth` for `bearer`, else the
+         *     purpose) with a **fresh server timestamp** and signs it raw ed25519. The
+         *     client does NOT supply or control the timestamp — the fresh `ts` is what
+         *     the coordinator's verifier requires. Send the returned `auth_message`
+         *     verbatim.
+         *
+         *     This is the replacement for the old
+         *     `POST /wallet/v1/sign-message {format:"raw"}`. It maps to an always-allowed,
+         *     non-fund `Op::Auth` (domain-separated from a tx hash) — no capability and
+         *     no multisig gate it, but a frozen wallet still cannot sign.
+         */
+        post: operations["authSign"];
         delete?: never;
         options?: never;
         head?: never;
@@ -729,6 +1174,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/approval/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a single pending approval's detail (public, read-only)
+         * @description Returns non-sensitive detail for one pending approval — used by the
+         *     dashboard approval-detail page. No auth: rate-limited by IP, returns only
+         *     public metadata. The `wallet_pubkey` and `request_hash` are the values an
+         *     approver binds into the NEP-413 vote message
+         *     (`approve:{id}:{wallet_pubkey}:{request_hash}` /
+         *     `reject:{id}:{wallet_pubkey}:{request_hash}`); the dashboard renders `op`.
+         */
+        get: operations["getApprovalDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/v1/approve/{id}": {
         parameters: {
             query?: never;
@@ -794,12 +1264,21 @@ export interface components {
          * @enum {string}
          */
         Chain: "near" | "ethereum" | "solana" | "bitcoin";
-        /** @enum {string} */
-        RequestType: "call" | "transfer" | "withdraw" | "deposit" | "swap";
+        /**
+         * @description Tracked async request / policy transaction type. `withdraw` is a
+         *     same-chain intents withdrawal; `cross_chain_withdraw` is a separate type
+         *     for 1Click bridge-out (a policy must list it explicitly — it is NOT
+         *     folded into `withdraw`). `confidential` covers every confidential-shard
+         *     op (shield / unshield / withdraw / transfer / swap). The deposit family
+         *     (`intents/deposit`, `storage-deposit`, cross-chain deposit) all gate as
+         *     `call`.
+         * @enum {string}
+         */
+        RequestType: "call" | "transfer" | "withdraw" | "cross_chain_withdraw" | "deposit" | "swap" | "confidential";
         /** @enum {string} */
         RequestStatus: "pending_deposit" | "processing" | "success" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "missing_signature" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "bad_request" | "duplicate_idempotency_key" | "internal_error" | "keystore_error" | "confidential_unavailable" | "confidential_jwt_expired";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "missing_signature" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "internal_error" | "keystore_error" | "service_unavailable" | "confidential_jwt_expired";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -916,6 +1395,8 @@ export interface components {
             approval_id?: string | null;
             required?: number | null;
             approved?: number | null;
+            /** @description Present on `pending_approval` — sha256(canonical_json(op)); sign to approve. */
+            request_hash?: string | null;
         };
         /**
          * @description Native transfer on a single chain. Canonical recipient field is
@@ -945,6 +1426,69 @@ export interface components {
             /** @description Amount in the chain's smallest unit (yoctoNEAR, wei, …). */
             amount: string;
         };
+        /**
+         * @description Irreversibly delete the wallet account and sweep its full NEAR balance
+         *     to `beneficiary` (NEAR's native `DeleteAccount`).
+         */
+        DeleteRequest: {
+            /**
+             * @description Account that receives the deleted wallet's entire remaining
+             *     balance. Must not be the wallet's own account.
+             * @example treasury.near
+             */
+            beneficiary: string;
+            /** @description Chain the account lives on. Defaults to `near` server-side. */
+            chain?: components["schemas"]["Chain"];
+        };
+        DeleteResponse: {
+            /** Format: uuid */
+            request_id: string;
+            status: components["schemas"]["RequestStatus"];
+            tx_hash?: string | null;
+            beneficiary: string;
+            /** Format: uuid */
+            approval_id?: string | null;
+            required?: number | null;
+            approved?: number | null;
+            /** @description Present on `pending_approval` — sha256(canonical_json(op)); sign to approve. */
+            request_hash?: string | null;
+        };
+        StorageDepositRequest: {
+            /** @description NEP-141 token contract (e.g. `wrap.near`). A `nep141:` prefix is stripped if present. */
+            token: string;
+            /** @description Account to register. Defaults to the wallet's own NEAR address. */
+            account_id?: string | null;
+        };
+        /**
+         * @description Response for `storageDeposit`. `storage_deposit` is multisig-capable: on
+         *     a multisig wallet that requires approval the response carries
+         *     `status=pending_approval` with the `approval_id` / `required` / `approved`
+         *     / `request_hash` fields populated (same shape as `CallResponse`); the
+         *     deposit executes only after the approval threshold is met. On the direct
+         *     path those fields are omitted and the single-sig response is byte-identical
+         *     to before.
+         */
+        StorageDepositResponse: {
+            /** Format: uuid */
+            request_id: string;
+            status: components["schemas"]["RequestStatus"];
+            tx_hash?: string | null;
+            token: string;
+            account_id: string;
+            /** @description True when the account was already storage-registered; no transaction was sent. */
+            already_registered: boolean;
+            /**
+             * Format: uuid
+             * @description Present only on `pending_approval` (multisig) — the approval to vote on.
+             */
+            approval_id?: string | null;
+            /** @description Present only on `pending_approval` — approvals needed. */
+            required?: number | null;
+            /** @description Present only on `pending_approval` — approvals collected so far. */
+            approved?: number | null;
+            /** @description Present on `pending_approval` — sha256(canonical_json(op)); sign to approve. */
+            request_hash?: string | null;
+        };
         IntentsDepositRequest: {
             token: string;
             amount: string;
@@ -963,6 +1507,13 @@ export interface components {
             /** @description Token ID, e.g. `nep141:usdt.tether-token.near`. For `chain=near`, omit (or use `near`/`native`) to deliver **native NEAR** (unwraps the wallet's wNEAR); use `nep141:wrap.near` to deliver wNEAR instead. For other chains, this is the source Intents asset bridged via 1Click. */
             token?: string;
         };
+        /**
+         * @description Response for `intentsWithdraw` (same-chain AND cross-chain). On a
+         *     multisig wallet that requires approval, `status=pending_approval` and the
+         *     `approval_id` / `required` / `approved` / `request_hash` fields are
+         *     populated; approvers sign `request_hash` (see `Nep413Auth`). On the
+         *     direct path these fields are omitted/null.
+         */
         WithdrawResponse: {
             /** Format: uuid */
             request_id: string;
@@ -971,6 +1522,8 @@ export interface components {
             approval_id?: string | null;
             required?: number | null;
             approved?: number | null;
+            /** @description Canonical request hash to sign when `status=pending_approval` (otherwise absent). */
+            request_hash?: string | null;
         };
         DryRunResponse: {
             would_succeed?: boolean;
@@ -979,12 +1532,22 @@ export interface components {
             message?: string;
             estimated_fee?: string;
             fee_token?: string;
-            policy_check?: {
-                /** @enum {string} */
-                decision?: "allowed" | "denied" | "requires_approval" | "frozen" | "no_policy_allow";
-                reason?: string;
-                required_approvals?: number;
-            };
+            policy_check?: components["schemas"]["PolicyCheckResult"];
+        };
+        /**
+         * @description Policy evaluation summary attached to a dry-run. Present whenever the
+         *     policy engine ran (i.e. not on a `wallet_frozen` short-circuit). On a
+         *     `policy_denied` result `within_limits` is false and the optional fields
+         *     are omitted; on an allowed / requires-approval result `within_limits` is
+         *     true and `address_allowed` is populated.
+         */
+        PolicyCheckResult: {
+            /** @description True when the op is within the wallet's spending limits. */
+            within_limits: boolean;
+            /** @description Remaining daily allowance in minimal units, when the policy tracks one. */
+            daily_remaining?: string | null;
+            /** @description True when the destination address passed the policy allowlist. */
+            address_allowed?: boolean | null;
         };
         SwapRequest: {
             token_in: string;
@@ -992,12 +1555,26 @@ export interface components {
             amount_in: string;
             min_amount_out?: string;
         };
+        /**
+         * @description Response for `intentsSwap`. Swap is a **Trusted** op, so on a multisig
+         *     wallet it can return `status=pending_approval` with the
+         *     `approval_id` / `required` / `approved` / `request_hash` fields populated
+         *     (same shape as `WithdrawResponse`); the swap executes only after the
+         *     approval threshold is met. On the direct path those fields are omitted and
+         *     `amount_out` / `intent_hash` carry the settled result.
+         */
         SwapResponse: {
             /** Format: uuid */
             request_id: string;
             status: components["schemas"]["RequestStatus"];
             amount_out?: string;
             intent_hash?: string;
+            /** Format: uuid */
+            approval_id?: string | null;
+            required?: number | null;
+            approved?: number | null;
+            /** @description Canonical request hash to sign when `status=pending_approval` (otherwise absent). */
+            request_hash?: string | null;
         };
         SwapQuoteResponse: {
             amount_out?: string;
@@ -1015,8 +1592,8 @@ export interface components {
          */
         DefuseAssetId: string;
         /**
-         * @description Defuse asset id the recipient will hold after the bridge. Defaults
-         *     to NEAR USDC.
+         * @description Defuse asset id the recipient will hold after the cross-chain deposit
+         *     settles. Defaults to NEAR USDC.
          * @default nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1
          */
         DestinationAsset: components["schemas"]["DefuseAssetId"];
@@ -1045,8 +1622,8 @@ export interface components {
             /** @description Amount in the source token's smallest unit (e.g. `5000000` = 5 USDC). */
             amount: string;
             /**
-             * @description Address on the source chain to refund to if the bridge
-             *     fails. Defaults to the wallet's derived address on that
+             * @description Address on the source chain to refund to if the cross-chain
+             *     deposit fails. Defaults to the wallet's derived address on that
              *     chain.
              */
             refund_address?: string;
@@ -1088,7 +1665,7 @@ export interface components {
              */
             deposit_address: string;
             amount: string;
-            /** @description Amount credited after the bridge fee. */
+            /** @description Amount credited after the cross-chain deposit fee. */
             amount_out: string;
             min_amount_out: string;
             /**
@@ -1099,7 +1676,7 @@ export interface components {
              */
             expires_at?: string;
             /**
-             * @description Solver's estimate of bridge settlement time, in seconds. Absent
+             * @description Solver's estimate of deposit settlement time, in seconds. Absent
              *     if 1Click did not return an estimate.
              */
             estimated_time_secs?: number;
@@ -1119,9 +1696,130 @@ export interface components {
             intent_id: string;
             /** @enum {string} */
             status: "pending" | "bridging" | "success" | "failed" | "expired";
+            /** @description Deposit amount in the source token's minimal units. */
+            amount: string;
+            /** @description The one-time source-chain address funds were to be sent to. */
+            deposit_address: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description 1Click deadline after which the deposit address is no longer honored.
+             */
+            expires_at?: string | null;
             result?: {
                 [key: string]: unknown;
             } | null;
+        };
+        PaymentCheckCreateRequest: {
+            /** @description Token to fund the check with. Accepts a `defuse_asset_id` (`nep141:<contract>`) or a bare NEP-141 contract id; normalized server-side. */
+            token: string;
+            /** @description Amount in the token's minimal units. Must be > 0. */
+            amount: string;
+            /** @description Optional note (max 256 chars) surfaced to whoever peeks/claims the check. */
+            memo?: string | null;
+            /**
+             * Format: int64
+             * @description Optional time-to-live in seconds from creation. After it elapses an unclaimed check reports `expired` and can no longer be claimed (only reclaimed by the creator).
+             */
+            expires_in?: number | null;
+        };
+        PaymentCheckCreateResponse: {
+            /**
+             * Format: uuid
+             * @description Server-side identifier for the check (used by status / reclaim).
+             */
+            check_id: string;
+            /** @description The ephemeral account's ed25519 private key (64 hex chars). Bearer secret — whoever holds it can claim the funds. Returned ONCE. */
+            check_key: string;
+            token: string;
+            amount: string;
+            memo?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+        };
+        PaymentCheckBatchCreateRequest: {
+            checks: components["schemas"]["PaymentCheckCreateRequest"][];
+        };
+        PaymentCheckBatchCreateResponse: {
+            checks: components["schemas"]["PaymentCheckCreateResponse"][];
+        };
+        PaymentCheckClaimRequest: {
+            /** @description The check's ephemeral private key (64 hex chars). */
+            check_key: string;
+            /** @description Optional partial claim amount in minimal units. Omit to claim the full remaining balance. */
+            amount?: string | null;
+        };
+        PaymentCheckClaimResponse: {
+            token: string;
+            amount_claimed: string;
+            /** @description Amount still claimable on the check after this claim (minimal units). */
+            remaining: string;
+            memo?: string | null;
+            /** Format: date-time */
+            claimed_at: string;
+            /** @description base58 solver-relay intent hash for the claim transfer, if returned. */
+            intent_hash?: string | null;
+        };
+        PaymentCheckReclaimRequest: {
+            /**
+             * Format: uuid
+             * @description The `check_id` of a check the authenticated wallet created.
+             */
+            check_id: string;
+            /** @description Optional partial reclaim amount in minimal units. Omit to reclaim the full remaining balance. */
+            amount?: string | null;
+        };
+        PaymentCheckReclaimResponse: {
+            token: string;
+            amount_reclaimed: string;
+            /** @description Amount still outstanding on the check after this reclaim (minimal units). */
+            remaining: string;
+            /** Format: date-time */
+            reclaimed_at: string;
+            /** @description base58 solver-relay intent hash for the reclaim transfer, if returned. */
+            intent_hash?: string | null;
+        };
+        PaymentCheckStatusResponse: {
+            /** Format: uuid */
+            check_id: string;
+            token: string;
+            /** @description Original check amount in minimal units. */
+            amount: string;
+            /** @description Total claimed so far (minimal units). */
+            claimed_amount: string;
+            /** @description Total reclaimed so far (minimal units). */
+            reclaimed_amount: string;
+            /** @description Lifecycle state: `unclaimed`, `claiming`, `partially_claimed`, `claimed`, `reclaiming`, `partially_reclaimed`, `reclaimed`, or the virtual `expired` (unclaimed and past `expires_at`). */
+            status: string;
+            memo?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+            /** Format: date-time */
+            claimed_at?: string | null;
+            /** @description Wallet id that claimed the check, if any. */
+            claimed_by?: string | null;
+        };
+        PaymentCheckListResponse: {
+            checks: components["schemas"]["PaymentCheckStatusResponse"][];
+        };
+        PaymentCheckPeekRequest: {
+            /** @description The check's ephemeral private key (64 hex chars). */
+            check_key: string;
+        };
+        PaymentCheckPeekResponse: {
+            token: string;
+            /** @description Live on-chain balance of the check's ephemeral account (minimal units). */
+            balance: string;
+            memo?: string | null;
+            /** @description Same status vocabulary as `PaymentCheckStatusResponse`. */
+            status: string;
+            /** Format: date-time */
+            expires_at?: string | null;
         };
         SignMessageRequest: {
             message: string;
@@ -1129,10 +1827,11 @@ export interface components {
             /** @description Base64-encoded 32-byte nonce. Auto-generated if omitted. */
             nonce?: string;
             /**
+             * @description NEP-413 only. `raw` is **rejected** (`400 bad_request`) — use [`authSign`](#tag/Wallet/operation/authSign) for OutLayer NEAR-key auth. The field is retained only to return that redirect error.
              * @default nep413
              * @enum {string}
              */
-            format: "nep413" | "raw";
+            format: "nep413";
         };
         SignMessageResponse: {
             account_id?: string;
@@ -1141,16 +1840,47 @@ export interface components {
             public_key?: string;
             nonce?: string;
         };
+        AuthSignRequest: {
+            /**
+             * @description `bearer` → challenge `auth:<seed>:<ts>` (+`:<vault>` when `vault_id` set); `register` → `register:<seed>:<ts>`; `api-key` → `api-key:<seed>:<ts>`.
+             * @enum {string}
+             */
+            purpose: "bearer" | "register" | "api-key";
+            /** @description Wallet seed — selects which sub-wallet's key signs. */
+            seed: string;
+            /** @description Vault scope — only valid for `purpose=bearer`. */
+            vault_id?: string;
+        };
+        AuthSignResponse: {
+            /** @description The exact challenge string the keystore built and signed — send this verbatim. */
+            auth_message: string;
+            /**
+             * Format: int64
+             * @description Fresh server timestamp (unix seconds) baked into `auth_message`.
+             */
+            auth_timestamp: number;
+            /** @description Raw ed25519 signature over `auth_message`, base58 (no `ed25519:` prefix). */
+            signature: string;
+            /** @description Signer public key in `ed25519:<base58>` form. */
+            public_key: string;
+        };
         PolicyRules: {
-            limits?: components["schemas"]["PolicyLimits"];
-            addresses?: components["schemas"]["AddressList"];
+            /** @description Allowed op types (allowlist). Omit to allow all. `cross_chain_withdraw` must be listed explicitly to permit bridging out (it is NOT covered by `withdraw`). The deposit family gates as `call`. */
             transaction_types?: components["schemas"]["RequestType"][];
+            /** @description Token allowlist (defuse asset ids, or `"*"` for any). Omit or use `["*"]` to allow all tokens. */
+            allowed_tokens?: string[];
+            addresses?: components["schemas"]["AddressList"];
+            limits?: components["schemas"]["PolicyLimits"];
             time_restrictions?: components["schemas"]["TimeRestrictions"];
             rate_limit?: components["schemas"]["RateLimit"];
         };
         /**
-         * @description Per-period spending limits. Each field is a map of `token_id → amount`.
-         *     Use `"*"` as the key to match all tokens.
+         * @description Per-period spending limits. The amount fields are maps of
+         *     `token_id → amount` (use `"*"` as the key to match all tokens).
+         *     `per_transaction` is STATELESS (enforced on every signature inside the
+         *     TEE); `hourly` / `daily` / `monthly` and `hourly_tx_count` are STATEFUL
+         *     velocity limits (checked against coordinator-supplied usage; best-effort
+         *     under concurrency).
          */
         PolicyLimits: {
             per_transaction?: {
@@ -1165,6 +1895,8 @@ export interface components {
             monthly?: {
                 [key: string]: string;
             };
+            /** @description Max number of transactions per rolling hour (transaction-count rate limit; equivalent to `rate_limit.max_per_hour`). */
+            hourly_tx_count?: number;
         };
         AddressList: {
             /** @enum {string} */
@@ -1181,24 +1913,66 @@ export interface components {
         RateLimit: {
             max_per_hour?: number;
         };
+        /**
+         * @description Multisig approval configuration. When set, an op that trips the approval
+         *     trigger returns `pending_approval` and executes only after `threshold`
+         *     approvers sign. Applies to fund ops including the Trusted kinds (swap,
+         *     confidential, cross_chain_withdraw); `payment_check` is excluded from the
+         *     generic trigger (cap-gated instead).
+         */
         ApprovalConfig: {
-            threshold?: {
+            /** @description Number of approvals required — either a bare integer (e.g. `2`) or an object `{ "required": N }`. */
+            threshold?: number | {
                 required: number;
-                of: number;
             };
-            /** @description Approval gate triggers when transaction value exceeds this USD amount. */
-            above_usd?: number;
             approvers?: components["schemas"]["Approver"][];
+            /** @description Op types exempt from the generic approval trigger. */
+            excluded_types?: components["schemas"]["RequestType"][];
         };
         Approver: {
-            /** @description Public key, e.g. `ed25519:...`. */
+            /** @description Approver's NEAR account id, e.g. `alice.near`. */
             id: string;
-            /** @enum {string} */
-            role: "admin" | "signer";
+            /** @description Approver's NEAR public key (`ed25519:<base58>`), pinned on-chain. The approver's NEP-413 vote signature is verified against this key. */
+            pubkey: string;
+            /**
+             * @description Optional. `admin` may also modify policy / freeze; `signer` may only approve transactions. Defaults to `signer` when omitted.
+             * @enum {string}
+             */
+            role?: "admin" | "signer";
         };
         AdminQuorum: {
             required: number;
             admins: string[];
+        };
+        /** @description A single non-Built primitive toggle. All capabilities default to DENY except `sign_message`. `requires_approval` opts that primitive into multisig specifically. */
+        Capability: {
+            allowed?: boolean;
+            requires_approval?: boolean;
+        };
+        /** @description `raw_sign` — sign arbitrary raw bytes. `chains` is an optional allowlist; when absent, ALL chains (including `near`, which can sign a NEAR tx/intent outside the structured policy — enable with care). */
+        RawSignCapability: {
+            allowed?: boolean;
+            requires_approval?: boolean;
+            chains?: string[];
+        };
+        /** @description `sign_message` — generic non-fund NEP-413 (e.g. dApp login). Defaults ALLOWED. `allowed_recipients` is a default-DENY allowlist of verifier recipients (NOT a blocklist); `intents.near` / `intents.far` are always excluded. This is NOT OutLayer auth (that is `authSign`). */
+        SignMessageCapability: {
+            allowed?: boolean;
+            requires_approval?: boolean;
+            allowed_recipients?: string[];
+        };
+        /**
+         * @description Default-DENY opt-ins for the non-Built primitives, stored alongside
+         *     `rules` / `approval` in the encrypted policy. Every capability defaults to
+         *     DENY **except** `sign_message` (defaults allowed).
+         */
+        Capabilities: {
+            raw_sign?: components["schemas"]["RawSignCapability"];
+            confidential?: components["schemas"]["Capability"];
+            swap?: components["schemas"]["Capability"];
+            cross_chain_withdraw?: components["schemas"]["Capability"];
+            payment_check?: components["schemas"]["Capability"];
+            sign_message?: components["schemas"]["SignMessageCapability"];
         };
         PolicyResponse: {
             wallet_id: string;
@@ -1207,6 +1981,7 @@ export interface components {
             frozen: boolean;
             rules?: components["schemas"]["PolicyRules"];
             approval?: components["schemas"]["ApprovalConfig"];
+            capabilities?: components["schemas"]["Capabilities"];
             authorized_key_hashes?: string[];
             /**
              * @description Current accumulated usage per token, per period. Same shape as
@@ -1220,6 +1995,7 @@ export interface components {
             wallet_id: string;
             rules: components["schemas"]["PolicyRules"];
             approval?: components["schemas"]["ApprovalConfig"];
+            capabilities?: components["schemas"]["Capabilities"];
             admin_quorum?: components["schemas"]["AdminQuorum"];
             /** Format: uri */
             webhook_url?: string;
@@ -1248,6 +2024,17 @@ export interface components {
             request_data: {
                 [key: string]: unknown;
             };
+            /** @description Canonical op to RENDER (parsed from the stored canonical JSON). The dashboard renders this directly. `null` for legacy rows predating canonical-op storage. */
+            op?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Canonical request hash to SIGN — approvers sign `approve:{approval_id}:{wallet_pubkey}:{request_hash}` (see `Nep413Auth`). */
+            request_hash: string;
+            /**
+             * @description Always `requires_approval` for a pending row.
+             * @enum {string}
+             */
+            decision: "requires_approval";
             required: number;
             approved: number;
             /** Format: date-time */
@@ -1256,10 +2043,46 @@ export interface components {
         PendingApprovalsResponse: {
             approvals: components["schemas"]["PendingApproval"][];
         };
+        /** @description Public, read-only detail for one pending approval (`getApprovalDetail`). Returns only non-sensitive metadata. `wallet_pubkey` + `request_hash` are what an approver binds into the NEP-413 vote (see `Nep413Auth`); the dashboard renders `op`. */
+        ApprovalDetail: {
+            /** Format: uuid */
+            id: string;
+            wallet_id: string;
+            request_type: components["schemas"]["RequestType"];
+            request_data: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            status: "pending" | "approved" | "rejected" | "expired";
+            required_approvals: number;
+            request_hash: string;
+            /** @description Canonical op for the dashboard to render. `null` for legacy rows. */
+            op?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description On-chain wallet pubkey bound into the approve/reject vote message. */
+            wallet_pubkey: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description Signatures collected so far. */
+            approvers: {
+                approver_id: string;
+                approver_role: string;
+                signature: string;
+                /** Format: date-time */
+                created_at: string;
+            }[];
+        };
         /**
-         * @description NEP-413 signed authentication payload. The signed message is
-         *     `approve:{approval_id}:{request_hash}` for approve or
-         *     `reject:{approval_id}:{request_hash}` for reject.
+         * @description NEP-413 signed authentication payload. The signed message binds the
+         *     wallet's on-chain pubkey so a vote can't be replayed onto another wallet:
+         *     `approve:{approval_id}:{wallet_pubkey}:{request_hash}` for approve, or
+         *     `reject:{approval_id}:{wallet_pubkey}:{request_hash}` for reject. The
+         *     `wallet_pubkey` and `request_hash` come from `getApprovalDetail` (or
+         *     `listPendingApprovals`). `recipient` for the NEP-413 signature is the
+         *     wallet contract id.
          */
         Nep413Auth: {
             signature: string;
@@ -1279,6 +2102,15 @@ export interface components {
             required: number;
             /** Format: uuid */
             request_id?: string | null;
+        };
+        RejectResponse: {
+            /** Format: uuid */
+            approval_id: string;
+            /**
+             * @description `rejected` — the reject came from a REAL policy approver, so the request is cancelled (a real reject vetoes it irrevocably). `reject_vote_recorded` — the signer is not a configured approver: the vote is stored and the request stays `pending_approval` (the keystore still vetoes execution at sign time).
+             * @enum {string}
+             */
+            status: "rejected" | "reject_vote_recorded";
         };
         AuditEvent: {
             type: string;
@@ -1364,11 +2196,11 @@ export interface components {
         ConfidentialUnshieldRequest: components["schemas"]["IntentsDepositRequest"];
         /** @description Confidential withdraw body — same shape as `WithdrawRequest`; `token` is required (the source confidential asset to deliver). `chain="near"` is supported and delivers native NEAR via `intents.near native_withdraw` (use `confidentialUnshield` if you want to send to your own public balance instead). */
         ConfidentialWithdrawRequest: components["schemas"]["WithdrawRequest"];
-        /** @description Confidential swap body — same shape as `SwapRequest`. */
+        /** @description Confidential swap body — same shape as `SwapRequest` (`token_in` / `amount_in` / `token_out` / optional `min_amount_out`). On a multisig wallet the confidential swap binds `token_out` and `min_amount_out` into the approved op (like a public swap), so approvers commit to the output terms — a compromised coordinator cannot change them after approval. */
         ConfidentialSwapRequest: components["schemas"]["SwapRequest"];
-        /** @description Cross-chain deposit-intent body — same shape as `DepositIntentRequest` (`source_asset` or `chain`+`token`). NOTE: for the confidential endpoint `destination_asset` and `refund_address` are **ignored** — the destination is forced to the origin asset (same-asset bridge into the confidential shard) and refund is forced to the wallet's 64-hex intentsUserId (the `refundType=CONFIDENTIAL_INTENTS` invariant). */
+        /** @description Cross-chain deposit body — same shape as `DepositIntentRequest` (`source_asset` or `chain`+`token`). NOTE: for the confidential endpoint `destination_asset` and `refund_address` are **ignored** — the destination is forced to the origin asset (same-asset cross-chain deposit into the confidential shard) and refund is forced to the wallet's 64-hex intentsUserId (the `refundType=CONFIDENTIAL_INTENTS` invariant). */
         ConfidentialDepositIntentRequest: components["schemas"]["DepositIntentRequest"];
-        /** @description Bridge deposit address — same shape as `DepositIntentResponse`. */
+        /** @description Cross-chain deposit address — same shape as `DepositIntentResponse`. */
         ConfidentialDepositIntentResponse: components["schemas"]["DepositIntentResponse"];
         /** @description Private confidential→confidential transfer. No `chain` (NEAR-only context); `token` required (no native-asset concept inside the confidential shard). */
         ConfidentialTransferRequest: {
@@ -1379,19 +2211,42 @@ export interface components {
             /** @description Defuse asset id, e.g. `nep141:wrap.near`. */
             token: string;
         };
-        /** @description Result of a confidential shield / unshield / withdraw / transfer / swap. The op is asynchronous — the user's signed intent settles on the private shard (`intents.far`, no public RPC), so there is no public `tx_hash`; track via `intent_hash` / `deposit_address` and poll `GET /wallet/v1/requests/{id}`. */
+        /**
+         * @description Result of a confidential shield / unshield / withdraw / transfer / swap.
+         *     The op is asynchronous — the user's signed intent settles on the private
+         *     shard (`intents.far`, no public RPC), so there is no public `tx_hash`;
+         *     track via `intent_hash` / `deposit_address` and poll
+         *     `GET /wallet/v1/requests/{id}`.
+         *
+         *     **Multisig:** the Trusted confidential ops (withdraw / transfer / swap)
+         *     are subject to the wallet's approval policy. When approval is required the
+         *     response inlines `approval_id` / `required` / `approved` / `request_hash`
+         *     (same shape as `WithdrawResponse` / `SwapResponse`) — sign `request_hash`
+         *     and submit your approval vote; the op executes after the threshold is met.
+         */
         ConfidentialOpResponse: {
             /** Format: uuid */
             request_id: string;
             /**
-             * @description Normalized lifecycle status (1Click's UPPERCASE state machine mapped to lowercase): `pending_deposit` → `processing` → `success` / `failed` / `refunded`. The raw upstream status is in the request row's `result.oneclick_status`.
+             * @description Normalized lifecycle status (1Click's UPPERCASE state machine mapped to lowercase): `pending_deposit` → `processing` → `success` / `failed` / `refunded`. `pending_approval` is returned instead when a multisig wallet must approve the op first. The raw upstream status is in the request row's `result.oneclick_status`.
              * @enum {string}
              */
-            status: "pending_deposit" | "processing" | "success" | "failed" | "refunded";
+            status: "pending_deposit" | "processing" | "success" | "failed" | "refunded" | "pending_approval";
             /** @description Confidential-shard intent hash (never appears on the public chain). */
             intent_hash?: string | null;
             /** @description Opaque 1Click hop address — the status primary key. */
             deposit_address?: string | null;
+            /**
+             * Format: uuid
+             * @description Present only on `pending_approval` (multisig) — the approval to vote on.
+             */
+            approval_id?: string;
+            /** @description Present only on `pending_approval` — approvals needed. */
+            required?: number;
+            /** @description Present only on `pending_approval` — approvals collected so far (0 at creation). */
+            approved?: number;
+            /** @description Present only on `pending_approval` — sha256(canonical_json(op)); sign this to approve. */
+            request_hash?: string;
         };
         /** @description A single confidential balance (response to `?token=`). */
         ConfidentialBalanceResponse: {
@@ -1700,6 +2555,87 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    deleteWallet: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "beneficiary": "treasury.near",
+                 *       "chain": "near"
+                 *     }
+                 */
+                "application/json": components["schemas"]["DeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Account deleted (or queued for approval) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    storageDeposit: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "token": "wrap.near"
+                 *     }
+                 */
+                "application/json": components["schemas"]["StorageDepositRequest"];
+            };
+        };
+        responses: {
+            /** @description Storage registered (or already registered) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageDepositResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     intentsDeposit: {
         parameters: {
             query?: never;
@@ -1871,6 +2807,49 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    confidentialShield: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "token": "nep141:wrap.near",
+                 *       "amount": "10000000000000000000000"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ConfidentialShieldRequest"];
+            };
+        };
+        responses: {
+            /** @description Shield submitted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfidentialOpResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     confidentialDeposit: {
@@ -2150,6 +3129,42 @@ export interface operations {
             503: components["responses"]["ServiceUnavailable"];
         };
     };
+    confidentialDepositCrossChain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "source_asset": "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near",
+                 *       "amount": "500000"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ConfidentialDepositIntentRequest"];
+            };
+        };
+        responses: {
+            /** @description Deposit address issued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfidentialDepositIntentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     confidentialDepositIntent: {
         parameters: {
             query?: never;
@@ -2214,6 +3229,33 @@ export interface operations {
             503: components["responses"]["ServiceUnavailable"];
         };
     };
+    intentsDepositCrossChain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositIntentRequest"];
+            };
+        };
+        responses: {
+            /** @description Deposit intent created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositIntentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     createDepositIntent: {
         parameters: {
             query?: never;
@@ -2241,10 +3283,10 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    getDepositStatus: {
+    getCrossChainDepositStatus: {
         parameters: {
             query: {
-                /** @description The `intent_id` from `createDepositIntent`. */
+                /** @description The `intent_id` from `intentsDepositCrossChain`. */
                 id: string;
             };
             header?: never;
@@ -2264,6 +3306,330 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getDepositStatus: {
+        parameters: {
+            query: {
+                /** @description The `intent_id` from the cross-chain deposit call. */
+                id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deposit status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositStatusResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listCrossChainDeposits: {
+        parameters: {
+            query?: {
+                /** @description Max rows to return (server caps at 100). Defaults to 20. */
+                limit?: number;
+                /** @description Number of rows to skip for pagination. */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cross-chain deposits (most recent first) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositStatusResponse"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listDeposits: {
+        parameters: {
+            query?: {
+                /** @description Max rows to return (server caps at 100). Defaults to 20. */
+                limit?: number;
+                /** @description Number of rows to skip for pagination. */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cross-chain deposits (most recent first) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositStatusResponse"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createPaymentCheck: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "token": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+                 *       "amount": "1000000",
+                 *       "memo": "coffee",
+                 *       "expires_in": 86400
+                 *     }
+                 */
+                "application/json": components["schemas"]["PaymentCheckCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Payment check created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentCheckCreateResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    batchCreatePaymentChecks: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "checks": [
+                 *         {
+                 *           "token": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+                 *           "amount": "1000000",
+                 *           "memo": "invoice-1"
+                 *         },
+                 *         {
+                 *           "token": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+                 *           "amount": "2000000"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": components["schemas"]["PaymentCheckBatchCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Payment checks created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentCheckBatchCreateResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    claimPaymentCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "check_key": "9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a"
+                 *     }
+                 */
+                "application/json": components["schemas"]["PaymentCheckClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Claim settled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentCheckClaimResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    reclaimPaymentCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "check_id": "3a2b1c0d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+                 *     }
+                 */
+                "application/json": components["schemas"]["PaymentCheckReclaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Reclaim settled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentCheckReclaimResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPaymentCheckStatus: {
+        parameters: {
+            query: {
+                /** @description The `check_id` returned by `createPaymentCheck`. */
+                check_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Payment check status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentCheckStatusResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPaymentChecks: {
+        parameters: {
+            query?: {
+                /** @description Optional status filter. Accepts stored statuses (`unclaimed`, `claimed`, `partially_claimed`, `reclaimed`, `partially_reclaimed`) plus the virtual `expired` (unclaimed + past expiry). */
+                status?: string;
+                /** @description Max rows to return (server caps at 100). Defaults to 50. */
+                limit?: number;
+                /** @description Number of rows to skip for pagination. */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Payment checks (most recent first) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentCheckListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    peekPaymentCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "check_key": "9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a"
+                 *     }
+                 */
+                "application/json": components["schemas"]["PaymentCheckPeekRequest"];
+            };
+        };
+        responses: {
+            /** @description Payment check snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentCheckPeekResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -2300,6 +3666,35 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    authSign: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthSignRequest"];
+            };
+        };
+        responses: {
+            /** @description Auth signature */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSignResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
         };
     };
     listRequests: {
@@ -2480,6 +3875,30 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    getApprovalDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Approval detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalDetail"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     approveRequest: {
         parameters: {
             query?: never;
@@ -2524,13 +3943,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Rejection recorded */
+            /** @description Reject vote recorded (request cancelled if from a real approver) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApproveResponse"];
+                    "application/json": components["schemas"]["RejectResponse"];
                 };
             };
             403: components["responses"]["Forbidden"];

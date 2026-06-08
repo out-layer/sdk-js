@@ -385,7 +385,7 @@ describe('Wallet writes: withdrawDryRun', () => {
           would_succeed: true,
           estimated_fee: '100',
           fee_token: 'NEAR',
-          policy_check: { decision: 'allowed' },
+          policy_check: { within_limits: true, address_allowed: true },
         });
       }),
     );
@@ -524,11 +524,11 @@ describe('Wallet writes: swap + swapQuote', () => {
   });
 });
 
-describe('Wallet: cross-chain deposit (1Click)', () => {
-  it('createDepositIntent posts chain/amount/token and returns a deposit address', async () => {
+describe('Wallet: cross-chain deposit (via 1Click / NEAR Intents)', () => {
+  it('intentsDepositCrossChain posts chain/amount/token and returns a deposit address', async () => {
     let receivedBody: unknown = null;
     server.use(
-      http.post(`${BASE}/wallet/v1/deposit-intent`, async ({ request }) => {
+      http.post(`${BASE}/wallet/v1/intents/deposit/cross-chain`, async ({ request }) => {
         receivedBody = await request.json();
         return HttpResponse.json({
           intent_id: 'int-1',
@@ -542,7 +542,7 @@ describe('Wallet: cross-chain deposit (1Click)', () => {
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    const r = await client.createDepositIntent({
+    const r = await client.intentsDepositCrossChain({
       chain: 'ethereum',
       amount: '5000000',
       token: 'USDC',
@@ -552,22 +552,404 @@ describe('Wallet: cross-chain deposit (1Click)', () => {
     expect(r.intent_id).toBe('int-1');
   });
 
-  it('getDepositStatus passes intentId as the id query param', async () => {
+  it('getCrossChainDepositStatus passes intentId as the id query param', async () => {
     let receivedQuery = '';
     server.use(
-      http.get(`${BASE}/wallet/v1/deposit-status`, ({ request }) => {
+      http.get(`${BASE}/wallet/v1/intents/deposit/cross-chain/status`, ({ request }) => {
         receivedQuery = new URL(request.url).search;
         return HttpResponse.json({
           intent_id: 'int-1',
           status: 'success',
+          amount: '5000000',
+          deposit_address: '0xDEADBEEF',
+          created_at: '2026-05-20T10:00:00Z',
           result: { amountOut: '4999490' },
         });
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    const r = await client.getDepositStatus('int-1');
+    const r = await client.getCrossChainDepositStatus('int-1');
     expect(receivedQuery).toContain('id=int-1');
     expect(r.status).toBe('success');
+  });
+
+  it('listCrossChainDeposits returns an array and forwards limit/offset', async () => {
+    let receivedQuery = '';
+    server.use(
+      http.get(`${BASE}/wallet/v1/intents/deposit/cross-chain/list`, ({ request }) => {
+        receivedQuery = new URL(request.url).search;
+        return HttpResponse.json([
+          {
+            intent_id: 'int-1',
+            status: 'success',
+            amount: '5000000',
+            deposit_address: '0xDEADBEEF',
+            created_at: '2026-05-20T10:00:00Z',
+          },
+          {
+            intent_id: 'int-2',
+            status: 'pending',
+            amount: '1000000',
+            deposit_address: '0xC0FFEE',
+            created_at: '2026-05-21T10:00:00Z',
+          },
+        ]);
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.listCrossChainDeposits({ limit: 10, offset: 5 });
+    expect(receivedQuery).toContain('limit=10');
+    expect(receivedQuery).toContain('offset=5');
+    expect(r).toHaveLength(2);
+    expect(r[0]?.intent_id).toBe('int-1');
+  });
+
+  // Deprecated aliases must still work — they delegate to the canonical
+  // methods, so they hit the canonical paths.
+  it('createDepositIntent (deprecated alias) delegates to the canonical path', async () => {
+    let hit = false;
+    server.use(
+      http.post(`${BASE}/wallet/v1/intents/deposit/cross-chain`, async () => {
+        hit = true;
+        return HttpResponse.json({
+          intent_id: 'int-1',
+          deposit_address: '0xDEADBEEF',
+          amount: '5000000',
+          amount_out: '4999490',
+          min_amount_out: '4949495',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.createDepositIntent({
+      chain: 'ethereum',
+      amount: '5000000',
+      token: 'USDC',
+    });
+    expect(hit).toBe(true);
+    expect(r.intent_id).toBe('int-1');
+  });
+
+  it('getDepositStatus (deprecated alias) delegates to the canonical path', async () => {
+    let hit = false;
+    server.use(
+      http.get(`${BASE}/wallet/v1/intents/deposit/cross-chain/status`, () => {
+        hit = true;
+        return HttpResponse.json({
+          intent_id: 'int-1',
+          status: 'success',
+          amount: '5000000',
+          deposit_address: '0xDEADBEEF',
+          created_at: '2026-05-20T10:00:00Z',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.getDepositStatus('int-1');
+    expect(hit).toBe(true);
+    expect(r.status).toBe('success');
+  });
+
+  it('listDeposits (deprecated alias) delegates to the canonical path', async () => {
+    let hit = false;
+    server.use(
+      http.get(`${BASE}/wallet/v1/intents/deposit/cross-chain/list`, () => {
+        hit = true;
+        return HttpResponse.json([
+          {
+            intent_id: 'int-1',
+            status: 'success',
+            amount: '5000000',
+            deposit_address: '0xDEADBEEF',
+            created_at: '2026-05-20T10:00:00Z',
+          },
+        ]);
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.listDeposits();
+    expect(hit).toBe(true);
+    expect(r).toHaveLength(1);
+  });
+});
+
+// ============================================================================
+// Payment checks (agent-to-agent gasless payments)
+// ============================================================================
+
+describe('Payment checks: create', () => {
+  it('forwards token/amount/memo and returns check_id + check_key', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/create`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          check_id: '3a2b1c0d-4e5f-6a7b-8c9d-0e1f2a3b4c5d',
+          check_key: '9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a',
+          token: 'nep141:wrap.near',
+          amount: '1000000',
+          memo: 'coffee',
+          created_at: '2026-05-20T10:00:00Z',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.createPaymentCheck({
+      token: 'nep141:wrap.near',
+      amount: '1000000',
+      memo: 'coffee',
+    });
+    expect(receivedBody).toMatchObject({ token: 'nep141:wrap.near', amount: '1000000' });
+    expect(r.check_id).toBe('3a2b1c0d-4e5f-6a7b-8c9d-0e1f2a3b4c5d');
+    expect(r.check_key).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('auto-attaches an Idempotency-Key and strips idempotencyKey from body', async () => {
+    let receivedKey: string | null = null;
+    let receivedBody: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/create`, async ({ request }) => {
+        receivedKey = request.headers.get('Idempotency-Key');
+        receivedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({
+          check_id: 'c1',
+          check_key: 'aa',
+          token: 'nep141:wrap.near',
+          amount: '1',
+          created_at: '2026-05-20T10:00:00Z',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.createPaymentCheck({
+      token: 'nep141:wrap.near',
+      amount: '1',
+      idempotencyKey: 'check-key-1',
+    });
+    expect(receivedKey).toBe('check-key-1');
+    expect(receivedBody.idempotencyKey).toBeUndefined();
+  });
+
+  it('throws PolicyDeniedError on 403 (payment_check capability denied)', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/create`, () => {
+        return HttpResponse.json(
+          { error: 'policy_denied', message: 'payment_check not permitted' },
+          { status: 403 },
+        );
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(
+      client.createPaymentCheck({ token: 'nep141:wrap.near', amount: '1' }),
+    ).rejects.toBeInstanceOf(PolicyDeniedError);
+  });
+});
+
+describe('Payment checks: batchCreate', () => {
+  it('forwards the checks array and returns created checks', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/batch-create`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          checks: [
+            {
+              check_id: 'c1',
+              check_key: 'aa',
+              token: 'nep141:wrap.near',
+              amount: '1000000',
+              created_at: '2026-05-20T10:00:00Z',
+            },
+            {
+              check_id: 'c2',
+              check_key: 'bb',
+              token: 'nep141:wrap.near',
+              amount: '2000000',
+              created_at: '2026-05-20T10:00:00Z',
+            },
+          ],
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.batchCreatePaymentChecks({
+      checks: [
+        { token: 'nep141:wrap.near', amount: '1000000' },
+        { token: 'nep141:wrap.near', amount: '2000000' },
+      ],
+    });
+    expect(receivedBody).toMatchObject({ checks: [{ amount: '1000000' }, { amount: '2000000' }] });
+    expect(r.checks).toHaveLength(2);
+    expect(r.checks[1]?.check_id).toBe('c2');
+  });
+});
+
+describe('Payment checks: claim', () => {
+  it('forwards check_key + partial amount and returns amount_claimed/remaining', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/claim`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          token: 'nep141:wrap.near',
+          amount_claimed: '400000',
+          remaining: '600000',
+          claimed_at: '2026-05-20T11:00:00Z',
+          intent_hash: 'intent-claim',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.claimPaymentCheck({ check_key: 'aa', amount: '400000' });
+    expect(receivedBody).toEqual({ check_key: 'aa', amount: '400000' });
+    expect(r.amount_claimed).toBe('400000');
+    expect(r.remaining).toBe('600000');
+  });
+
+  it('does NOT attach an Idempotency-Key (claim is ephemeral-key signed)', async () => {
+    let receivedKey: string | null = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/claim`, ({ request }) => {
+        receivedKey = request.headers.get('idempotency-key');
+        return HttpResponse.json({
+          token: 'nep141:wrap.near',
+          amount_claimed: '1000000',
+          remaining: '0',
+          claimed_at: '2026-05-20T11:00:00Z',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.claimPaymentCheck({ check_key: 'aa' });
+    expect(receivedKey).toBeNull();
+  });
+
+  it('throws BadRequestError when the check is already claimed', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/claim`, () => {
+        return HttpResponse.json(
+          { error: 'bad_request', message: 'Check already claimed' },
+          { status: 400 },
+        );
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(client.claimPaymentCheck({ check_key: 'aa' })).rejects.toBeInstanceOf(
+      BadRequestError,
+    );
+  });
+});
+
+describe('Payment checks: reclaim', () => {
+  it('forwards check_id and returns amount_reclaimed/remaining', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/reclaim`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          token: 'nep141:wrap.near',
+          amount_reclaimed: '1000000',
+          remaining: '0',
+          reclaimed_at: '2026-05-20T12:00:00Z',
+          intent_hash: 'intent-reclaim',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.reclaimPaymentCheck({ check_id: 'c1' });
+    expect(receivedBody).toEqual({ check_id: 'c1' });
+    expect(r.amount_reclaimed).toBe('1000000');
+    expect(r.remaining).toBe('0');
+  });
+});
+
+describe('Payment checks: status + list', () => {
+  it('getPaymentCheckStatus passes check_id as a query param', async () => {
+    let receivedQuery = '';
+    server.use(
+      http.get(`${BASE}/wallet/v1/payment-check/status`, ({ request }) => {
+        receivedQuery = new URL(request.url).search;
+        return HttpResponse.json({
+          check_id: 'c1',
+          token: 'nep141:wrap.near',
+          amount: '1000000',
+          claimed_amount: '0',
+          reclaimed_amount: '0',
+          status: 'unclaimed',
+          created_at: '2026-05-20T10:00:00Z',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.getPaymentCheckStatus('c1');
+    expect(receivedQuery).toContain('check_id=c1');
+    expect(r.status).toBe('unclaimed');
+  });
+
+  it('listPaymentChecks forwards status/limit/offset and returns checks', async () => {
+    let receivedQuery = '';
+    server.use(
+      http.get(`${BASE}/wallet/v1/payment-check/list`, ({ request }) => {
+        receivedQuery = new URL(request.url).search;
+        return HttpResponse.json({
+          checks: [
+            {
+              check_id: 'c1',
+              token: 'nep141:wrap.near',
+              amount: '1000000',
+              claimed_amount: '0',
+              reclaimed_amount: '0',
+              status: 'unclaimed',
+              created_at: '2026-05-20T10:00:00Z',
+            },
+          ],
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.listPaymentChecks({ status: 'unclaimed', limit: 10, offset: 0 });
+    expect(receivedQuery).toContain('status=unclaimed');
+    expect(receivedQuery).toContain('limit=10');
+    expect(r.checks).toHaveLength(1);
+  });
+});
+
+describe('Payment checks: peek', () => {
+  it('forwards check_key and returns the live balance + metadata', async () => {
+    let receivedBody: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/peek`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          token: 'nep141:wrap.near',
+          balance: '1000000',
+          memo: 'coffee',
+          status: 'unclaimed',
+          expires_at: '2026-05-21T10:00:00Z',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.peekPaymentCheck({ check_key: 'aa' });
+    expect(receivedBody).toEqual({ check_key: 'aa' });
+    expect(r.balance).toBe('1000000');
+    expect(r.status).toBe('unclaimed');
+  });
+
+  it('throws BadRequestError when no check exists for the key', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/peek`, () => {
+        return HttpResponse.json(
+          { error: 'bad_request', message: 'No payment check found for this key' },
+          { status: 400 },
+        );
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(client.peekPaymentCheck({ check_key: 'zz' })).rejects.toBeInstanceOf(
+      BadRequestError,
+    );
   });
 });
 
@@ -1065,11 +1447,11 @@ describe('Idempotency-Key', () => {
 // Confidential Intents (Defuse confidential shard)
 // ============================================================================
 
-describe('Confidential Intents: confidentialDeposit (SHIELD)', () => {
+describe('Confidential Intents: confidentialShield (SHIELD)', () => {
   it('forwards token + amount and returns a ConfidentialOpResponse', async () => {
     let receivedBody: unknown = null;
     server.use(
-      http.post(`${BASE}/wallet/v1/confidential/deposit`, async ({ request }) => {
+      http.post(`${BASE}/wallet/v1/confidential/shield`, async ({ request }) => {
         receivedBody = await request.json();
         return HttpResponse.json({
           request_id: 'aaaaaaaa-0000-0000-0000-000000000001',
@@ -1080,7 +1462,7 @@ describe('Confidential Intents: confidentialDeposit (SHIELD)', () => {
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    const r = await client.confidentialDeposit({
+    const r = await client.confidentialShield({
       token: 'nep141:wrap.near',
       amount: '10000000000000000000000',
     });
@@ -1096,7 +1478,7 @@ describe('Confidential Intents: confidentialDeposit (SHIELD)', () => {
   it('auto-attaches an Idempotency-Key header', async () => {
     let receivedKey: string | null = null;
     server.use(
-      http.post(`${BASE}/wallet/v1/confidential/deposit`, ({ request }) => {
+      http.post(`${BASE}/wallet/v1/confidential/shield`, ({ request }) => {
         receivedKey = request.headers.get('Idempotency-Key');
         return HttpResponse.json({
           request_id: 'aaaaaaaa-0000-0000-0000-000000000002',
@@ -1105,14 +1487,14 @@ describe('Confidential Intents: confidentialDeposit (SHIELD)', () => {
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    await client.confidentialDeposit({ token: 'nep141:wrap.near', amount: '1' });
+    await client.confidentialShield({ token: 'nep141:wrap.near', amount: '1' });
     expect(receivedKey).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it('strips idempotencyKey from the request body', async () => {
     let receivedBody: Record<string, unknown> = {};
     server.use(
-      http.post(`${BASE}/wallet/v1/confidential/deposit`, async ({ request }) => {
+      http.post(`${BASE}/wallet/v1/confidential/shield`, async ({ request }) => {
         receivedBody = (await request.json()) as Record<string, unknown>;
         return HttpResponse.json({
           request_id: 'aaaaaaaa-0000-0000-0000-000000000003',
@@ -1121,7 +1503,7 @@ describe('Confidential Intents: confidentialDeposit (SHIELD)', () => {
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    await client.confidentialDeposit({
+    await client.confidentialShield({
       token: 'nep141:wrap.near',
       amount: '1',
       idempotencyKey: 'shield-key',
@@ -1131,7 +1513,7 @@ describe('Confidential Intents: confidentialDeposit (SHIELD)', () => {
 
   it('throws OutlayerError with code confidential_unavailable on 503', async () => {
     server.use(
-      http.post(`${BASE}/wallet/v1/confidential/deposit`, () => {
+      http.post(`${BASE}/wallet/v1/confidential/shield`, () => {
         return HttpResponse.json({ error: 'confidential_unavailable' }, { status: 503 });
       }),
     );
@@ -1140,13 +1522,31 @@ describe('Confidential Intents: confidentialDeposit (SHIELD)', () => {
       retry: { maxAttempts: 1, initialDelayMs: 1, maxDelayMs: 10 },
     });
     try {
-      await client.confidentialDeposit({ token: 'nep141:wrap.near', amount: '1' });
+      await client.confidentialShield({ token: 'nep141:wrap.near', amount: '1' });
       throw new Error('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(OutlayerError);
       expect((e as OutlayerError).code).toBe('confidential_unavailable');
       expect((e as OutlayerError).status).toBe(503);
     }
+  });
+
+  // Deprecated alias delegates to the canonical /confidential/shield path.
+  it('confidentialDeposit (deprecated alias) delegates to the canonical path', async () => {
+    let hit = false;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/shield`, () => {
+        hit = true;
+        return HttpResponse.json({
+          request_id: 'aaaaaaaa-0000-0000-0000-000000000004',
+          status: 'pending_deposit',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialDeposit({ token: 'nep141:wrap.near', amount: '1' });
+    expect(hit).toBe(true);
+    expect(r.status).toBe('pending_deposit');
   });
 });
 
@@ -1450,11 +1850,11 @@ describe('Confidential Intents: confidentialSwap + confidentialSwapQuote', () =>
   });
 });
 
-describe('Confidential Intents: confidentialDepositIntent', () => {
-  it('forwards source_asset + amount and returns a bridge deposit_address', async () => {
+describe('Confidential Intents: confidentialDepositCrossChain', () => {
+  it('forwards source_asset + amount and returns a deposit_address', async () => {
     let receivedBody: unknown = null;
     server.use(
-      http.post(`${BASE}/wallet/v1/confidential/deposit-intent`, async ({ request }) => {
+      http.post(`${BASE}/wallet/v1/confidential/deposit/cross-chain`, async ({ request }) => {
         receivedBody = await request.json();
         return HttpResponse.json({
           intent_id: 'cdi-1',
@@ -1467,7 +1867,7 @@ describe('Confidential Intents: confidentialDepositIntent', () => {
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    const r = await client.confidentialDepositIntent({
+    const r = await client.confidentialDepositCrossChain({
       source_asset: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
       amount: '500000',
     });
@@ -1481,7 +1881,7 @@ describe('Confidential Intents: confidentialDepositIntent', () => {
 
   it('surfaces the optional hint field when present (NEAR-source path)', async () => {
     server.use(
-      http.post(`${BASE}/wallet/v1/confidential/deposit-intent`, () => {
+      http.post(`${BASE}/wallet/v1/confidential/deposit/cross-chain`, () => {
         return HttpResponse.json({
           intent_id: 'cdi-2',
           deposit_address: 'f51768dc0c4d4bbb78890262da9882dee2ee5b6c2fcf2c527e56c6eadcb54353',
@@ -1493,12 +1893,36 @@ describe('Confidential Intents: confidentialDepositIntent', () => {
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    const r = await client.confidentialDepositIntent({
+    const r = await client.confidentialDepositCrossChain({
       chain: 'near',
       token: 'nep141:wrap.near',
       amount: '500000',
     });
     expect(r.hint).toContain('near');
+  });
+
+  // Deprecated alias delegates to the canonical /confidential/deposit/cross-chain path.
+  it('confidentialDepositIntent (deprecated alias) delegates to the canonical path', async () => {
+    let hit = false;
+    server.use(
+      http.post(`${BASE}/wallet/v1/confidential/deposit/cross-chain`, () => {
+        hit = true;
+        return HttpResponse.json({
+          intent_id: 'cdi-3',
+          deposit_address: '5AmGa2Bcfajbytg55UUb4vCAAzKBMYKZNQwx5S2BH2qf',
+          amount: '500000',
+          amount_out: '499490',
+          min_amount_out: '494495',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.confidentialDepositIntent({
+      source_asset: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+      amount: '500000',
+    });
+    expect(hit).toBe(true);
+    expect(r.intent_id).toBe('cdi-3');
   });
 });
 

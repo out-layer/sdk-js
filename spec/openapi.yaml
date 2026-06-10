@@ -549,6 +549,60 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /wallet/v1/intents/transfer:
+    post:
+      tags: [Wallet]
+      operationId: intentsTransfer
+      summary: Transfer inside NEAR Intents (to another account's intents balance)
+      description: |
+        Move a token balance from the wallet's `intents.near` balance to **another
+        account's** `intents.near` balance, staying **inside** the intents pool
+        (the defuse `transfer` intent). Gasless via the solver relay — neither side
+        pays NEAR gas.
+
+        This is **not** a withdrawal: funds never leave `intents.near`. Use
+        `POST /wallet/v1/intents/withdraw` to deliver to a plain on-chain account
+        instead. NEAR-only: there is no `chain` field, and `token` is **required**
+        (to send NEAR, transfer `nep141:wrap.near`).
+
+        The recipient is credited inside `intents.near`, so the account need **not**
+        exist on-chain (a 64-hex implicit OutLayer wallet is a valid recipient); only
+        the account-id format is validated.
+
+        Gated by the wallet policy exactly like withdraw (recipient whitelist +
+        per-token amount limit). If the policy requires approval, returns
+        `status=pending_approval` with an `approval_id`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntentsTransferRequest'
+            examples:
+              usdc:
+                summary: Transfer USDC to another account's intents balance
+                value:
+                  to: partner.near
+                  amount: '1000000'
+                  token: nep141:usdc.near
+      responses:
+        '200':
+          description: Transfer submitted (or queued for approval)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WithdrawResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /wallet/v1/intents/swap:
     post:
       tags: [Wallet]
@@ -2620,6 +2674,24 @@ components:
             omit (or use `near`/`native`) to deliver **native NEAR** (unwraps the
             wallet's wNEAR); use `nep141:wrap.near` to deliver wNEAR instead. For
             other chains, this is the source Intents asset bridged via 1Click.
+
+    IntentsTransferRequest:
+      type: object
+      required: [to, amount, token]
+      properties:
+        to:
+          type: string
+          description: >-
+            Recipient NEAR account id (named or 64-hex implicit). Credited inside
+            `intents.near`; the account need not exist on-chain.
+        amount:
+          type: string
+          description: Amount in minimal units (integer string).
+        token:
+          type: string
+          description: >-
+            Defuse asset id, e.g. `nep141:usdc.near` (a bare `usdc.near` is
+            normalized to `nep141:`). To send NEAR, use `nep141:wrap.near`.
 
     WithdrawResponse:
       type: object

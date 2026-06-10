@@ -40,6 +40,7 @@ export type IntentsDepositResponse = Schemas['IntentsDepositResponse'];
 
 export type WithdrawRequest = Schemas['WithdrawRequest'];
 export type WithdrawResponse = Schemas['WithdrawResponse'];
+export type IntentsTransferRequest = Schemas['IntentsTransferRequest'];
 export type DryRunResponse = Schemas['DryRunResponse'];
 
 export type SwapRequest = Schemas['SwapRequest'];
@@ -370,6 +371,19 @@ export class OutlayerClient {
       () =>
         this.client.POST('/wallet/v1/intents/withdraw', {
           body: body as WithdrawRequest,
+          headers: idempotencyHeader(idempotencyKey),
+        }),
+      this.retry,
+    );
+  }
+
+  /** Transfer inside NEAR Intents to another account's intents balance — gasless, stays inside the intents pool (not a withdrawal). */
+  intentsTransfer(opts: IntentsTransferRequest & Idempotent): Promise<WithdrawResponse> {
+    const { idempotencyKey, ...body } = opts;
+    return runWithRetry(
+      () =>
+        this.client.POST('/wallet/v1/intents/transfer', {
+          body: body as IntentsTransferRequest,
           headers: idempotencyHeader(idempotencyKey),
         }),
       this.retry,

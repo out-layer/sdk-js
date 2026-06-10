@@ -285,6 +285,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/intents/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transfer inside NEAR Intents (to another account's intents balance)
+         * @description Move a token balance from the wallet's `intents.near` balance to **another
+         *     account's** `intents.near` balance, staying **inside** the intents pool
+         *     (the defuse `transfer` intent). Gasless via the solver relay — neither side
+         *     pays NEAR gas.
+         *
+         *     This is **not** a withdrawal: funds never leave `intents.near`. Use
+         *     `POST /wallet/v1/intents/withdraw` to deliver to a plain on-chain account
+         *     instead. NEAR-only: there is no `chain` field, and `token` is **required**
+         *     (to send NEAR, transfer `nep141:wrap.near`).
+         *
+         *     The recipient is credited inside `intents.near`, so the account need **not**
+         *     exist on-chain (a 64-hex implicit OutLayer wallet is a valid recipient); only
+         *     the account-id format is validated.
+         *
+         *     Gated by the wallet policy exactly like withdraw (recipient whitelist +
+         *     per-token amount limit). If the policy requires approval, returns
+         *     `status=pending_approval` with an `approval_id`.
+         */
+        post: operations["intentsTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/v1/intents/swap": {
         parameters: {
             query?: never;
@@ -1506,6 +1542,14 @@ export interface components {
             amount: string;
             /** @description Token ID, e.g. `nep141:usdt.tether-token.near`. For `chain=near`, omit (or use `near`/`native`) to deliver **native NEAR** (unwraps the wallet's wNEAR); use `nep141:wrap.near` to deliver wNEAR instead. For other chains, this is the source Intents asset bridged via 1Click. */
             token?: string;
+        };
+        IntentsTransferRequest: {
+            /** @description Recipient NEAR account id (named or 64-hex implicit). Credited inside `intents.near`; the account need not exist on-chain. */
+            to: string;
+            /** @description Amount in minimal units (integer string). */
+            amount: string;
+            /** @description Defuse asset id, e.g. `nep141:usdc.near` (a bare `usdc.near` is normalized to `nep141:`). To send NEAR, use `nep141:wrap.near`. */
+            token: string;
         };
         /**
          * @description Response for `intentsWithdraw` (same-chain AND cross-chain). On a
@@ -2736,6 +2780,41 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    intentsTransfer: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token. Resubmitting a write request with the same
+                 *     key returns the original result without re-execution. Recommended for
+                 *     clients that retry on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntentsTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description Transfer submitted (or queued for approval) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WithdrawResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };

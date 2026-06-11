@@ -1548,7 +1548,7 @@ export interface components {
             to: string;
             /** @description Amount in minimal units (integer string). */
             amount: string;
-            /** @description Defuse asset id, e.g. `nep141:usdc.near` (a bare `usdc.near` is normalized to `nep141:`). To send NEAR, use `nep141:wrap.near`. */
+            /** @description Defuse asset id, e.g. `nep141:usdt.tether-token.near` (a bare `usdt.tether-token.near` is normalized to `nep141:`). To send NEAR, use `nep141:wrap.near`. */
             token: string;
         };
         /**

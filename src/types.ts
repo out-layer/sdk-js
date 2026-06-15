@@ -364,6 +364,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/evm/sign-typed-data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign EIP-712 typed data (EVM)
+         * @description Sign an EIP-712 v4 typed-data object with the wallet's EVM (secp256k1)
+         *     key for `chain`. The digest is computed server-side from the full
+         *     typed-data object (no client-supplied hash is trusted); `ecrecover` over
+         *     it returns the address from `GET /wallet/v1/address?chain=<evm>`. This is
+         *     the core trading primitive (signs CLOB orders). Off-chain — returns the
+         *     signature only, no broadcast. Gated by the `evm_sign` capability.
+         */
+        post: operations["evmSignTypedData"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/evm/sign-message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign an EIP-191 personal_sign message (EVM)
+         * @description Sign an EIP-191 `personal_sign` message with the wallet's EVM key.
+         *     `message` is `0x`-hex (signed as raw bytes) or a UTF-8 string. Used for
+         *     venue L1 auth (e.g. deriving a Polymarket CLOB API key). Gated by the
+         *     `evm_sign` capability.
+         */
+        post: operations["evmSignMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/evm/sign-transaction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign a raw EVM transaction
+         * @description Sign a raw EVM transaction with the wallet's EVM key. The caller supplies
+         *     the **serialized unsigned transaction** (`unsigned_tx`, e.g. viem
+         *     `serializeTransaction(tx)` — `0x02‖rlp(...)` for EIP-1559); the service
+         *     keccak256-hashes it and returns the recoverable signature. It does NOT
+         *     assemble the transaction, manage nonce/gas, or broadcast — the caller
+         *     assembles the final signed tx and broadcasts it. For an EIP-1559 tx the
+         *     `yParity` needed to assemble is `v - 27`. Gated by the **`evm_sign.raw_tx`**
+         *     sub-capability (default-OFF, separate from base `evm_sign`).
+         */
+        post: operations["evmSignTransaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/v1/confidential/shield": {
         parameters: {
             query?: never;
@@ -1296,10 +1371,10 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description Supported chain identifier.
+         * @description Supported chain identifier. The EVM chains (ethereum, polygon, base, arbitrum, optimism, bsc, avalanche) all share ONE derived address (a single secp256k1 key) and are signable via `/wallet/v1/evm/*`. `solana` / `bitcoin` can be derived in the keystore but are not yet serviced by wallet v1.
          * @enum {string}
          */
-        Chain: "near" | "ethereum" | "solana" | "bitcoin";
+        Chain: "near" | "ethereum" | "polygon" | "base" | "arbitrum" | "optimism" | "bsc" | "avalanche" | "solana" | "bitcoin";
         /**
          * @description Tracked async request / policy transaction type. `withdraw` is a
          *     same-chain intents withdrawal; `cross_chain_withdraw` is a separate type
@@ -1314,13 +1389,28 @@ export interface components {
         /** @enum {string} */
         RequestStatus: "pending_deposit" | "processing" | "success" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "missing_signature" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "internal_error" | "keystore_error" | "service_unavailable" | "confidential_jwt_expired";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "missing_signature" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "confidential_jwt_expired";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
             details?: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * @description Body of the 422 `onchain_tx_failed` response. Unlike `ErrorResponse`,
+         *     it carries the real `tx_hash` (the transaction IS on chain) and the raw
+         *     NEAR execution-failure JSON.
+         */
+        OnChainTxFailedError: {
+            /** @constant */
+            error: "onchain_tx_failed";
+            /** @description Decoded FunctionCallError / contract panic string. */
+            message?: string;
+            /** @description Hash of the broadcast transaction. Real — the tx is on chain. */
+            tx_hash: string;
+            /** @description Raw NEAR execution-failure JSON (e.g. `ActionError`). */
+            failure?: unknown;
         };
         /**
          * @description For the common case (anonymous wallet on OutLayer's shared master),
@@ -2005,10 +2095,18 @@ export interface components {
             requires_approval?: boolean;
             allowed_recipients?: string[];
         };
+        /** @description `evm_sign` — EVM signing (EIP-712 typed-data / EIP-191 personal_sign / raw tx). **Default-DENY under a policy** (like the other fund-moving capabilities) — set `allowed: true` to permit. A wallet with no policy is unrestricted. CAVEAT (why it must be opt-in): an EIP-712 signature is itself fund-moving (EIP-3009 `TransferWithAuthorization` ≈ transfer, EIP-2612 `Permit` ≈ approve), so this grants full authority over the EVM address's float (bounded to what you bridge there — the NEAR-intents balance is never exposed to any EVM signature). `raw_tx` (default false) is a SEPARATE kill-switch for arbitrary raw transactions; it does NOT contain typed-data drains. */
+        EvmSignCapability: {
+            /** @description Master on/off for EVM signing. Default false (opt in with true). */
+            allowed?: boolean;
+            /** @description Permit signing arbitrary raw EVM transactions. Default false. */
+            raw_tx?: boolean;
+        };
         /**
          * @description Default-DENY opt-ins for the non-Built primitives, stored alongside
          *     `rules` / `approval` in the encrypted policy. Every capability defaults to
-         *     DENY **except** `sign_message` (defaults allowed).
+         *     DENY under a policy **except** `sign_message` (default-allow). A wallet
+         *     with no policy at all is unrestricted.
          */
         Capabilities: {
             raw_sign?: components["schemas"]["RawSignCapability"];
@@ -2017,6 +2115,34 @@ export interface components {
             cross_chain_withdraw?: components["schemas"]["Capability"];
             payment_check?: components["schemas"]["Capability"];
             sign_message?: components["schemas"]["SignMessageCapability"];
+            evm_sign?: components["schemas"]["EvmSignCapability"];
+        };
+        EvmSignTypedDataRequest: {
+            chain: components["schemas"]["Chain"];
+            /** @description Standard EIP-712 v4 object (as `eth_signTypedData_v4`): `{ domain, types, primaryType, message }`. Arbitrary struct types are supported (incl. EIP-3009 `TransferWithAuthorization` and EIP-2612 `Permit`). The digest is computed server-side — no client-supplied hash is trusted. */
+            typed_data: Record<string, never>;
+        };
+        EvmSignMessageRequest: {
+            chain: components["schemas"]["Chain"];
+            /** @description The message to sign under EIP-191 `personal_sign`, interpreted per `encoding`. */
+            message: string;
+            /**
+             * @description How to interpret `message`. `utf8` (default) signs its UTF-8 bytes (matches viem `hashMessage(string)` / MetaMask `personal_sign`); `hex` treats `message` as hex (`0x`-prefixed or bare) and signs the decoded bytes (viem `hashMessage({ raw })`). No content sniffing — malformed hex is rejected.
+             * @default utf8
+             * @enum {string}
+             */
+            encoding: "utf8" | "hex";
+        };
+        EvmSignTransactionRequest: {
+            chain: components["schemas"]["Chain"];
+            /** @description Serialized unsigned transaction, `0x`-hex (e.g. viem `serializeTransaction(tx)`). The service keccak256-hashes and signs it — it does not parse, assemble, or broadcast the transaction. */
+            unsigned_tx: string;
+        };
+        EvmSignResponse: {
+            /** @description 65-byte recoverable EVM signature, `0x`-hex (`r‖s‖v`, `v ∈ {27,28}`, low-s). `ecrecover` over the signed digest returns the wallet's EVM address. */
+            signature: string;
+            chain: components["schemas"]["Chain"];
+            wallet_id: string;
         };
         PolicyResponse: {
             wallet_id: string;
@@ -2365,22 +2491,24 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Feature not enabled/configured on this deployment. Returned by the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off or the confidential upstream is not configured. */
+        /** @description Unavailable — either permanently on this deployment or transiently. `service_unavailable`: feature not enabled/configured (e.g. the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off or the confidential upstream is not configured) — do not retry. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request — transient, retry after the `Retry-After` header. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed — transient, retry after `Retry-After`. (Transient upstream failures use 503 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, hiding the JSON body from clients.) */
         ServiceUnavailable: {
             headers: {
+                /** @description Present on transient failures (`keystore_error`, `confidential_jwt_expired`) — seconds to wait before retrying. */
+                "Retry-After"?: number;
                 [name: string]: unknown;
             };
             content: {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Upstream dependency failed. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed. */
-        BadGateway: {
+        /** @description The transaction was signed and broadcast — the network accepted it — but its on-chain execution REVERTED. `tx_hash` is real (the tx is on chain); no state-changing effect happened. Do NOT retry: re-broadcasting duplicates an already-recorded transaction and burns gas again. `message` is the decoded FunctionCallError / panic string, `failure` the raw NEAR execution-failure JSON. (422 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, which would hide this body from clients.) Scope: synchronous execution only. When the operation goes through the multisig approval flow instead, execution happens in the background after the threshold is met — a revert there surfaces as `status: "failed"` via `GET /wallet/v1/requests/{request_id}` and the `request_completed` webhook, never as a synchronous 422. */
+        OnChainTxFailed: {
             headers: {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["OnChainTxFailedError"];
             };
         };
     };
@@ -2560,6 +2688,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["OnChainTxFailed"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };
@@ -2596,6 +2725,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["OnChainTxFailed"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -2637,6 +2767,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["OnChainTxFailed"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -2677,6 +2808,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["OnChainTxFailed"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -2718,6 +2850,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["OnChainTxFailed"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -2888,6 +3021,90 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    evmSignTypedData: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvmSignTypedDataRequest"];
+            };
+        };
+        responses: {
+            /** @description Signature */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvmSignResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    evmSignMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvmSignMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Signature */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvmSignResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    evmSignTransaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvmSignTransactionRequest"];
+            };
+        };
+        responses: {
+            /** @description Signature */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvmSignResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     confidentialShield: {
         parameters: {
             query?: never;
@@ -2927,7 +3144,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -2970,7 +3186,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3013,7 +3228,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3058,7 +3272,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3087,7 +3300,6 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3131,7 +3343,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3175,7 +3386,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3204,7 +3414,6 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3240,7 +3449,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3276,7 +3484,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3304,7 +3511,6 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -3773,7 +3979,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
-            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listRequests: {

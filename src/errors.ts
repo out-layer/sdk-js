@@ -7,6 +7,10 @@ export type ErrorBody = {
   error?: ApiErrorCode;
   message?: string;
   details?: unknown;
+  /** `onchain_tx_failed` only: hash of the broadcast (and reverted) tx. */
+  tx_hash?: string;
+  /** `onchain_tx_failed` only: raw NEAR execution-failure JSON. */
+  failure?: unknown;
 };
 
 export interface OutlayerErrorOptions {
@@ -72,6 +76,23 @@ export class BadRequestError extends OutlayerError {
   }
 }
 
+/**
+ * The transaction was broadcast — it IS on chain (`txHash` is real) — but its
+ * execution reverted (contract panic, out of gas). Never retry: re-submitting
+ * duplicates an already-recorded transaction. HTTP 422.
+ */
+export class OnChainTxFailedError extends OutlayerError {
+  readonly txHash: string;
+  readonly failure: unknown;
+
+  constructor(opts: OutlayerErrorOptions & { txHash?: string | undefined; failure?: unknown }) {
+    super(opts);
+    this.name = 'OnChainTxFailedError';
+    this.txHash = opts.txHash ?? '';
+    this.failure = opts.failure;
+  }
+}
+
 const codeToCtor: Partial<Record<ErrorCode, new (opts: OutlayerErrorOptions) => OutlayerError>> = {
   policy_denied: PolicyDeniedError,
   wallet_frozen: WalletFrozenError,
@@ -95,6 +116,11 @@ export function makeError(body: ErrorBody, status: number): OutlayerError {
     body.details !== undefined
       ? { code, message, status, details: body.details }
       : { code, message, status };
+  // onchain_tx_failed carries tx_hash + failure at the top level of the body
+  // (not under `details`) — surface them on the typed error.
+  if (code === 'onchain_tx_failed') {
+    return new OnChainTxFailedError({ ...opts, txHash: body.tx_hash, failure: body.failure });
+  }
   const Ctor = codeToCtor[code] ?? OutlayerError;
   return new Ctor(opts);
 }

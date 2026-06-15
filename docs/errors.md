@@ -126,7 +126,7 @@ const client = new OutlayerClient({
 
 ## Idempotency under retry
 
-Write operations get an auto-generated `Idempotency-Key` that's **stable across the SDK's internal retries**. So if a withdraw times out and the SDK retries, the server sees the same key and returns the same result (or rejects with `duplicate_idempotency_key` if the original is in-flight).
+Write operations get an auto-generated `Idempotency-Key` that's **stable across the SDK's internal retries**. A retry with the same key never re-signs or re-broadcasts: the server short-circuits **before** signing and answers `200` with `{ error: 'duplicate_idempotency_key', message: 'Request already processed: <request_id>' }` — a *pointer* to the original request, not its stored result. Fetch the outcome with `getRequest(request_id)`. This also backstops clients that (incorrectly) retry a 422 `onchain_tx_failed`.
 
 If you're the one handling retries (e.g., from a job queue), pass your own key to make at-least-once delivery safe:
 
@@ -179,6 +179,9 @@ switch (result.status) {
 | `approval_not_found` | 404 | No pending approval with that ID |
 | `rate_limited` | 429 | Too many requests |
 | `duplicate_idempotency_key` | 200 | Returns the original result; not an error |
+| `onchain_tx_failed` | 422 | Tx was broadcast (it IS on chain, `tx_hash` is real) but its execution reverted. **Never retry** — re-broadcasting duplicates the tx. Body carries `tx_hash` + the raw `failure` JSON |
+| `keystore_error` | 503 | TEE keystore unreachable or rejected the request (transient; `Retry-After` set) |
+| `confidential_jwt_expired` | 503 | Confidential upstream rejected the per-account JWT and re-auth failed (transient; `Retry-After` set) |
 | `internal_error` | 500 | Server error |
 | `network_error` | — | SDK-side: network failure after retries exhausted |
 | `parse_error` | — | SDK-side: response body wasn't valid JSON |

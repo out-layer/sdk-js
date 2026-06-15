@@ -75,7 +75,10 @@ That's the whole flow. The wallet has no policy yet, so withdraws are unrestrict
 | `client.createDepositIntent({...})` | Cross-chain deposit: one-time 1Click address to fund from another chain |
 | `client.getDepositStatus(id)` | Poll a cross-chain deposit intent |
 | `client.confidential*({...})` | Same operations against the private **confidential shard** — shield / unshield / withdraw / swap / transfer / cross-chain deposit / balance ([see below](#confidential-intents)) |
-| `client.signMessage({...})` | NEP-413 or raw message signing |
+| `client.signMessage({...})` | NEP-413 or raw message signing (NEAR identity) |
+| `client.evmSignTypedData({...})` | Sign EIP-712 v4 typed data with the EVM key — e.g. a Polymarket CLOB order |
+| `client.evmSignMessage({...})` | Sign an EIP-191 `personal_sign` message with the EVM key |
+| `client.evmSignTransaction({...})` | Sign a raw unsigned EVM tx (you assemble + broadcast; gated by `evm_sign.raw_tx`) |
 | `client.getRequest(id)` | Status of an async operation |
 | `client.listRequests({...})` | List recent operations |
 | `client.policy.*` | Policy lifecycle (encrypt → sign → store) |
@@ -247,6 +250,7 @@ const client = new OutlayerClient({
 - register a wallet, derive addresses
 - read balances, set policy, sign messages
 - submit NEAR contract calls
+- sign EVM payloads (`evmSignTypedData` / `evmSignMessage` / `evmSignTransaction`) — pure off-chain secp256k1 signing, no intents/mainnet dependency
 
 …but `swap`, `intentsWithdraw`, and `intentsDeposit` will fail at the intents layer.
 

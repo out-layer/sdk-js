@@ -86,6 +86,7 @@ export {
   RateLimitedError,
   NotFoundError,
   BadRequestError,
+  OnChainTxFailedError,
 } from './errors.js';
 
 export type { ApiErrorCode, ErrorCode } from './errors.js';

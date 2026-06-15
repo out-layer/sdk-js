@@ -47,6 +47,11 @@ export type SwapRequest = Schemas['SwapRequest'];
 export type SwapResponse = Schemas['SwapResponse'];
 export type SwapQuoteResponse = Schemas['SwapQuoteResponse'];
 
+export type EvmSignTypedDataRequest = Schemas['EvmSignTypedDataRequest'];
+export type EvmSignMessageRequest = Schemas['EvmSignMessageRequest'];
+export type EvmSignTransactionRequest = Schemas['EvmSignTransactionRequest'];
+export type EvmSignResponse = Schemas['EvmSignResponse'];
+
 export type SignMessageRequest = Schemas['SignMessageRequest'];
 export type SignMessageResponse = Schemas['SignMessageResponse'];
 
@@ -412,6 +417,48 @@ export class OutlayerClient {
   swapQuote(opts: SwapRequest): Promise<SwapQuoteResponse> {
     return runWithRetry(
       () => this.client.POST('/wallet/v1/intents/swap/quote', { body: opts }),
+      this.retry,
+    );
+  }
+
+  // ------- EVM signing -------
+
+  /**
+   * Sign EIP-712 v4 typed data with the wallet's EVM (secp256k1) key — e.g. a
+   * Polymarket CLOB order. The digest is computed server-side from `typed_data`;
+   * `ecrecover` over it returns `getAddress(chain)`'s address. Off-chain: returns
+   * the 65-byte signature only (no broadcast). Gated by the `evm_sign` capability.
+   */
+  evmSignTypedData(opts: EvmSignTypedDataRequest): Promise<EvmSignResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/evm/sign-typed-data', { body: opts }),
+      this.retry,
+    );
+  }
+
+  /**
+   * Sign an EIP-191 `personal_sign` message with the wallet's EVM key (used for
+   * venue L1 auth, e.g. deriving a CLOB API key). `message` is signed per
+   * `encoding`: `"utf8"` (default) signs its UTF-8 bytes; `"hex"` treats it as
+   * hex and signs the decoded bytes. Gated by the `evm_sign` capability.
+   */
+  evmSignMessage(opts: EvmSignMessageRequest): Promise<EvmSignResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/evm/sign-message', { body: opts }),
+      this.retry,
+    );
+  }
+
+  /**
+   * Sign a raw EVM transaction with the wallet's EVM key. Pass the **serialized
+   * unsigned transaction** in `unsigned_tx` (e.g. viem `serializeTransaction(tx)`);
+   * we keccak256-hash and sign it. We do NOT assemble the tx, manage nonce/gas, or
+   * broadcast — assemble the final signed tx (yParity = v − 27 for EIP-1559) and
+   * broadcast it yourself. Gated by the `evm_sign.raw_tx` sub-capability (default-OFF).
+   */
+  evmSignTransaction(opts: EvmSignTransactionRequest): Promise<EvmSignResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/evm/sign-transaction', { body: opts }),
       this.retry,
     );
   }

@@ -4,6 +4,32 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- **EVM signing (v1)** — 3 new methods on `OutlayerClient` that sign with the
+  wallet's EVM (secp256k1) key, the single `0x` address shared across all EVM
+  chains: `evmSignTypedData` (EIP-712 v4 — e.g. a Polymarket CLOB order),
+  `evmSignMessage` (EIP-191 `personal_sign`), and `evmSignTransaction` (raw
+  unsigned tx). All are pure off-chain signing — the keystore keccak256-hashes
+  and signs, returning a 65-byte `0x`-hex signature (`r‖s‖v`, `v ∈ {27,28}`,
+  low-s); it never assembles, prices, nonces, or broadcasts a transaction. You
+  build and broadcast EVM transactions yourself (for EIP-1559, `yParity = v − 27`).
+- `GET /wallet/v1/address` now serves all EVM chains (`ethereum`, `polygon`,
+  `base`, `arbitrum`, `optimism`, `bsc`, `avalanche`, plus aliases `eth` / `pol` /
+  `matic` / `arb` / `op` / `avax`), returning one shared secp256k1 address. Solana
+  stays gated; account delete stays NEAR-only.
+- Spec: `POST /wallet/v1/evm/{sign-typed-data,sign-message,sign-transaction}`.
+- Exported types: `EvmSignTypedDataRequest`, `EvmSignMessageRequest`,
+  `EvmSignTransactionRequest`, `EvmSignResponse`.
+- New policy capability `evm_sign` — **default-DENY under a policy** (set
+  `allowed:true` to permit; a wallet with no policy is unrestricted;
+  `sign_message` is the only default-allow capability), with a `raw_tx` sub-flag
+  (**default-OFF**) gating raw-tx signing. `requires_approval` is not supported.
+  CAVEAT: an EIP-712 signature is itself fund-moving (EIP-3009 ≈ transfer,
+  EIP-2612 ≈ approve), so `evm_sign` grants full authority over the EVM address's
+  float — bounded to what you bridge there; the NEAR-intents balance is never
+  exposed. See [docs/policy.md](docs/policy.md).
+
 ## [0.1.0-alpha.4] — 2026-06-02
 
 ### Added

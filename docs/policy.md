@@ -33,6 +33,41 @@ type ApprovalConfig = {
 
 `"*"` as a token ID matches all tokens. Amount strings are in the token's smallest unit — yoctoNEAR for NEAR, satoshis-equivalent for tokens with custom decimals.
 
+## EVM signing capability (`evm_sign`)
+
+EVM signing — `evmSignTypedData` (EIP-712), `evmSignMessage` (EIP-191), and
+`evmSignTransaction` (raw tx) — is gated by the `evm_sign` capability:
+
+```ts
+type EvmSignCapability = {
+  allowed?: boolean; // default false (DENY) under a policy — set true to permit
+  raw_tx?:  boolean; // default false — gates evmSignTransaction only
+};
+```
+
+How `evm_sign` behaves:
+
+- **Default-DENY under a policy.** Like every other fund-moving capability
+  (raw_sign, swap, cross_chain_withdraw, …), a policy must explicitly set
+  `evm_sign.allowed: true` to permit signing. `sign_message` is the only
+  default-allow capability. A wallet with **no policy at all** is unrestricted.
+- **`raw_tx` defaults OFF.** With `allowed: true`, base `evm_sign` covers EIP-712
+  typed data and EIP-191 messages; signing an arbitrary serialized transaction is
+  gated by the separate `raw_tx` sub-flag, which must be explicitly enabled to
+  allow `evmSignTransaction`.
+
+`requires_approval` is **not** supported for `evm_sign` — the keystore signs
+EVM payloads synchronously and never queues them for multisig.
+
+> **⚠️ An EIP-712 signature is itself fund-moving.** Typed-data structs like
+> EIP-3009 `TransferWithAuthorization` (≈ a transfer) and EIP-2612 `Permit`
+> (≈ an approval) move funds purely off-chain — anyone holding such a signature can
+> relay it on-chain. Granting `evm_sign` therefore grants full authority over the
+> wallet's EVM-address float (bounded to whatever you've bridged to that `0x`
+> address — the NEAR-intents balance is never exposed to any EVM signature). The
+> `raw_tx` kill-switch does **not** contain typed-data drains; this is exactly why
+> `evm_sign` is opt-in (default-DENY).
+
 ## Storage model
 
 The policy is stored **on-chain in encrypted form**. Only the keystore TEE can decrypt it. The controller (the NEAR account that first set the policy) is recorded on-chain and can update or freeze the wallet without going through any API.

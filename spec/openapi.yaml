@@ -5,8 +5,9 @@ info:
   summary: HTTP API for OutLayer custody wallets and policy enforcement
   description: |
     OutLayer Agent Custody — multi-chain wallets for AI agents with TEE-enforced
-    policy, multisig approvals, audit log, and gasless cross-chain transfers via
-    NEAR Intents.
+    policy, multisig approvals, audit log, gasless cross-chain transfers via
+    NEAR Intents, and off-chain EVM signing (EIP-712 typed data, EIP-191
+    personal_sign, and client-serialized raw transactions).
 
     Private keys live exclusively inside an Intel TDX TEE and are derived from
     NEAR MPC. The wallet owner sets policy (spending limits, whitelists,
@@ -33,7 +34,11 @@ tags:
   - name: Registration
     description: Create a new wallet and obtain an API key.
   - name: Wallet
-    description: Multi-chain custody operations — transfer, withdraw, swap, balance, signing.
+    description: >-
+      Multi-chain custody operations — transfer, withdraw, swap, balance, and
+      signing, including NEAR (NEP-413) message signing and off-chain EVM
+      signing (EIP-712 typed data, EIP-191 personal_sign, and client-serialized
+      raw transactions).
   - name: Confidential
     description: >-
       Confidential intents — move balances between the public intents shard, the
@@ -279,6 +284,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/OnChainTxFailed'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -326,6 +333,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/OnChainTxFailed'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -368,6 +377,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/OnChainTxFailed'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -407,6 +418,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/OnChainTxFailed'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -444,6 +457,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/OnChainTxFailed'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -669,6 +684,108 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /wallet/v1/evm/sign-typed-data:
+    post:
+      tags: [Wallet]
+      operationId: evmSignTypedData
+      summary: Sign EIP-712 typed data (EVM)
+      description: |
+        Sign an EIP-712 v4 typed-data object with the wallet's EVM (secp256k1)
+        key for `chain`. The digest is computed server-side from the full
+        typed-data object (no client-supplied hash is trusted); `ecrecover` over
+        it returns the address from `GET /wallet/v1/address?chain=<evm>`. This is
+        the core trading primitive (signs CLOB orders). Off-chain — returns the
+        signature only, no broadcast. Gated by the `evm_sign` capability.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvmSignTypedDataRequest'
+      responses:
+        '200':
+          description: Signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvmSignResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/evm/sign-message:
+    post:
+      tags: [Wallet]
+      operationId: evmSignMessage
+      summary: Sign an EIP-191 personal_sign message (EVM)
+      description: |
+        Sign an EIP-191 `personal_sign` message with the wallet's EVM key.
+        `message` is `0x`-hex (signed as raw bytes) or a UTF-8 string. Used for
+        venue L1 auth (e.g. deriving a Polymarket CLOB API key). Gated by the
+        `evm_sign` capability.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvmSignMessageRequest'
+      responses:
+        '200':
+          description: Signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvmSignResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /wallet/v1/evm/sign-transaction:
+    post:
+      tags: [Wallet]
+      operationId: evmSignTransaction
+      summary: Sign a raw EVM transaction
+      description: |
+        Sign a raw EVM transaction with the wallet's EVM key. The caller supplies
+        the **serialized unsigned transaction** (`unsigned_tx`, e.g. viem
+        `serializeTransaction(tx)` — `0x02‖rlp(...)` for EIP-1559); the service
+        keccak256-hashes it and returns the recoverable signature. It does NOT
+        assemble the transaction, manage nonce/gas, or broadcast — the caller
+        assembles the final signed tx and broadcasts it. For an EIP-1559 tx the
+        `yParity` needed to assemble is `v - 27`. Gated by the **`evm_sign.raw_tx`**
+        sub-capability (default-OFF, separate from base `evm_sign`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvmSignTransactionRequest'
+      responses:
+        '200':
+          description: Signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvmSignResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   # ============================================================================
   # Confidential intents (Defuse confidential shard)
   # ============================================================================
@@ -719,8 +836,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -762,8 +877,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -802,8 +915,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -862,8 +973,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -894,8 +1003,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -937,8 +1044,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -979,8 +1084,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -1009,8 +1112,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -1054,8 +1155,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -1095,8 +1194,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -1132,8 +1229,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -1773,8 +1868,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   # ============================================================================
   # Requests (async tracking)
@@ -2215,9 +2310,23 @@ components:
               value: { error: internal_error }
     ServiceUnavailable:
       description: >-
-        Feature not enabled/configured on this deployment. Returned by the
-        `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is
-        off or the confidential upstream is not configured.
+        Unavailable — either permanently on this deployment or transiently.
+        `service_unavailable`: feature not enabled/configured (e.g. the
+        `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS`
+        is off or the confidential upstream is not configured) — do not retry.
+        `keystore_error`: the TEE keystore (signing / key derivation) was
+        unreachable or rejected the request — transient, retry after the
+        `Retry-After` header. `confidential_jwt_expired`: the confidential
+        per-account JWT was rejected by the 1Click upstream and
+        re-authentication also failed — transient, retry after `Retry-After`.
+        (Transient upstream failures use 503 rather than 502 because
+        Cloudflare replaces origin 502/504 responses with its own HTML error
+        page, hiding the JSON body from clients.)
+      headers:
+        Retry-After:
+          description: Present on transient failures (`keystore_error`, `confidential_jwt_expired`) — seconds to wait before retrying.
+          schema:
+            type: integer
       content:
         application/json:
           schema:
@@ -2227,28 +2336,53 @@ components:
               value:
                 error: service_unavailable
                 message: Confidential intents are not configured on this deployment
-    BadGateway:
-      description: >-
-        Upstream dependency failed. `keystore_error`: the TEE keystore (signing /
-        key derivation) was unreachable or rejected the request.
-        `confidential_jwt_expired`: the confidential per-account JWT was rejected
-        by the 1Click upstream and re-authentication also failed.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-          examples:
             keystore_error:
               value: { error: keystore_error }
             confidential_jwt_expired:
               value: { error: confidential_jwt_expired }
+    OnChainTxFailed:
+      description: >-
+        The transaction was signed and broadcast — the network accepted it —
+        but its on-chain execution REVERTED. `tx_hash` is real (the tx is on
+        chain); no state-changing effect happened. Do NOT retry:
+        re-broadcasting duplicates an already-recorded transaction and burns
+        gas again. `message` is the decoded FunctionCallError / panic string,
+        `failure` the raw NEAR execution-failure JSON. (422 rather than 502
+        because Cloudflare replaces origin 502/504 responses with its own HTML
+        error page, which would hide this body from clients.)
+        Scope: synchronous execution only. When the operation goes through the
+        multisig approval flow instead, execution happens in the background
+        after the threshold is met — a revert there surfaces as
+        `status: "failed"` via `GET /wallet/v1/requests/{request_id}` and the
+        `request_completed` webhook, never as a synchronous 422.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OnChainTxFailedError'
+          examples:
+            onchain_tx_failed:
+              value:
+                error: onchain_tx_failed
+                message: 'Exceeded the prepaid gas.'
+                tx_hash: 8YyQnDxNSgrtZtAhDwHRfcpyTAcqGJ4kdmSf7eVLh2dG
+                failure:
+                  ActionError:
+                    index: 0
+                    kind:
+                      FunctionCallError:
+                        ExecutionError: 'Exceeded the prepaid gas.'
 
   schemas:
     # ----- Primitives -----
     Chain:
       type: string
-      enum: [near, ethereum, solana, bitcoin]
-      description: Supported chain identifier.
+      enum: [near, ethereum, polygon, base, arbitrum, optimism, bsc, avalanche, solana, bitcoin]
+      description: >-
+        Supported chain identifier. The EVM chains (ethereum, polygon, base,
+        arbitrum, optimism, bsc, avalanche) all share ONE derived address (a
+        single secp256k1 key) and are signable via `/wallet/v1/evm/*`.
+        `solana` / `bitcoin` can be derived in the keystore but are not yet
+        serviced by wallet v1.
 
     RequestType:
       type: string
@@ -2303,6 +2437,7 @@ components:
         - bad_request
         - conflict
         - duplicate_idempotency_key
+        - onchain_tx_failed
         - internal_error
         - keystore_error
         - service_unavailable
@@ -2319,6 +2454,26 @@ components:
         details:
           type: object
           additionalProperties: {}
+
+    OnChainTxFailedError:
+      type: object
+      required: [error, tx_hash]
+      description: |
+        Body of the 422 `onchain_tx_failed` response. Unlike `ErrorResponse`,
+        it carries the real `tx_hash` (the transaction IS on chain) and the raw
+        NEAR execution-failure JSON.
+      properties:
+        error:
+          type: string
+          const: onchain_tx_failed
+        message:
+          type: string
+          description: Decoded FunctionCallError / contract panic string.
+        tx_hash:
+          type: string
+          description: Hash of the broadcast transaction. Real — the tx is on chain.
+        failure:
+          description: Raw NEAR execution-failure JSON (e.g. `ActionError`).
 
     # ----- Registration -----
     RegisterRequest:
@@ -3488,12 +3643,34 @@ components:
           items:
             type: string
 
+    EvmSignCapability:
+      type: object
+      description: >-
+        `evm_sign` — EVM signing (EIP-712 typed-data / EIP-191 personal_sign /
+        raw tx). **Default-DENY under a policy** (like the other fund-moving
+        capabilities) — set `allowed: true` to permit. A wallet with no policy is
+        unrestricted. CAVEAT (why it must be opt-in): an EIP-712 signature is
+        itself fund-moving (EIP-3009 `TransferWithAuthorization` ≈ transfer,
+        EIP-2612 `Permit` ≈ approve), so this grants full authority over the EVM
+        address's float (bounded to what you bridge there — the NEAR-intents
+        balance is never exposed to any EVM signature). `raw_tx` (default false)
+        is a SEPARATE kill-switch for arbitrary raw transactions; it does NOT
+        contain typed-data drains.
+      properties:
+        allowed:
+          type: boolean
+          description: Master on/off for EVM signing. Default false (opt in with true).
+        raw_tx:
+          type: boolean
+          description: Permit signing arbitrary raw EVM transactions. Default false.
+
     Capabilities:
       type: object
       description: |
         Default-DENY opt-ins for the non-Built primitives, stored alongside
         `rules` / `approval` in the encrypted policy. Every capability defaults to
-        DENY **except** `sign_message` (defaults allowed).
+        DENY under a policy **except** `sign_message` (default-allow). A wallet
+        with no policy at all is unrestricted.
       properties:
         raw_sign:
           $ref: '#/components/schemas/RawSignCapability'
@@ -3507,6 +3684,73 @@ components:
           $ref: '#/components/schemas/Capability'
         sign_message:
           $ref: '#/components/schemas/SignMessageCapability'
+        evm_sign:
+          $ref: '#/components/schemas/EvmSignCapability'
+
+    EvmSignTypedDataRequest:
+      type: object
+      required: [chain, typed_data]
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        typed_data:
+          type: object
+          description: >-
+            Standard EIP-712 v4 object (as `eth_signTypedData_v4`):
+            `{ domain, types, primaryType, message }`. Arbitrary struct types are
+            supported (incl. EIP-3009 `TransferWithAuthorization` and EIP-2612
+            `Permit`). The digest is computed server-side — no client-supplied
+            hash is trusted.
+
+    EvmSignMessageRequest:
+      type: object
+      required: [chain, message]
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        message:
+          type: string
+          description: >-
+            The message to sign under EIP-191 `personal_sign`, interpreted per
+            `encoding`.
+        encoding:
+          type: string
+          enum: [utf8, hex]
+          default: utf8
+          description: >-
+            How to interpret `message`. `utf8` (default) signs its UTF-8 bytes
+            (matches viem `hashMessage(string)` / MetaMask `personal_sign`);
+            `hex` treats `message` as hex (`0x`-prefixed or bare) and signs the
+            decoded bytes (viem `hashMessage({ raw })`). No content sniffing —
+            malformed hex is rejected.
+
+    EvmSignTransactionRequest:
+      type: object
+      required: [chain, unsigned_tx]
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        unsigned_tx:
+          type: string
+          description: >-
+            Serialized unsigned transaction, `0x`-hex (e.g. viem
+            `serializeTransaction(tx)`). The service keccak256-hashes and signs
+            it — it does not parse, assemble, or broadcast the transaction.
+
+    EvmSignResponse:
+      type: object
+      required: [signature, chain, wallet_id]
+      properties:
+        signature:
+          type: string
+          description: >-
+            65-byte recoverable EVM signature, `0x`-hex (`r‖s‖v`, `v ∈ {27,28}`,
+            low-s). `ecrecover` over the signed digest returns the wallet's EVM
+            address.
+        chain:
+          $ref: '#/components/schemas/Chain'
+        wallet_id:
+          type: string
 
     PolicyResponse:
       type: object

@@ -10,7 +10,7 @@ All methods return a `Promise`. All errors are typed subclasses of `OutlayerErro
 const { address, public_key } = await client.getAddress('ethereum');
 ```
 
-Supported chains: `near`, `ethereum`, `solana`, `bitcoin`. The same `wallet_id` always produces the same address per chain (deterministic HMAC-SHA256 inside the TEE).
+Supported chains: `near`, `ethereum`, `solana`, `bitcoin`, plus the EVM family — `polygon`, `base`, `arbitrum`, `optimism`, `bsc`, `avalanche` (aliases `eth` / `pol` / `matic` / `arb` / `op` / `avax`). Every EVM chain shares **one** secp256k1 address: `getAddress('ethereum')`, `getAddress('polygon')`, `getAddress('base')`, … all return the same `0x` address. The same `wallet_id` always produces the same address per chain (deterministic HMAC-SHA256 inside the TEE).
 
 ## Balance
 
@@ -55,6 +55,10 @@ const result = await client.call({
 `args` is a JSON object. For non-JSON encodings, pass `args_base64` instead.
 
 `result.status` is `processing` on submission, `success` / `failed` after settlement, or `pending_approval` if the call exceeds policy limits.
+
+If the transaction is broadcast but its execution **reverts on-chain** (contract panic, out of gas), the call throws an `OnChainTxFailedError` (`code: 'onchain_tx_failed'`, HTTP 422) carrying the real `txHash` and the raw `failure` JSON — the transaction is on chain, so **do not retry**: re-submitting duplicates it and burns gas again.
+
+This applies to synchronous execution only. If the call went through **multisig approval**, execution happens in the background after the threshold is met — a revert there shows up as `status: 'failed'` on `getRequest(request_id)` and in the `request_completed` webhook, not as a thrown 422.
 
 ## Withdraw (gasless, via Intents)
 
@@ -175,6 +179,76 @@ console.log(sig.signature, sig.public_key);
 ```
 
 Use this for login flows, off-chain attestations, or any context that needs a signed message tied to the wallet's NEAR identity. The TEE signs; the policy still applies (a frozen wallet cannot sign).
+
+## Sign EVM payloads (EIP-712 / EIP-191 / raw tx)
+
+The wallet's EVM (secp256k1) key — the single `0x` address shared across all EVM
+chains — can sign three payload shapes. All three are **pure off-chain signing**:
+the keystore returns a signature and never assembles, prices, nonces, or
+broadcasts a transaction. That's your job. Every signature is a **65-byte
+`0x`-hex value, `r‖s‖v` with `v ∈ {27, 28}`, low-s**; `ecrecover` over the signed
+digest returns `getAddress('ethereum')`.
+
+Signing is gated by the `evm_sign` policy capability (default-DENY under a policy —
+set `evm_sign.allowed:true` to permit; a wallet with no policy is unrestricted; raw
+tx additionally gated by the `evm_sign.raw_tx` sub-flag, default-OFF) — see
+[policy.md](policy.md).
+
+### EIP-712 typed data (`evmSignTypedData`)
+
+```ts
+const sig = await client.evmSignTypedData({
+  chain: 'polygon',
+  typed_data: {
+    domain: { name: 'Polymarket CTF Exchange', version: '1', chainId: 137, verifyingContract: '0x...' },
+    types: { Order: [ /* ... */ ] },
+    primaryType: 'Order',
+    message: { /* the CLOB order */ },
+  },
+});
+console.log(sig.signature); // 0x… 65 bytes
+```
+
+`typed_data` is a standard EIP-712 v4 object (same shape as `eth_signTypedData_v4`):
+`{ domain, types, primaryType, message }`. The digest is computed inside the TEE
+from `typed_data` — no client-supplied hash is trusted. Arbitrary struct types
+work, including the fund-moving ones (EIP-3009 `TransferWithAuthorization`,
+EIP-2612 `Permit`) — see the warning in [policy.md](policy.md).
+
+### EIP-191 personal_sign (`evmSignMessage`)
+
+```ts
+const sig = await client.evmSignMessage({
+  chain: 'base',
+  message: 'login nonce: 8f3a...', // UTF-8 string, or 0x-hex bytes
+});
+```
+
+`message` is either a `0x`-hex byte string (signed as raw bytes) or a UTF-8 string
+(signed as UTF-8), under EIP-191 `personal_sign`. Use it for venue L1 auth — e.g.
+deriving a CLOB API key.
+
+### Raw transaction (`evmSignTransaction`)
+
+```ts
+import { serializeTransaction } from 'viem';
+
+// You build, price, and nonce the tx; the keystore only signs the digest.
+const unsigned = serializeTransaction({
+  chainId: 8453,
+  nonce, to, value, gas, maxFeePerGas, maxPriorityFeePerGas, data,
+});
+
+const sig = await client.evmSignTransaction({ chain: 'base', unsigned_tx: unsigned });
+
+// Assemble the signed tx yourself (yParity = v − 27 for EIP-1559), then broadcast.
+```
+
+Pass the **serialized unsigned transaction** as `0x`-hex in `unsigned_tx`. The
+keystore keccak256-hashes and signs it — it does not parse, assemble, manage
+nonce/gas, or broadcast. You reattach the signature (for EIP-1559, `yParity =
+v − 27`) and submit it through your own RPC. This method is gated by the
+`evm_sign.raw_tx` sub-capability, which is **OFF by default**.
 
 ## Async request tracking
 

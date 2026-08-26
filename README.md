@@ -2,7 +2,7 @@
 
 TypeScript SDK for **OutLayer Agent Custody** — multi-chain wallets for AI agents with TEE-enforced policy, multisig approvals, and gasless cross-chain transfers via NEAR Intents.
 
-[Docs](docs/) · [Examples](examples/) · [API spec](https://api.outlayer.fastnear.com/docs) · [Source](https://github.com/out-layer/sdk-js)
+[Docs](docs/) · [Examples](examples/) · [API spec](https://api.outlayer.ai/docs) · [Source](https://github.com/out-layer/sdk-js)
 
 ## Why this SDK
 
@@ -10,7 +10,7 @@ If you've used Steward.fi or similar AI-agent wallet infra, you know the shape: 
 
 - **Keys live in a TEE** (Intel Trust Domain Extensions on Phala Cloud). The infrastructure operator cannot extract them.
 - **Policy is enforced inside the TEE**, before signing, against an encrypted policy stored on the NEAR blockchain.
-- **Sovereign exit** is available: a customer can permissionlessly recover their wallet's master key even if OutLayer shuts down. (Requires opting into the `vault` flow — see the [vault docs](https://outlayer.fastnear.com/docs/vaults).)
+- **Sovereign exit** is available: a customer can permissionlessly recover their wallet's master key even if OutLayer shuts down. (Requires opting into the `vault` flow — see the [vault docs](https://app.outlayer.ai/docs/vaults).)
 - **Multi-chain wallets** (NEAR, Ethereum, Solana, Bitcoin) with deterministic address derivation and gasless cross-chain transfers via NEAR Intents.
 
 ## Install
@@ -85,7 +85,7 @@ That's the whole flow. The wallet has no policy yet, so withdraws are unrestrict
 | `client.approvals.*` | Multisig approval workflow |
 | `client.audit.list({...})` | Event history |
 
-Full reference: [API spec](https://api.outlayer.fastnear.com/docs).
+Full reference: [API spec](https://api.outlayer.ai/docs).
 
 ## Confidential Intents
 
@@ -160,13 +160,13 @@ for the mental model, threat model, and privacy recipes.
 
 ### Vault custody (advanced)
 
-For production deployments that need **sovereign exit guarantees**, bind a wallet to a customer-owned vault. Vault deployment happens via the [dashboard](https://outlayer.fastnear.com/vault) or `outlayer vault init` CLI (not the SDK — your NEAR keys never touch us). Once deployed, binding is one option:
+For production deployments that need **sovereign exit guarantees**, bind a wallet to a customer-owned vault. Vault deployment happens via the [dashboard](https://app.outlayer.ai/vault) or `outlayer vault init` CLI (not the SDK — your NEAR keys never touch us). Once deployed, binding is one option:
 
 ```ts
 const wallet = await OutlayerClient.register({ vaultId: 'vault.alice.near' });
 ```
 
-See [docs/vaults.md](docs/vaults.md) and https://outlayer.fastnear.com/docs/vaults.
+See [docs/vaults.md](docs/vaults.md) and https://app.outlayer.ai/docs/vaults.
 
 ## Examples
 

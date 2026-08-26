@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import {
+  AgentConnectDeniedError,
   BadRequestError,
   type Nep413Auth,
   NotFoundError,
@@ -9,13 +10,16 @@ import {
   PolicyDeniedError,
   RateLimitedError,
   UnauthorizedError,
+  WalletBusyError,
   WalletFrozenError,
 } from '../src/index.js';
 import { errorHandlers } from './handlers.js';
 import { server } from './setup.js';
 
 const apiKey = 'wk_test_xxx';
-const BASE = 'https://api.outlayer.fastnear.com';
+// The default mainnet base URL. Written out rather than imported so a silent
+// change to NETWORK_BASE_URLS fails a test instead of moving every mock with it.
+const BASE = 'https://api.outlayer.ai';
 
 // ============================================================================
 // Registration
@@ -83,7 +87,7 @@ describe('OutlayerClient.register', () => {
   it('uses testnet base URL when network=testnet', async () => {
     let receivedUrl = '';
     server.use(
-      http.post('https://api.testnet.outlayer.fastnear.com/register', ({ request }) => {
+      http.post('https://testnet-api.outlayer.ai/register', ({ request }) => {
         receivedUrl = request.url;
         return HttpResponse.json({
           wallet_id: '00000000-0000-0000-0000-000000000001',
@@ -93,7 +97,7 @@ describe('OutlayerClient.register', () => {
       }),
     );
     await OutlayerClient.register({ network: 'testnet' });
-    expect(receivedUrl).toBe('https://api.testnet.outlayer.fastnear.com/register');
+    expect(receivedUrl).toBe('https://testnet-api.outlayer.ai/register');
   });
 
   it('explicit baseUrl overrides network', async () => {
@@ -120,14 +124,14 @@ describe('OutlayerClient network option', () => {
   it('targets testnet for wallet ops when network=testnet', async () => {
     let receivedUrl = '';
     server.use(
-      http.get('https://api.testnet.outlayer.fastnear.com/wallet/v1/balance', ({ request }) => {
+      http.get('https://testnet-api.outlayer.ai/wallet/v1/balance', ({ request }) => {
         receivedUrl = request.url;
         return HttpResponse.json({ balance: '0', token: 'NEAR', account_id: 'wallet.near' });
       }),
     );
     const client = new OutlayerClient({ apiKey, network: 'testnet' });
     await client.getBalance({ chain: 'near' });
-    expect(receivedUrl).toContain('api.testnet.outlayer.fastnear.com');
+    expect(receivedUrl).toContain('testnet-api.outlayer.ai');
   });
 
   it('defaults to mainnet when no network specified', async () => {
@@ -140,7 +144,7 @@ describe('OutlayerClient network option', () => {
     );
     const client = new OutlayerClient({ apiKey });
     await client.getBalance({ chain: 'near' });
-    expect(receivedUrl).toContain('api.outlayer.fastnear.com');
+    expect(receivedUrl).toContain('api.outlayer.ai');
     expect(receivedUrl).not.toContain('testnet');
   });
 });
@@ -1022,7 +1026,12 @@ describe('client.policy', () => {
     expect(receivedBody).toMatchObject({ wallet_id: 'w1' });
   });
 
-  it('sign() wraps the encrypted_data field', async () => {
+  // `caller` is asserted as well as `encrypted_data`, because it is SIGNED:
+  // the coordinator refuses the request without it, and a signature made for
+  // the wrong account is refused on chain. Dropping it silently is exactly what
+  // this test used to allow — it called sign() with one argument, the missing
+  // field vanished from the JSON, and the assertion still matched.
+  it('sign() sends the encrypted data and the account that will submit it', async () => {
     let receivedBody: unknown = null;
     server.use(
       http.post(`${BASE}/wallet/v1/sign-policy`, async ({ request }) => {
@@ -1031,8 +1040,8 @@ describe('client.policy', () => {
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    const r = await client.policy.sign('AAAA');
-    expect(receivedBody).toEqual({ encrypted_data: 'AAAA' });
+    const r = await client.policy.sign('AAAA', 'alice.testnet');
+    expect(receivedBody).toEqual({ encrypted_data: 'AAAA', caller: 'alice.testnet' });
     expect(r.signature_hex).toBe('deadbeef');
   });
 
@@ -1971,5 +1980,272 @@ describe('Confidential Intents: confidentialBalance', () => {
       expect(r.balances).toHaveLength(2);
       expect(r.balances[0]?.token).toBe('nep141:wrap.near');
     }
+  });
+});
+
+describe('Agent Connect binding', () => {
+  it('records a personal_account binding and returns the executor to authorize', async () => {
+    // The whole point of the response: the caller cannot add the executor to
+    // its account's extension set until this call tells it which account that
+    // is. So a PUT that omitted it would leave the flow with no next step.
+    server.use(
+      http.put(`${BASE}/wallet/v1/binding`, async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        expect(body.asset_account_id).toBe('user.testnet');
+        expect(body.kind).toBe('personal_account');
+        expect(body).not.toHaveProperty('impl_version');
+        return HttpResponse.json({
+          binding_id: 'bnd_1',
+          wallet_id: 'w1',
+          kind: 'personal_account',
+          asset_account_id: 'user.testnet',
+          owner_account_id: 'user.testnet',
+          executor_account_id: 'ab'.repeat(32),
+          binding_status: 'pending',
+          created_at: '2026-08-19T00:00:00Z',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.putBinding({
+      asset_account_id: 'user.testnet',
+      kind: 'personal_account',
+    });
+    expect(r.executor_account_id).toBe('ab'.repeat(32));
+    // Nothing is authorized yet — the executor is not in the set.
+    expect(r.binding_status).toBe('pending');
+  });
+
+  it('asks for the setup kit as personal_account without the caller naming the mode', async () => {
+    // There is no kit for the leased mode, so the SDK pins the only value the
+    // endpoint accepts rather than letting a caller send one that 400s.
+    server.use(
+      http.get(`${BASE}/wallet/v1/binding/setup`, ({ request }) => {
+        expect(new URL(request.url).searchParams.get('kind')).toBe('personal_account');
+        return HttpResponse.json({
+          kind: 'personal_account',
+          asset_account_id: 'user.testnet',
+          executor_account_id: 'ab'.repeat(32),
+          code_hash: 'BwjDnyemmBhrCyuviDGpoQAm9mdjTfrX7ZjqgZB4MHvM',
+          transactions: [
+            { signer_id: 'user.testnet', receiver_id: 'user.testnet', actions: [] },
+          ],
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.getBindingSetup();
+    expect(r.transactions).toHaveLength(1);
+    expect(r.transactions[0].signer_id).toBe('user.testnet');
+  });
+
+  it('deletes idempotently', async () => {
+    server.use(
+      http.delete(`${BASE}/wallet/v1/binding`, () =>
+        HttpResponse.json({ binding_status: 'revoked', cancelled_approvals: 0 }),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.deleteBinding();
+    expect(r.binding_status).toBe('revoked');
+  });
+});
+
+describe('Agent Connect refusals carry what a client acts on', () => {
+  it('surfaces terminal, class and promise index instead of a bare message', async () => {
+    // The whole reason `terminal` exists: an agent must not retry a spent
+    // grant. A generic error with only {code, message} would force every
+    // caller to parse a sentence — or, more likely, retry forever.
+    server.use(
+      http.post(`${BASE}/wallet/v1/call`, () =>
+        HttpResponse.json(
+          {
+            error: 'agent_connect_denied',
+            message: 'spend exceeds the granted cap',
+            class: 'grant_exhausted',
+            terminal: true,
+            promise_index: 2,
+            additional_violations: 1,
+          },
+          { status: 403 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(
+      client.call({ receiver_id: 'agent.tla', method_name: 'w_execute_extension' }),
+    ).rejects.toSatisfy((e: unknown) => {
+      const err = e as AgentConnectDeniedError;
+      expect(err).toBeInstanceOf(AgentConnectDeniedError);
+      expect(err.terminal).toBe(true);
+      expect(err.class).toBe('grant_exhausted');
+      expect(err.promiseIndex).toBe(2);
+      expect(err.additionalViolations).toBe(1);
+      return true;
+    });
+  });
+
+  it('defaults terminal to true when the field is absent', async () => {
+    // A refusal we cannot classify is not one to retry blindly.
+    server.use(
+      http.post(`${BASE}/wallet/v1/call`, () =>
+        HttpResponse.json(
+          { error: 'agent_connect_denied', message: 'refused' },
+          { status: 403 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(
+      client.call({ receiver_id: 'agent.tla', method_name: 'w_execute_extension' }),
+    ).rejects.toSatisfy((e: unknown) => {
+      expect((e as AgentConnectDeniedError).terminal).toBe(true);
+      return true;
+    });
+  });
+
+  it('hands back the operation to poll when the wallet is busy', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/transfer`, () =>
+        HttpResponse.json(
+          {
+            error: 'wallet_busy',
+            message: 'another operation is using this wallet',
+            in_flight_request_id: '11111111-2222-3333-4444-555555555555',
+            in_flight_operation: 'swap',
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(client.transfer({ to: 'bob.near', amount: '1' })).rejects.toSatisfy(
+      (e: unknown) => {
+        const err = e as WalletBusyError;
+        expect(err).toBeInstanceOf(WalletBusyError);
+        expect(err.inFlightRequestId).toBe('11111111-2222-3333-4444-555555555555');
+        expect(err.inFlightOperation).toBe('swap');
+        return true;
+      },
+    );
+  });
+
+  it('names the operation even when there is no id to poll', async () => {
+    // The case the field exists for. The coordinator withholds the id until the
+    // request row is written — one handed out earlier answers 404, which reads
+    // as a request that was lost — so a busy answer arriving in that first
+    // moment has an operation and no id. A client that only reads the id sees
+    // nothing at all and cannot tell a two-second transfer from a cross-chain
+    // withdraw running for minutes.
+    server.use(
+      http.post(`${BASE}/wallet/v1/transfer`, () =>
+        HttpResponse.json(
+          {
+            error: 'wallet_busy',
+            message:
+              'a cross_chain_withdraw is using this wallet and has not written its request yet',
+            in_flight_request_id: null,
+            in_flight_operation: 'cross_chain_withdraw',
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey, maxRetries: 0 });
+    await expect(client.transfer({ to: 'bob.near', amount: '1' })).rejects.toSatisfy(
+      (e: unknown) => {
+        const err = e as WalletBusyError;
+        expect(err).toBeInstanceOf(WalletBusyError);
+        expect(err.inFlightRequestId).toBeNull();
+        expect(err.inFlightOperation).toBe('cross_chain_withdraw');
+        return true;
+      },
+    );
+  });
+});
+
+describe('wallet_busy is the one 409 worth asking again', () => {
+  it('retries a busy wallet and succeeds when it frees up', async () => {
+    // The whole point of the carve-out. A wallet runs one money-moving
+    // operation at a time so its limits are counted correctly, and a client
+    // doing nothing special should not be handed a failure for a condition
+    // that ends by itself a moment later.
+    let attempts = 0;
+    server.use(
+      http.post(`${BASE}/wallet/v1/transfer`, () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return HttpResponse.json(
+            {
+              error: 'wallet_busy',
+              message: 'another operation is using this wallet',
+              in_flight_request_id: 'req-42',
+            },
+            { status: 409 },
+          );
+        }
+        return HttpResponse.json({ request_id: 'req-99', status: 'processing' });
+      }),
+    );
+    const client = new OutlayerClient({
+      apiKey,
+      retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+    const res = await client.transfer({ chain: 'near', to: 'bob.near', amount: '1' });
+    expect(attempts).toBe(2);
+    expect(res.request_id).toBe('req-99');
+  });
+
+  it('gives up with a WalletBusyError that names what to poll', async () => {
+    // Retrying is not the only option, and when it runs out the caller still
+    // gets the operation id rather than a bare conflict.
+    server.use(
+      http.post(`${BASE}/wallet/v1/transfer`, () =>
+        HttpResponse.json(
+          {
+            error: 'wallet_busy',
+            message: 'another operation is using this wallet',
+            in_flight_request_id: 'req-42',
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({
+      apiKey,
+      retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+    await expect(
+      client.transfer({ chain: 'near', to: 'bob.near', amount: '1' }),
+    ).rejects.toSatisfy((e: unknown) => {
+      const err = e as WalletBusyError;
+      expect(err).toBeInstanceOf(WalletBusyError);
+      expect(err.inFlightRequestId).toBe('req-42');
+      return true;
+    });
+  });
+
+  it('does NOT retry a 409 that will never resolve itself', async () => {
+    // Judged by code, not by status. A duplicate idempotency key is the same
+    // 409 and repeating it is pointless — worse, it teaches a client that
+    // conflicts are transient.
+    let attempts = 0;
+    server.use(
+      http.post(`${BASE}/wallet/v1/transfer`, () => {
+        attempts += 1;
+        return HttpResponse.json(
+          { error: 'duplicate_idempotency_key', message: 'already submitted' },
+          { status: 409 },
+        );
+      }),
+    );
+    const client = new OutlayerClient({
+      apiKey,
+      retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+    await expect(
+      client.transfer({ chain: 'near', to: 'bob.near', amount: '1' }),
+    ).rejects.toThrow();
+    expect(attempts).toBe(1);
   });
 });

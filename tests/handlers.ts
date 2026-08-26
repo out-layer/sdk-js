@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 
-const BASE = 'https://api.outlayer.fastnear.com';
+const BASE = 'https://api.outlayer.ai';
 
 export const handlers = [
   // POST /register
@@ -9,7 +9,7 @@ export const handlers = [
       wallet_id: '00000000-0000-0000-0000-000000000001',
       api_key: 'wk_test_2a8b1f3c4d5e6789abcdef0123456789',
       near_account_id: '000000000000000000000000000000000001',
-      handoff_url: 'https://outlayer.fastnear.com/wallet?api_key=wk_test_...',
+      handoff_url: 'https://app.outlayer.ai/wallet?api_key=wk_test_...',
       trial: {
         calls_remaining: 100,
         expires_at: '2026-06-20T00:00:00Z',

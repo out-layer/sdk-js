@@ -11,6 +11,18 @@ export type ErrorBody = {
   tx_hash?: string;
   /** `onchain_tx_failed` only: raw NEAR execution-failure JSON. */
   failure?: unknown;
+  /** `agent_connect_denied` only: the rule class, e.g. `grant_exhausted`. */
+  class?: string;
+  /** `agent_connect_denied` only: retrying is pointless; the owner must act. */
+  terminal?: boolean;
+  /** `agent_connect_denied` only: which promise of the decoded request. */
+  promise_index?: number | null;
+  /** `agent_connect_denied` only: further violations beyond the reported one. */
+  additional_violations?: number;
+  /** `wallet_busy` only: the request to poll before retrying. */
+  in_flight_request_id?: string | null;
+  /** `wallet_busy` only: what the holder is doing, e.g. `cross_chain_withdraw`. */
+  in_flight_operation?: string | null;
 };
 
 export interface OutlayerErrorOptions {
@@ -93,6 +105,76 @@ export class OnChainTxFailedError extends OutlayerError {
   }
 }
 
+/**
+ * The Agent Connect pre-flight refused before signing, so no gas was spent.
+ *
+ * Read {@link terminal} FIRST. `true` means retrying is pointless and the
+ * owner has to act — issue a new grant, re-provision the executor, fund the
+ * account, or rewrite the request. `false` means the same request may succeed
+ * later untouched (a freeze lifted, recognized wallet code restored). An agent
+ * that retries a terminal refusal spins forever while nobody is told.
+ */
+export class AgentConnectDeniedError extends OutlayerError {
+  /** Stable machine class, e.g. `grant_exhausted`, `receiver_not_granted`,
+   *  `grant_shape_violation:grant_call_deposit`. */
+  readonly class: string;
+  readonly terminal: boolean;
+  /** Which promise of the decoded request, when the rule is about one. */
+  readonly promiseIndex: number | null;
+  /** Further violations the same request carries beyond this one. */
+  readonly additionalViolations: number;
+
+  constructor(
+    opts: OutlayerErrorOptions & {
+      violationClass?: string | undefined;
+      terminal?: boolean | undefined;
+      promiseIndex?: number | null | undefined;
+      additionalViolations?: number | undefined;
+    },
+  ) {
+    super(opts);
+    this.name = 'AgentConnectDeniedError';
+    this.class = opts.violationClass ?? '';
+    // Default TRUE: an unknown refusal is not something to retry blindly.
+    this.terminal = opts.terminal ?? true;
+    this.promiseIndex = opts.promiseIndex ?? null;
+    this.additionalViolations = opts.additionalViolations ?? 0;
+  }
+}
+
+/**
+ * Another money-moving operation holds this wallet. A wallet runs one spend at
+ * a time so the spending limits are counted correctly.
+ *
+ * Poll {@link inFlightRequestId} when it is set. `null` never means the wallet
+ * is free — it means there is nothing to poll, and there are two reasons for
+ * that: the holder has not written its request row yet (retrying shortly
+ * yields an id), or the operation writes no request row at all, as a
+ * cross-chain deposit intent does. The id is deliberately withheld until its
+ * row exists, because one handed out earlier answers `404` and reads as a
+ * request that was lost.
+ *
+ * {@link inFlightOperation} is set either way, and is the one to branch on: a
+ * `transfer` clears in seconds while a `cross_chain_withdraw` can run for
+ * minutes.
+ */
+export class WalletBusyError extends OutlayerError {
+  readonly inFlightRequestId: string | null;
+  readonly inFlightOperation: string | null;
+
+  constructor(
+    opts: OutlayerErrorOptions & {
+      inFlightRequestId?: string | null | undefined;
+      inFlightOperation?: string | null | undefined;
+    },
+  ) {
+    super(opts);
+    this.name = 'WalletBusyError';
+    this.inFlightRequestId = opts.inFlightRequestId ?? null;
+    this.inFlightOperation = opts.inFlightOperation ?? null;
+  }
+}
+
 const codeToCtor: Partial<Record<ErrorCode, new (opts: OutlayerErrorOptions) => OutlayerError>> = {
   policy_denied: PolicyDeniedError,
   wallet_frozen: WalletFrozenError,
@@ -107,6 +189,7 @@ const codeToCtor: Partial<Record<ErrorCode, new (opts: OutlayerErrorOptions) => 
   insufficient_balance: BadRequestError,
   unsupported_chain: BadRequestError,
   unsupported_token: BadRequestError,
+  binding_not_found: NotFoundError,
 };
 
 export function makeError(body: ErrorBody, status: number): OutlayerError {
@@ -120,6 +203,25 @@ export function makeError(body: ErrorBody, status: number): OutlayerError {
   // (not under `details`) — surface them on the typed error.
   if (code === 'onchain_tx_failed') {
     return new OnChainTxFailedError({ ...opts, txHash: body.tx_hash, failure: body.failure });
+  }
+  // Same reason as above: these bodies carry their meaning OUTSIDE `details`,
+  // and a client that only sees {code, message} cannot act on `terminal` —
+  // which is the one field that decides whether to retry at all.
+  if (code === 'agent_connect_denied') {
+    return new AgentConnectDeniedError({
+      ...opts,
+      violationClass: body.class,
+      terminal: body.terminal,
+      promiseIndex: body.promise_index,
+      additionalViolations: body.additional_violations,
+    });
+  }
+  if (code === 'wallet_busy') {
+    return new WalletBusyError({
+      ...opts,
+      inFlightRequestId: body.in_flight_request_id,
+      inFlightOperation: body.in_flight_operation,
+    });
   }
   const Ctor = codeToCtor[code] ?? OutlayerError;
   return new Ctor(opts);

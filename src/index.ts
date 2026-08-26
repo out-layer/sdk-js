@@ -87,6 +87,8 @@ export {
   NotFoundError,
   BadRequestError,
   OnChainTxFailedError,
+  AgentConnectDeniedError,
+  WalletBusyError,
 } from './errors.js';
 
 export type { ApiErrorCode, ErrorCode } from './errors.js';

@@ -5,8 +5,8 @@ import type { paths } from './types.js';
 export type Network = 'mainnet' | 'testnet';
 
 export const NETWORK_BASE_URLS: Record<Network, string> = {
-  mainnet: 'https://api.outlayer.fastnear.com',
-  testnet: 'https://api.testnet.outlayer.fastnear.com',
+  mainnet: 'https://api.outlayer.ai',
+  testnet: 'https://testnet-api.outlayer.ai',
 };
 
 export const DEFAULT_BASE_URL = NETWORK_BASE_URLS.mainnet;
@@ -79,6 +79,27 @@ export type FetchCall<T> = () => Promise<{
   response: Response;
 }>;
 
+/**
+ * Is this worth asking again?
+ *
+ * Server faults are, by status. The carve-out is `wallet_busy`: a wallet runs
+ * one money-moving operation at a time so its spending limits are counted
+ * correctly, and a 409 saying so is the most retryable answer the API gives —
+ * it clears the moment the operation in flight finishes. Judged by CODE and not
+ * by status, because 409 in general is a conflict you must resolve, not one
+ * that resolves itself: `already_approved` and a duplicate idempotency key are
+ * the same status and must never be repeated.
+ *
+ * Retrying is not the only option a caller has here. `WalletBusyError` carries
+ * `inFlightRequestId`, which can be polled instead of guessed at — but a client
+ * that does nothing special should still not be handed a failure for a
+ * condition that ends on its own.
+ */
+function isRetryable(err: OutlayerError): boolean {
+  if (err.status >= 500) return true;
+  return err.code === 'wallet_busy';
+}
+
 export async function runWithRetry<T>(
   call: FetchCall<T>,
   retry: Required<RetryConfig>,
@@ -91,7 +112,7 @@ export async function runWithRetry<T>(
         return data as T;
       }
       const err = await errorFromResponse(response, error);
-      if (err.status >= 500 && attempt < retry.maxAttempts) {
+      if (isRetryable(err) && attempt < retry.maxAttempts) {
         lastError = err;
         await sleep(backoff(attempt, retry));
         continue;

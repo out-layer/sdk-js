@@ -80,22 +80,32 @@ export interface paths {
          *     Set `source=intents` to read the wallet's intents.near balance
          *     (`mt_balance_of`) instead of the on-chain account balance.
          *
-         *     This endpoint always answers for the WALLET'S OWN account (the
+         *     By default this endpoint answers for the WALLET'S OWN account (the
          *     executor), bound or not — its meaning never changes when a binding is
-         *     added. The bound asset account has its own endpoint,
-         *     `GET /wallet/v1/binding/balance`.
+         *     added. Pass `account=asset` to ask about the bound account instead;
+         *     that path is identical to `GET /wallet/v1/binding/balance`, which
+         *     remains available.
+         *
+         *     The default is deliberately NOT the binding. Following it would change,
+         *     with no warning, which account an existing caller's number describes —
+         *     including for `personal_account` bindings, whose owners never asked for
+         *     Agent Connect semantics. `asset` is explicit.
          *
          *     The rule for both sides of the API is one sentence: everything under
          *     `/wallet/v1/binding/` is the bound account, everything else is the
-         *     wallet itself. `/wallet/v1/transfer` moves the wallet's own funds;
+         *     wallet itself unless `account=asset` says otherwise.
+         *     `/wallet/v1/transfer` moves the wallet's own funds;
          *     `/wallet/v1/binding/transfer` moves the bound account's.
          *
-         *     `source=intents` belongs here and only here: an intents.near deposit is
-         *     credited to whoever signed it, which is always the executor, so the
-         *     bound account has no intents balance and never will.
+         *     `account=asset` on a wallet with no ACTIVE binding is refused rather
+         *     than answered with the executor's figure under an asset label.
          *
-         *     The response names the identity it describes in `account`, which for
-         *     this endpoint is always `executor`.
+         *     `source=intents` belongs to the executor and only the executor: an
+         *     intents.near deposit is credited to whoever signed it, so the bound
+         *     account has no intents balance and never will. Combining it with
+         *     `account=asset` is refused.
+         *
+         *     The response names the identity it describes in `account`.
          */
         get: operations["getBalance"];
         put?: never;
@@ -2092,10 +2102,13 @@ export interface components {
              *     guest the moment one activated would move every derived identity
              *     with nothing in your code to point at.
              *
-             *     Requires an ACTIVE binding; the worker re-verifies the claim
-             *     against the chain inside the TEE and refuses the job if the chain
-             *     disagrees. Billing never follows it: `NEAR_USER_ACCOUNT_ID` stays
-             *     the paying key's owner.
+             *     Requires an ACTIVE binding, and says so rather than falling back:
+             *     with no binding — or with one still pending, or revoked — the call
+             *     is refused `409 no_bound_identity` before it is priced or charged.
+             *     The worker then re-verifies the claim against the chain inside the
+             *     TEE and refuses the job if the chain disagrees. Billing never
+             *     follows the name: `NEAR_USER_ACCOUNT_ID` stays the paying key's
+             *     owner.
              * @default false
              */
             use_bound_identity: boolean;
@@ -2125,10 +2138,15 @@ export interface components {
             /** @description The human sentence. */
             error: string;
             /**
+             * @description Present on the refusals where retrying has an answer. `true` means the same request can never succeed; `false` means it succeeds once something changes that the caller or the wallet's owner can change. `no_bound_identity` sends both: `true` when the paying key names no wallet at all, `false` when the wallet simply has no ACTIVE binding yet.
+             *     `upstream_unavailable` (503 + `Retry-After`) is this door's transient answer — something we depend on has not caught up and the same call works later. It is deliberately NOT called `service_unavailable`: on `/wallet/v1/*` that code means a feature this deployment does not offer and must not be retried, and a client's retry rule is written once for every answer.
+             */
+            terminal?: boolean;
+            /**
              * @description Machine-readable name of the refusal.
              * @enum {string}
              */
-            reason: "allowance_no_deposit" | "bad_key_format" | "compute_limit_too_low" | "connector_quota_exceeded" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "service_unavailable" | "tee_session_required" | "timeout" | "too_many_concurrent_calls" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
+            reason: "allowance_no_deposit" | "bad_key_format" | "compute_limit_too_low" | "connector_quota_exceeded" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "too_many_concurrent_calls" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
         };
         CallTimedOut: {
             error?: string;
@@ -2243,7 +2261,7 @@ export interface components {
          */
         RequestStatus: "pending_deposit" | "processing" | "success" | "partially_failed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "cancelled" | "needs_review";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "missing_signature" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -2332,7 +2350,7 @@ export interface components {
             address: string;
             public_key: string;
             vault_id?: string | null;
-            /** @description Agent Connect: the bound named asset account. Only present for chain=near; null/absent when the wallet has no binding. */
+            /** @description Agent Connect: the bound named asset account. Always present for chain=near and `null` when the wallet has no binding — a key that is simply absent is a different answer to a client that checks for one. */
             asset_account_id?: string | null;
             /** @description Agent Connect: the executor identity. For chain=near always equal to `address`. */
             executor_account_id?: string | null;
@@ -2418,7 +2436,6 @@ export interface components {
          *       "wallet_id": "9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20",
          *       "kind": "hos_lease",
          *       "asset_account_id": "agent.tla",
-         *       "owner_account_id": "owner.near",
          *       "executor_account_id": "9c3c9e101c1f4f5e9c4a1d7b9a8f3c20",
          *       "binding_status": "pending",
          *       "impl_version": 6,
@@ -2432,8 +2449,7 @@ export interface components {
             /** @enum {string} */
             kind: "hos_lease" | "personal_account";
             asset_account_id: string;
-            owner_account_id: string;
-            /** @description The OutLayer execution identity — register it in the account's extension set (and, for hos_lease, provision its spend grant). */
+            /** @description The OutLayer execution identity — register it in the account's extension set (and, for hos_lease, provision its spend grant). NOTE: the response deliberately carries no owner. `owner_account_id` is accepted at PUT as the provisioning receipt House of Stake hands the integrator, and is stored — but it is checked for shape only and compared against nothing, so returning it would present a claim as an established fact. Who holds a leased account is `nft_item_info.owner_id` on chain, and what ends a lane when it changes hands is the rotation pin. */
             executor_account_id: string;
             /**
              * @description OutLayer's view only, not an attestation of chain state. `pending` until the executor is first observed live in the extension set; `suspended` on reversible faults (freeze, non-Active state, unsupported impl_version, unrecognized code hash); `revoked` is terminal (extension removed, lease/state expired, ownership rotated, or DELETE).
@@ -3604,10 +3620,10 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Unavailable — either permanently on this deployment or transiently. `service_unavailable`: feature not enabled/configured (e.g. the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off or the confidential upstream is not configured) — do not retry. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request — transient, retry after the `Retry-After` header. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed — transient, retry after `Retry-After`. (Transient upstream failures use 503 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, hiding the JSON body from clients.) */
+        /** @description Unavailable — either permanently on this deployment or transiently, and the code says which. `service_unavailable`: feature not enabled/configured (e.g. the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off, the binding-event endpoints without a webhook secret, or NEAR Intents on a network with no solvers) — do not retry; no interval is sent because none would be true. `chain_unavailable`: the chain, or a node in front of it, could not answer this second — a balance that could not be read, a code hash that could not be fetched, a binding that could not be verified, a transaction that expired against a block the node has forgotten. Nothing happened and nothing was charged — transient, retry after the `Retry-After` header. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request — transient, retry after `Retry-After`. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed — transient, retry after `Retry-After`. (Transient upstream failures use 503 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, hiding the JSON body from clients.) */
         ServiceUnavailable: {
             headers: {
-                /** @description Present on transient failures (`keystore_error`, `confidential_jwt_expired`) — seconds to wait before retrying. */
+                /** @description Present on transient failures (`chain_unavailable`, `keystore_error`, `confidential_jwt_expired`) — seconds to wait before retrying. Absent on `service_unavailable`, which is not transient: there is no interval after which an unset environment variable becomes set. */
                 "Retry-After"?: number;
                 [name: string]: unknown;
             };
@@ -3705,6 +3721,8 @@ export interface operations {
     getBalance: {
         parameters: {
             query?: {
+                /** @description Which of a bound wallet's two identities the balances describe. Omitted means `executor`, unchanged from before this parameter existed. `asset` requires an ACTIVE binding and is refused otherwise. */
+                account?: "asset" | "executor";
                 chain?: components["schemas"]["Chain"];
                 /** @description Token ID (`nep141:<contract>` or `native`). */
                 token?: string;
@@ -5879,6 +5897,25 @@ export interface operations {
                 };
             };
             /**
+             * @description `no_bound_identity` — the call asked to run as a bound account with
+             *     `use_bound_identity`, and there is none to run as: either the paying
+             *     key names no wallet (`terminal: true`), or the wallet has no ACTIVE
+             *     binding (`terminal: false` — a pending or revoked binding authorizes
+             *     nothing, and one that activates later makes the same call work).
+             *
+             *     Refused before the call is priced or charged, and never answered by
+             *     running the job under the caller's own name: which account the guest
+             *     IS decides what a connector does with it.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallRefusal"];
+                };
+            };
+            /**
              * @description Three different refusals share this status, and a caller tells them
              *     apart by `reason` rather than by the code:
              *
@@ -5904,6 +5941,27 @@ export interface operations {
                         used?: number;
                         limit?: number;
                     };
+                };
+            };
+            /**
+             * @description `upstream_unavailable` — something this call depends on has not
+             *     caught up yet, and the same call works later. `keystore_error` —
+             *     the TEE keystore was unreachable or refused to sign. Both are
+             *     transient and both are sent with a `Retry-After` interval.
+             *
+             *     Deliberately not `service_unavailable`: on `/wallet/v1/*` that code
+             *     means a feature this deployment does not offer and carries no
+             *     interval, and one product must not use one code for "come back" and
+             *     "never come back".
+             */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallRefusal"];
                 };
             };
         };

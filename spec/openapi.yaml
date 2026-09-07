@@ -4247,7 +4247,8 @@ components:
         act — issue a new grant, re-provision the executor, fund the account,
         or rewrite the request. `false` means the same request may succeed
         later with nothing changed (a freeze lifted, a parked account
-        reactivated, recognized wallet code restored).
+        reactivated, recognized wallet code restored, the account's registry
+        caught up with it).
       required: [error, message, class, terminal]
       properties:
         error:
@@ -4263,6 +4264,9 @@ components:
             `executor_not_in_control_set`, `lease_expired`, `account_expired`,
             `account_frozen`, `account_not_active`,
             `unsupported_wallet_implementation`, `unrecognized_wallet_code`,
+            `registry_disagrees` (a leased account whose collection's
+            `nft_token` does not confirm the account's own `nft_item_info` —
+            reversible, the registry may trail by a block),
             `binding_evidence_mismatch`, `chain_status_unreadable`. Spend
             grant: `grant_missing`, `grant_expired`, `grant_unreadable`,
             `grant_exhausted`, `receiver_not_granted`, `token_not_granted`,
@@ -4354,7 +4358,10 @@ components:
             compared against nothing, so returning it would present a claim as
             an established fact. Who holds a leased account is
             `nft_item_info.owner_id` on chain, and what ends a lane when it
-            changes hands is the rotation pin.
+            changes hands is the rotation pin — the item's `owner_id`,
+            `rotation_epoch` and `rotation_seq` as read at activation: a
+            different owner, or a different seq inside the same epoch, ends
+            the binding; a new epoch under the same owner re-establishes it.
         binding_status:
           type: string
           enum: [pending, active, suspended, revoked]

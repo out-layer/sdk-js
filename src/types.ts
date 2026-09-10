@@ -2089,7 +2089,12 @@ export interface components {
              * @default false
              */
             async: boolean;
-            /** @description Pin a specific published version instead of the active one. */
+            /**
+             * @description Pin a specific published version instead of the active one.
+             *     Refused with `invalid_version_key` (400) on a connector project:
+             *     connectors run their active version only, since an older version
+             *     would run an older manifest and older code under the curated name.
+             */
             version_key?: string;
             /**
              * @description Agent Connect: run under the BOUND asset account's name, so the
@@ -2240,10 +2245,17 @@ export interface components {
             agent_account?: string;
         };
         /**
-         * @description Supported chain identifier. The EVM chains (ethereum, polygon, base, arbitrum, optimism, bsc, avalanche) all share ONE derived address (a single secp256k1 key) and are signable via `/wallet/v1/evm/*`. `solana` has its own derived ed25519 address and is signable via `/wallet/v1/solana/*`. `bitcoin` can be derived in the keystore but is not yet serviced by wallet v1.
+         * @description Supported chain identifier. The EVM chains (ethereum, polygon, base, arbitrum, optimism, bsc, avalanche, hyperevm) all share ONE derived address (a single secp256k1 key) and are signable via `/wallet/v1/evm/*`; `hyperevm` (Hyperliquid's EVM, chain id 999) is signable but not a deposit or withdraw chain. `solana` has its own derived ed25519 address and is signable via `/wallet/v1/solana/*`. `bitcoin` can be derived in the keystore but is not yet serviced by wallet v1. An endpoint that serves fewer chains than this list (balance, transfer and delete are NEAR-only; withdraw takes `WithdrawChain`) answers 400 for the ones it does not.
          * @enum {string}
          */
-        Chain: "near" | "ethereum" | "polygon" | "base" | "arbitrum" | "optimism" | "bsc" | "avalanche" | "solana" | "bitcoin";
+        Chain: "near" | "ethereum" | "polygon" | "base" | "arbitrum" | "optimism" | "bsc" | "avalanche" | "hyperevm" | "solana" | "bitcoin";
+        /** @description A sub-key of the wallet's EVM key: a distinct secp256k1 key, and so a distinct `0x` address, of the same wallet (`subkey:{id}:evm:{sub_path}` in the keystore). Omitted or empty means the wallet's own key. EVM chains only; a Solana or NEAR endpoint refuses it. A sub-key is a separate address under the wallet's one authority, not a separate authority: any holder of the wallet's API key can sign for any path, and the same `evm_sign` capability governs every path. Nothing about a sub-key is stored; its address is derived on request, like the wallet's own. */
+        SubPath: string;
+        /**
+         * @description A chain funds can be withdrawn to: `near` directly, the rest through the 1Click bridge. Narrower than `Chain` — `hyperevm` is signable but not bridged.
+         * @enum {string}
+         */
+        WithdrawChain: "near" | "solana" | "ethereum" | "base" | "arbitrum" | "bitcoin" | "bsc" | "polygon" | "optimism" | "avalanche";
         /**
          * @description Tracked async request / policy transaction type. `withdraw` is a
          *     same-chain intents withdrawal; `cross_chain_withdraw` is a separate type
@@ -2347,6 +2359,7 @@ export interface components {
         AddressResponse: {
             wallet_id: string;
             chain: components["schemas"]["Chain"];
+            sub_path?: components["schemas"]["SubPath"];
             address: string;
             public_key: string;
             vault_id?: string | null;
@@ -2452,10 +2465,12 @@ export interface components {
             /** @description The OutLayer execution identity — register it in the account's extension set (and, for hos_lease, provision its spend grant). NOTE: the response deliberately carries no owner. `owner_account_id` is accepted at PUT as the provisioning receipt House of Stake hands the integrator, and is stored — but it is checked for shape only and compared against nothing, so returning it would present a claim as an established fact. Who holds a leased account is `nft_item_info.owner_id` on chain, and what ends a lane when it changes hands is the rotation pin — the item's `owner_id`, `rotation_epoch` and `rotation_seq` as read at activation: a different owner, or a different seq inside the same epoch, ends the binding; a new epoch under the same owner re-establishes it. */
             executor_account_id: string;
             /**
-             * @description OutLayer's view only, not an attestation of chain state. `pending` until the executor is first observed live in the extension set; `suspended` on reversible faults (freeze, non-Active state, unsupported impl_version, unrecognized code hash); `revoked` is terminal (extension removed, lease/state expired, ownership rotated, or DELETE).
+             * @description OutLayer's view only, not an attestation of chain state. `pending` until the executor is first observed live in the extension set; `suspended` on reversible faults (freeze, non-Active state, unsupported impl_version, unrecognized code hash); `revoked` is terminal (extension removed, lease/state expired, ownership rotated, or DELETE). Anything but `active` carries `status_reason`.
              * @enum {string}
              */
             binding_status: "pending" | "active" | "suspended" | "revoked";
+            /** @description Why the binding is not `active`: the fault class the last observation reported, in the vocabulary a refused spend uses (`AgentConnectDeniedResponse.class` — `executor_not_in_control_set`, `account_frozen`, `unsupported_wallet_implementation`, `unrecognized_wallet_code`, `registry_disagrees`, ...). Absent while `active` and until the first observation; on `revoked`, what ended the lane. A `pending` personal binding reads `executor_not_in_control_set` until the owner adds the executor. */
+            status_reason?: string | null;
             /** @description Absent for kind=personal_account. */
             impl_version?: number | null;
             /** @description Derived by OutLayer, never client-supplied. Absent for kind=personal_account, whose versioning is the account's code hash checked at verify time. */
@@ -2678,7 +2693,7 @@ export interface components {
             tx_hash?: string | null;
         };
         WithdrawRequest: {
-            chain: components["schemas"]["Chain"];
+            chain: components["schemas"]["WithdrawChain"];
             /** @description Destination address on the target chain. */
             to?: string;
             amount: string;
@@ -3186,11 +3201,13 @@ export interface components {
         };
         EvmSignTypedDataRequest: {
             chain: components["schemas"]["Chain"];
+            sub_path?: components["schemas"]["SubPath"];
             /** @description Standard EIP-712 v4 object (as `eth_signTypedData_v4`): `{ domain, types, primaryType, message }`. Arbitrary struct types are supported (incl. EIP-3009 `TransferWithAuthorization` and EIP-2612 `Permit`). The digest is computed server-side — no client-supplied hash is trusted. */
             typed_data: Record<string, never>;
         };
         EvmSignMessageRequest: {
             chain: components["schemas"]["Chain"];
+            sub_path?: components["schemas"]["SubPath"];
             /** @description The message to sign under EIP-191 `personal_sign`, interpreted per `encoding`. */
             message: string;
             /**
@@ -3202,12 +3219,14 @@ export interface components {
         };
         EvmSignTransactionRequest: {
             chain: components["schemas"]["Chain"];
+            sub_path?: components["schemas"]["SubPath"];
             /** @description Serialized unsigned transaction, `0x`-hex (e.g. viem `serializeTransaction(tx)`). The service keccak256-hashes and signs it — it does not parse, assemble, or broadcast the transaction. */
             unsigned_tx: string;
         };
         EvmSignResponse: {
-            /** @description 65-byte recoverable EVM signature, `0x`-hex (`r‖s‖v`, `v ∈ {27,28}`, low-s). `ecrecover` over the signed digest returns the wallet's EVM address. */
+            /** @description 65-byte recoverable EVM signature, `0x`-hex (`r‖s‖v`, `v ∈ {27,28}`, low-s). `ecrecover` over the signed digest returns the wallet's EVM address — or, when `sub_path` was given, that sub-key's address from `GET /wallet/v1/address?chain=<evm>&sub_path=<same>`. */
             signature: string;
+            sub_path?: components["schemas"]["SubPath"];
             chain: components["schemas"]["Chain"];
             wallet_id: string;
         };
@@ -3686,6 +3705,7 @@ export interface operations {
         parameters: {
             query: {
                 chain: components["schemas"]["Chain"];
+                sub_path?: components["schemas"]["SubPath"];
             };
             header?: never;
             path?: never;

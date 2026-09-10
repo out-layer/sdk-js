@@ -173,6 +173,11 @@ paths:
           required: true
           schema:
             $ref: '#/components/schemas/Chain'
+        - name: sub_path
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/SubPath'
       responses:
         '200':
           description: Address derived
@@ -3695,7 +3700,12 @@ components:
             connection. No window applies on this path — long work belongs here.
         version_key:
           type: string
-          description: Pin a specific published version instead of the active one.
+          pattern: '^[A-Za-z0-9._-]{1,128}$'
+          description: |
+            Pin a specific published version instead of the active one.
+            Refused with `invalid_version_key` (400) on a connector project:
+            connectors run their active version only, since an older version
+            would run an older manifest and older code under the curated name.
         use_bound_identity:
           type: boolean
           default: false
@@ -3888,14 +3898,40 @@ components:
     # ----- Primitives -----
     Chain:
       type: string
-      enum: [near, ethereum, polygon, base, arbitrum, optimism, bsc, avalanche, solana, bitcoin]
+      enum: [near, ethereum, polygon, base, arbitrum, optimism, bsc, avalanche, hyperevm, solana, bitcoin]
       description: >-
         Supported chain identifier. The EVM chains (ethereum, polygon, base,
-        arbitrum, optimism, bsc, avalanche) all share ONE derived address (a
-        single secp256k1 key) and are signable via `/wallet/v1/evm/*`.
+        arbitrum, optimism, bsc, avalanche, hyperevm) all share ONE derived
+        address (a single secp256k1 key) and are signable via
+        `/wallet/v1/evm/*`; `hyperevm` (Hyperliquid's EVM, chain id 999) is
+        signable but not a deposit or withdraw chain.
         `solana` has its own derived ed25519 address and is signable via
         `/wallet/v1/solana/*`. `bitcoin` can be derived in the keystore but is
-        not yet serviced by wallet v1.
+        not yet serviced by wallet v1. An endpoint that serves fewer chains
+        than this list (balance, transfer and delete are NEAR-only; withdraw
+        takes `WithdrawChain`) answers 400 for the ones it does not.
+
+    SubPath:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+      description: >-
+        A sub-key of the wallet's EVM key: a distinct secp256k1 key, and so a
+        distinct `0x` address, of the same wallet
+        (`subkey:{id}:evm:{sub_path}` in the keystore). Omitted or empty means
+        the wallet's own key. EVM chains only; a Solana or NEAR endpoint refuses
+        it. A sub-key is a separate address under the wallet's one authority,
+        not a separate authority: any holder of the wallet's API key can sign
+        for any path, and the same `evm_sign` capability governs every path.
+        Nothing about a sub-key is stored; its address is derived on request,
+        like the wallet's own.
+
+    WithdrawChain:
+      type: string
+      enum: [near, solana, ethereum, base, arbitrum, bitcoin, bsc, polygon, optimism, avalanche]
+      description: >-
+        A chain funds can be withdrawn to: `near` directly, the rest through the
+        1Click bridge. Narrower than `Chain` — `hyperevm` is signable but not
+        bridged.
 
     RequestType:
       type: string
@@ -4119,6 +4155,8 @@ components:
           type: string
         chain:
           $ref: '#/components/schemas/Chain'
+        sub_path:
+          $ref: '#/components/schemas/SubPath'
         address:
           type: string
         public_key:
@@ -4371,7 +4409,19 @@ components:
             extension set; `suspended` on reversible faults (freeze,
             non-Active state, unsupported impl_version, unrecognized code
             hash); `revoked` is terminal (extension removed, lease/state
-            expired, ownership rotated, or DELETE).
+            expired, ownership rotated, or DELETE). Anything but `active`
+            carries `status_reason`.
+        status_reason:
+          type: [string, 'null']
+          description: >-
+            Why the binding is not `active`: the fault class the last
+            observation reported, in the vocabulary a refused spend uses
+            (`AgentConnectDeniedResponse.class` — `executor_not_in_control_set`,
+            `account_frozen`, `unsupported_wallet_implementation`,
+            `unrecognized_wallet_code`, `registry_disagrees`, ...). Absent
+            while `active` and until the first observation; on `revoked`, what
+            ended the lane. A `pending` personal binding reads
+            `executor_not_in_control_set` until the owner adds the executor.
         impl_version:
           type: [integer, 'null']
           description: Absent for kind=personal_account.
@@ -4735,7 +4785,7 @@ components:
       required: [chain, amount]
       properties:
         chain:
-          $ref: '#/components/schemas/Chain'
+          $ref: '#/components/schemas/WithdrawChain'
         to:
           type: string
           description: Destination address on the target chain.
@@ -5657,6 +5707,8 @@ components:
       properties:
         chain:
           $ref: '#/components/schemas/Chain'
+        sub_path:
+          $ref: '#/components/schemas/SubPath'
         typed_data:
           type: object
           description: >-
@@ -5672,6 +5724,8 @@ components:
       properties:
         chain:
           $ref: '#/components/schemas/Chain'
+        sub_path:
+          $ref: '#/components/schemas/SubPath'
         message:
           type: string
           description: >-
@@ -5694,6 +5748,8 @@ components:
       properties:
         chain:
           $ref: '#/components/schemas/Chain'
+        sub_path:
+          $ref: '#/components/schemas/SubPath'
         unsigned_tx:
           type: string
           description: >-
@@ -5710,7 +5766,10 @@ components:
           description: >-
             65-byte recoverable EVM signature, `0x`-hex (`r‖s‖v`, `v ∈ {27,28}`,
             low-s). `ecrecover` over the signed digest returns the wallet's EVM
-            address.
+            address — or, when `sub_path` was given, that sub-key's address
+            from `GET /wallet/v1/address?chain=<evm>&sub_path=<same>`.
+        sub_path:
+          $ref: '#/components/schemas/SubPath'
         chain:
           $ref: '#/components/schemas/Chain'
         wallet_id:

@@ -290,9 +290,17 @@ export class OutlayerClient {
 
   // ------- Wallet read -------
 
-  getAddress(chain: Chain): Promise<AddressResponse> {
+  /**
+   * Derive the wallet's address on `chain`. `subPath` (EVM chains only) names a
+   * sub-key of the wallet's EVM key — a distinct address one level below the
+   * wallet's own, for balances that must not reach each other; the same path
+   * given to `evmSign*` signs with that key.
+   */
+  getAddress(chain: Chain, subPath?: string): Promise<AddressResponse> {
+    const query: { chain: Chain; sub_path?: string } = { chain };
+    if (subPath) query.sub_path = subPath;
     return runWithRetry(
-      () => this.client.GET('/wallet/v1/address', { params: { query: { chain } } }),
+      () => this.client.GET('/wallet/v1/address', { params: { query } }),
       this.retry,
     );
   }

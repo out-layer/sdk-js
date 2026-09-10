@@ -62,7 +62,7 @@ That's the whole flow. The wallet has no policy yet, so withdraws are unrestrict
 | Surface | What it does |
 |---|---|
 | `OutlayerClient.register()` | Create a new wallet, get an API key |
-| `client.getAddress(chain)` | Derive address for NEAR / Ethereum / Solana / Bitcoin |
+| `client.getAddress(chain, subPath?)` | Derive address for NEAR / EVM (incl. HyperEVM) / Solana; `subPath` = an EVM sub-key |
 | `client.getBalance({...})` | Read on-chain or intents.near balance |
 | `client.listTokens()` | Catalog of swap-capable tokens |
 | `client.call({...})` | Sign and broadcast a NEAR contract call |

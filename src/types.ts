@@ -2117,6 +2117,19 @@ export interface components {
              * @default false
              */
             use_bound_identity: boolean;
+            /**
+             * @description The stored secret this run reads: the row `account_id` stored for
+             *     this project under `profile`, decrypted inside the TEE only if the
+             *     row's on-chain access condition admits the paying key's owner. On a
+             *     connector project a body reference is used as it is; without one,
+             *     `X-Use-Owner-Secret` names the wallet's own row.
+             *     Refused with `invalid_secrets_ref` (400) when `account_id` is not a
+             *     NEAR account id or `profile` is not 1–64 bytes or holds an ASCII
+             *     character other than a letter, digit, `-` or `_`: the contract
+             *     stores no such row, so nothing is queued for it. A body whose
+             *     fields are not strings is rejected as a body-shape error (422)
+             *     before this check.
+             */
             secrets_ref?: {
                 profile?: string;
                 account_id?: string;
@@ -2151,7 +2164,7 @@ export interface components {
              * @description Machine-readable name of the refusal.
              * @enum {string}
              */
-            reason: "allowance_no_deposit" | "bad_key_format" | "compute_limit_too_low" | "connector_quota_exceeded" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "too_many_concurrent_calls" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
+            reason: "allowance_no_deposit" | "bad_key_format" | "compute_limit_too_low" | "connector_quota_exceeded" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "invalid_secrets_ref" | "invalid_version_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "too_many_concurrent_calls" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
         };
         CallTimedOut: {
             error?: string;
@@ -2251,6 +2264,12 @@ export interface components {
         Chain: "near" | "ethereum" | "polygon" | "base" | "arbitrum" | "optimism" | "bsc" | "avalanche" | "hyperevm" | "solana" | "bitcoin";
         /** @description A sub-key of the wallet's EVM key: a distinct secp256k1 key, and so a distinct `0x` address, of the same wallet (`subkey:{id}:evm:{sub_path}` in the keystore). Omitted or empty means the wallet's own key. EVM chains only; a Solana or NEAR endpoint refuses it. A sub-key is a separate address under the wallet's one authority, not a separate authority: any holder of the wallet's API key can sign for any path, and the same `evm_sign` capability governs every path. Nothing about a sub-key is stored; its address is derived on request, like the wallet's own. */
         SubPath: string;
+        /**
+         * @description `near` is the only value these endpoints take. Narrower than `Chain` on purpose: a transfer or an account delete is a NEAR operation, and naming another chain answers 400 rather than doing something elsewhere.
+         * @default near
+         * @enum {string}
+         */
+        NearOnlyChain: "near";
         /**
          * @description A chain funds can be withdrawn to: `near` directly, the rest through the 1Click bridge. Narrower than `Chain` — `hyperevm` is signable but not bridged.
          * @enum {string}
@@ -2601,7 +2620,7 @@ export interface components {
          */
         TransferRequest: {
             /** @description Chain to transfer on. Defaults to `near` server-side. */
-            chain?: components["schemas"]["Chain"];
+            chain?: components["schemas"]["NearOnlyChain"];
             /**
              * @description Recipient account id on `chain`. For NEAR, accepts both named
              *     accounts (`alice.near`) and 64-char implicit hex accounts.
@@ -2631,7 +2650,7 @@ export interface components {
              */
             beneficiary: string;
             /** @description Chain the account lives on. Defaults to `near` server-side. */
-            chain?: components["schemas"]["Chain"];
+            chain?: components["schemas"]["NearOnlyChain"];
         };
         DeleteResponse: {
             /** Format: uuid */
@@ -5875,6 +5894,23 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectCallResponse"];
+                };
+            };
+            /**
+             * @description The request itself is wrong; `reason` says how:
+             *     `invalid_secrets_ref` (the body's `secrets_ref` names a row the
+             *     contract could never hold — see `ProjectCallRequest.secrets_ref`),
+             *     `invalid_version_key`, `bad_key_format`, `max_per_call_exceeded`,
+             *     `compute_limit_too_low`. A body that is not JSON at all is
+             *     answered by the framework with a plain-text 400 (and a missing
+             *     JSON content type with 415), not with this schema.
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallRefusal"];
                 };
             };
             /** @description No payment credential, or one that cannot pay. `reason` tells the two apart: `missing_payment_key` for a caller that sent nothing, and `wk_is_not_a_payer` for one that sent a `wk_` — that credential names a wallet on /wallet/v1/*, it does not buy anything here. */

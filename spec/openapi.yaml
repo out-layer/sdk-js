@@ -2934,6 +2934,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectCallResponse'
+        '400':
+          description: |
+            The request itself is wrong; `reason` says how:
+            `invalid_secrets_ref` (the body's `secrets_ref` names a row the
+            contract could never hold — see `ProjectCallRequest.secrets_ref`),
+            `invalid_version_key`, `bad_key_format`, `max_per_call_exceeded`,
+            `compute_limit_too_low`. A body that is not JSON at all is
+            answered by the framework with a plain-text 400 (and a missing
+            JSON content type with 415), not with this schema.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallRefusal'
         '402':
           description: The key cannot pay for this call.
           content:
@@ -3729,6 +3742,18 @@ components:
             owner.
         secrets_ref:
           type: object
+          description: |
+            The stored secret this run reads: the row `account_id` stored for
+            this project under `profile`, decrypted inside the TEE only if the
+            row's on-chain access condition admits the paying key's owner. On a
+            connector project a body reference is used as it is; without one,
+            `X-Use-Owner-Secret` names the wallet's own row.
+            Refused with `invalid_secrets_ref` (400) when `account_id` is not a
+            NEAR account id or `profile` is not 1–64 bytes or holds an ASCII
+            character other than a letter, digit, `-` or `_`: the contract
+            stores no such row, so nothing is queued for it. A body whose
+            fields are not strings is rejected as a body-shape error (422)
+            before this check.
           properties:
             profile: { type: string }
             account_id: { type: string }
@@ -3781,7 +3806,7 @@ components:
         reason:
           type: string
           description: Machine-readable name of the refusal.
-          enum: [allowance_no_deposit, bad_key_format, compute_limit_too_low, connector_quota_exceeded, expires_too_soon, insufficient_allowance, insufficient_balance, internal_error, invalid_key, keystore_error, max_per_call_exceeded, missing_payment_key, no_bound_identity, no_deposit, operation_limit_reached, out_of_funds, project_not_allowed, project_not_found, rate_limit_exceeded, upstream_unavailable, tee_session_required, timeout, too_many_concurrent_calls, unknown_operation, vault_not_verified, vault_unlocked, wallet_not_yours, wk_is_not_a_payer]
+          enum: [allowance_no_deposit, bad_key_format, compute_limit_too_low, connector_quota_exceeded, expires_too_soon, insufficient_allowance, insufficient_balance, internal_error, invalid_key, invalid_secrets_ref, invalid_version_key, keystore_error, max_per_call_exceeded, missing_payment_key, no_bound_identity, no_deposit, operation_limit_reached, out_of_funds, project_not_allowed, project_not_found, rate_limit_exceeded, upstream_unavailable, tee_session_required, timeout, too_many_concurrent_calls, unknown_operation, vault_not_verified, vault_unlocked, wallet_not_yours, wk_is_not_a_payer]
       required: [error, reason]
     CallTimedOut:
       type: object
@@ -3924,6 +3949,15 @@ components:
         for any path, and the same `evm_sign` capability governs every path.
         Nothing about a sub-key is stored; its address is derived on request,
         like the wallet's own.
+
+    NearOnlyChain:
+      type: string
+      enum: [near]
+      default: near
+      description: >-
+        `near` is the only value these endpoints take. Narrower than `Chain` on
+        purpose: a transfer or an account delete is a NEAR operation, and naming
+        another chain answers 400 rather than doing something elsewhere.
 
     WithdrawChain:
       type: string
@@ -4642,7 +4676,7 @@ components:
       properties:
         chain:
           allOf:
-            - $ref: '#/components/schemas/Chain'
+            - $ref: '#/components/schemas/NearOnlyChain'
           description: Chain to transfer on. Defaults to `near` server-side.
         to:
           type: string
@@ -4677,7 +4711,7 @@ components:
           example: treasury.near
         chain:
           allOf:
-            - $ref: '#/components/schemas/Chain'
+            - $ref: '#/components/schemas/NearOnlyChain'
           description: Chain the account lives on. Defaults to `near` server-side.
 
     DeleteResponse:

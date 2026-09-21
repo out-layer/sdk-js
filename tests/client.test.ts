@@ -30,7 +30,8 @@ describe('OutlayerClient.register', () => {
     const r = await OutlayerClient.register();
     expect(r.api_key).toMatch(/^wk_/);
     expect(r.wallet_id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(r.handoff_url).toContain('api_key=');
+    // `?key=`, as the coordinator emits it — see `handoff_url` in wallet/handlers.rs.
+    expect(r.handoff_url).toContain('/wallet?key=');
   });
 
   it('forwards vaultId to the request body', async () => {

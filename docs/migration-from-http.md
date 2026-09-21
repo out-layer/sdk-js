@@ -7,7 +7,7 @@ If you've been calling the OutLayer API directly with `fetch`, here's the equiva
 **Before:**
 
 ```ts
-const res = await fetch('https://api.outlayer.fastnear.com/register', {
+const res = await fetch('https://api.outlayer.ai/register', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({}),
@@ -27,7 +27,7 @@ const { apiKey, walletId, nearAccountId } = await OutlayerClient.register();
 
 ```ts
 const res = await fetch(
-  'https://api.outlayer.fastnear.com/wallet/v1/address?chain=near',
+  'https://api.outlayer.ai/wallet/v1/address?chain=near',
   { headers: { Authorization: `Bearer ${apiKey}` } },
 );
 const { address } = await res.json();
@@ -45,7 +45,7 @@ const { address } = await client.getAddress('near');
 
 ```ts
 const idempotencyKey = crypto.randomUUID();
-const res = await fetch('https://api.outlayer.fastnear.com/wallet/v1/intents/withdraw', {
+const res = await fetch('https://api.outlayer.ai/wallet/v1/intents/withdraw', {
   method: 'POST',
   headers: {
     'Authorization': `Bearer ${apiKey}`,

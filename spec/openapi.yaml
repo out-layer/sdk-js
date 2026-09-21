@@ -13,7 +13,7 @@ info:
     NEAR MPC. The wallet owner sets policy (spending limits, whitelists,
     multisig, freeze) — all enforced inside the TEE before signing.
 
-    See [CUSTODY docs](https://outlayer.fastnear.com/docs/agent-custody) for the
+    See [CUSTODY docs](https://outlayer.ai/docs/agent-custody) for the
     architectural overview and [@outlayer/sdk](https://www.npmjs.com/package/@outlayer/sdk)
     for the TypeScript client.
   license:
@@ -21,11 +21,15 @@ info:
     identifier: MIT
   contact:
     name: OutLayer
-    url: https://outlayer.fastnear.com
+    url: https://outlayer.ai
 
 servers:
-  - url: https://api.outlayer.fastnear.com
-    description: Production
+  - url: https://api.outlayer.ai
+    description: Mainnet
+  - url: https://testnet-api.outlayer.ai
+    description: Testnet — the same API, against NEAR testnet. Pick this one to try a
+      call without spending anything real; a mainnet key does not work here, and a
+      testnet key does not work on mainnet.
 
 security:
   - BearerAuth: []
@@ -40,6 +44,32 @@ tags:
       must name, a price it must pay, an owner's secret it may ask for — is
       decided from the project id, not from the way in. Synchronous by default;
       send `async` and poll for anything longer than a few seconds.
+  - name: Connectors
+    description: >-
+      The curated connectors: named, priced operations that reach an outside
+      service — a mailbox, a bank, a trading venue — from inside the same
+      enclave that holds the caller's keys, so a credential is used without ever
+      being handed over. A connector is an ordinary project under
+      `connectors.outlayer.near` (`connectors.outlayer.testnet` on testnet) and
+      is called through `POST /call/{owner}/{project}` like any other; what
+      being curated adds is a price per `operation` on chain and the right to
+      read a secret its owner stored for it. A caller who pays is never limited
+      by a count of calls — money bounds a funded key, an allowance bounds a
+      subscriber — and the one count there is belongs to the trial: ten calls, in
+      a wallet's first week (`POST /trial-key`).
+
+
+      Which ones exist here, and the skill describing each, come from
+      `GET /public/connectors`. What one SELLS is not listed in this spec: its
+      operations and their prices are on chain, and the connector's own free
+      `status` operation answers with them, as does a refusal — which names what
+      could have been asked for instead.
+
+
+      Every connector publishes an agent-facing skill at
+      `https://skills.outlayer.ai/<id>-connector/SKILL.md`, and how to call any
+      of them — which key pays, how to be granted an owner's credential — is in
+      `https://skills.outlayer.ai/outlayer-connectors/SKILL.md`.
   - name: Subscriptions
     description: >-
       Payment keys, the allowance a subscription buys, and the secret an owner
@@ -132,14 +162,13 @@ paths:
                     wallet_id: 9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20
                     api_key: wk_2a8b1f3c4d5e6789abcdef0123456789
                     near_account_id: 9c3c9e101c1f4f5e9c4a1d7b9a8f3c20
-                    handoff_url: https://outlayer.fastnear.com/wallet?api_key=wk_2a8b...
+                    handoff_url: https://app.outlayer.ai/wallet?key=wk_2a8b...
                     trial:
-                      calls_remaining: 100
-                      expires_at: '2026-06-20T00:00:00Z'
-                      limits:
-                        max_instructions: 100000000
-                        max_execution_seconds: 30
-                        max_memory_mb: 64
+                      available: true
+                      calls: 10
+                      days: 7
+                      claim_url: POST /trial-key
+                      scope: connectors.outlayer.near/*
         '400':
           $ref: '#/components/responses/BadRequest'
         '429':
@@ -488,6 +517,16 @@ paths:
                   binding_status:
                     type: string
                     enum: [pending, active, suspended, revoked, unbound]
+        '400':
+          description: >-
+            The secret was accepted and the body could not be read as an
+            event. Deliberately not `422`: in this API that code means the
+            chain answered and a receipt failed (`OnChainTxFailed`), and a
+            client routing on it must not meet it here.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
@@ -2604,6 +2643,12 @@ paths:
       description: |
         Returns the wallet's current policy (decrypted by the keystore TEE),
         plus the current usage counters used by velocity-limit checks.
+
+        `policy` states whether a policy exists at all: `none` — no policy is
+        stored and every operation is allowed; `stored` — the `rules`,
+        `approval`, `capabilities` and `authorized_key_hashes` fields are the
+        policy as written. A response without `policy` could not read the
+        chain; it says nothing about the policy rather than guessing.
       responses:
         '200':
           description: Current policy + usage
@@ -2948,13 +2993,34 @@ paths:
               schema:
                 $ref: '#/components/schemas/CallRefusal'
         '402':
-          description: The key cannot pay for this call.
+          description: |
+            The key cannot pay for this call. `reason` says which way:
+
+            * `trial_exhausted` — a TRIAL key has made its calls (`used`, `limit`).
+              **`terminal: true`**. Create a payment key with money on it
+              (`POST /wallet/v1/create-payment-key`) — a funded key has no call
+              limit;
+            * `trial_expired` — a TRIAL key past the wallet's first week
+              (`expires_at`), with calls left or not. **`terminal: true`**, and
+              the same next step. A trial stops starting calls shortly before
+              `expires_at`, so that none is cut off mid-run;
+            * `insufficient_balance`, `out_of_funds`, `insufficient_allowance` —
+              money, as their names say;
+            * `expires_too_soon` — the subscription ends before this operation
+              could finish; extend it;
+            * `allowance_no_deposit` — `X-Attached-Deposit` on a call paid from
+              an allowance, which is not money and cannot be paid to a developer.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CallRefusal'
         '403':
-          description: The key's scope does not include this project.
+          description: |
+            The key may not make this call. By `reason`: `project_not_allowed`
+            — its scope does not include this project; `no_deposit` — a key whose
+            value was given (a trial, a grant) sent `X-Attached-Deposit`;
+            `tee_session_required`, `vault_not_verified`, `wallet_not_yours` —
+            the wallet or vault named does not stand behind this caller.
           content:
             application/json:
               schema:
@@ -3011,9 +3077,15 @@ paths:
               **`terminal: false`**: it clears by itself when the call in flight
               finishes, so the move is to wait, or to fund the key (money is not
               limited this way, and a funded key answers both at once);
-            * `connector_quota_exceeded` — the wallet's daily connector quota,
-              which widens with the wallet's age and is independent of paying;
-            * a plain rate limit, with no `reason`.
+            * `operation_limit_reached` — a connector's own ceiling on one
+              operation (a technical cap against a loop), with `limit`,
+              `window`, `operation` and `retry_after_seconds`;
+            * `rate_limit_exceeded` — this key's calls per minute. A request
+              stopped earlier, by the per-address limiter, is a bare 429 with no
+              `reason`.
+
+            None of them is a quota on how many calls a paying caller may make:
+            there is no such quota.
           content:
             application/json:
               schema:
@@ -3022,12 +3094,22 @@ paths:
                   error: { type: string }
                   reason:
                     type: string
-                    enum: [call_already_in_flight, connector_quota_exceeded]
+                    enum: [call_already_in_flight, operation_limit_reached, rate_limit_exceeded]
                   terminal:
                     type: boolean
                     description: False means waiting clears it; true means it will not.
-                  used: { type: integer }
-                  limit: { type: integer }
+                  limit:
+                    type: integer
+                    description: For `operation_limit_reached` — the ceiling that was reached.
+                  window:
+                    type: string
+                    description: For `operation_limit_reached` — the period the ceiling is counted over, e.g. `day`.
+                  operation:
+                    type: string
+                    description: For `operation_limit_reached` — the operation the ceiling is on.
+                  retry_after_seconds:
+                    type: [integer, 'null']
+                    description: For `operation_limit_reached` — how long until the counter expires.
         '401':
           description: >
             No payment credential, or one that cannot pay. `reason` tells the two
@@ -3071,10 +3153,9 @@ paths:
       operationId: createPaymentKey
       summary: Create a payment key for this wallet
       description: |
-        Two transactions on chain: the key's secret is stored, then funded. An
-        **agent** key is keyless — it is named after the wallet itself, so the
-        response carries no `payment_key` to hand out, and a wallet may have
-        exactly one.
+        Two transactions on chain: the key's secret is stored, then funded. The
+        response carries `payment_key` (`owner:nonce:secret`), shown once — it
+        is what `/call` takes as `X-Payment-Key`.
       requestBody:
         required: true
         content:
@@ -3138,10 +3219,9 @@ paths:
                 $ref: '#/components/schemas/SubscriptionStatus'
         '401':
           description: |
-            No credential, or — with a `wk_` — a wallet that has no agent key
-            yet, which answers `Missing X-Payment-Key header`. That is the reply
-            to "which key of yours should I report on", not a rejected `wk_`:
-            create the agent key with `create-payment-key {"agent": true}`.
+            No `X-Payment-Key`. The report is on one payment key, so that key is
+            what is presented — a `wk_` alone does not name one. A wallet gets a
+            key from `POST /trial-key` or `POST /wallet/v1/create-payment-key`.
           content:
             application/json:
               schema:
@@ -3153,20 +3233,17 @@ paths:
       operationId: purchaseAllowance
       summary: Turn balance already on a key into allowance
       description: |
-        Buys a plan out of the key's own balance. Needs a key STRING, so it is
-        for ordinary payment keys: an agent's key has none — it is named after
-        the wallet — and an agent's subscription is bought on chain instead,
-        with an `ft_transfer_call` carrying
-        `{"action":"buy_subscription","nonce":N,"owner":"<agent>","plan":0}`.
+        Buys a plan out of the key's own balance. The same plan can be bought
+        on chain for any key, with an `ft_transfer_call` carrying
+        `{"action":"buy_subscription","nonce":N,"owner":"<key owner>","plan":0}`.
 
         Only the plan's PRICE is spent; an overpayment stays on the key as
         balance. The allowance ADDS to whatever is there and validity extends
         from `max(now, expires_at)`, so buying again never shortens what is
         already paid for.
 
-        A `wk_` is deliberately NOT accepted here: it is a read credential, and
-        spending on the owner's behalf is not something a compromised agent
-        should be able to do.
+        A `wk_` is deliberately NOT accepted here: it runs a wallet and does not
+        spend a payment key's balance.
       security:
         - PaymentKeyAuth: []
       requestBody:
@@ -3252,47 +3329,169 @@ paths:
     post:
       tags: [Subscriptions]
       operationId: claimTrialKey
-      summary: Claim this wallet's one trial key
+      summary: Claim this wallet's trial — ten connector calls in its first week
       description: |
-        A real payment key, granted rather than sold, and spent exactly like any
-        other — same header, same balance endpoint, same refusals.
+        **A trial is ten connector calls, within seven days of the wallet's
+        creation.** That is all of it. The answer is a payment key, sent as
+        `X-Payment-Key` like any other, plus how many calls it makes and when it
+        stops working.
 
-        What makes it a trial: its value is an ALLOWANCE (never withdrawable, it
-        ends at its expiry), it is a GRANT (it cannot pay a developer through
-        `X-Attached-Deposit`), and it is SCOPED to the curated connector
-        namespace, so it cannot run arbitrary code at our expense. It carries no
-        wallet, so a trial call gets no custody host functions.
+        * The week is counted from the WALLET's creation, not from the claim: a
+          trial claimed on day six works for one day. Claim it when you register.
+        * A call counts once it is accepted and queued, whatever becomes of it
+          afterwards — a run that fails or times out is still one of the ten. A
+          refused attempt costs nothing.
+        * The eleventh call answers `402 trial_exhausted`, and any call after the
+          week `402 trial_expired` — both `terminal: true`. The next step is a
+          payment key with money on it (`POST /wallet/v1/create-payment-key`),
+          and **a funded key has no call limit at all**.
+        * It reaches the curated connectors and nothing else; any other project
+          is refused as `project_not_allowed`. It cannot pay a developer through
+          `X-Attached-Deposit` and cannot be withdrawn.
+        * `GET /subscription/status` with the key reports
+          `trial: { calls, calls_used, calls_left }`. There is no balance to
+          read: a trial is not measured in money.
 
-        One per wallet, claimable within a window after the wallet is created;
-        the window, the days and the allowance are operator settings, and the
-        answer states the ones it granted. There is also a per-IP cap.
-
+        One per wallet.
         **The key string is shown once and cannot be re-issued.**
       security:
         - BearerAuth: []
       responses:
         '200':
-          description: The claimed key and its terms.
+          description: The claimed key and what it is good for.
           content:
             application/json:
               schema:
                 type: object
+                required: [payment_key, owner, nonce, calls, expires_at, project_ids]
                 properties:
                   payment_key:
                     type: string
                     description: The whole `X-Payment-Key` header value. Shown once.
                   owner: { type: string }
                   nonce: { type: integer }
-                  allowance_usd: { type: string }
-                  days: { type: integer }
+                  calls:
+                    type: integer
+                    description: How many connector calls this key makes. The whole of a trial's budget.
+                  expires_at:
+                    type: string
+                    format: date-time
+                    description: When the key stops working, used up or not — the wallet's creation plus the trial's days.
                   project_ids:
                     type: array
                     items: { type: string }
                     description: Anything else is refused as `project_not_allowed`.
+                  note: { type: string }
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: "`unauthorized` — no `wk_`, or one that is unknown or revoked."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+        '403':
+          description: "`trial_window_closed` — the wallet is past its first week. `trial_unavailable` — no trial is offered to this caller. Both terminal: the way forward is a funded payment key."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+        '404':
+          description: "`trial_disabled` — this deployment offers no trial."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
         '409':
-          description: Already claimed, or claimed too late for this wallet's age.
+          description: "`trial_already_claimed` — this wallet has had its one. Terminal."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+        '503':
+          description: "`internal_error` — the key could not be issued right now. `terminal: false`: the same request works later."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+
+  /public/connectors:
+    get:
+      tags: [Connectors]
+      operationId: publicConnectors
+      summary: Which connectors this deployment offers, and where to read about each
+      description: |
+        The list comes from the same on-chain price table a call is priced by,
+        so a connector named here can be called and one absent here would be
+        refused.
+
+        What each connector SELLS is not repeated here. Its operations and their
+        prices are on chain, and the connector's own free `status` answers with
+        them — as does a refusal, which lists what could have been asked for.
+
+        `description` and `skill` are present for the curated connectors; the
+        test probes are documented in a README beside their code.
+      security: []
+      responses:
+        '200':
+          description: The connectors of this deployment.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  network: { type: string, enum: [mainnet, testnet] }
+                  connectors_account: { type: string }
+                  docs: { type: string }
+                  how_to_call: { type: string }
+                  library_skill: { type: string }
+                  connectors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        project_id: { type: string }
+                        description: { type: string }
+                        skill: { type: string }
+  /payment-keys/balance:
+    get:
+      tags: [Subscriptions]
+      operationId: paymentKeyBalance
+      summary: What is left on the key presented
+      description: |
+        The key reports on itself. Money is `available`; a subscriber also gets
+        the two allowance figures; a TRIAL key gets `trial` instead of them —
+        a trial is a number of calls and has no balance to read.
+      security:
+        - PaymentKeyAuth: []
+      responses:
+        '200':
+          description: The key's money, and its allowance or trial when it has one.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  owner: { type: string }
+                  nonce: { type: integer }
+                  initial_balance: { type: string }
+                  spent: { type: string }
+                  reserved: { type: string }
+                  available: { type: string, description: "Money only, in minimal stablecoin units." }
+                  last_used_at: { type: [string, 'null'] }
+                  is_grant: { type: boolean, description: "The value on the key was given, not paid in: it cannot be withdrawn or attached as a deposit." }
+                  expires_at: { type: string, description: When an allowance or a trial ends. Absent without one. }
+                  trial:
+                    type: object
+                    description: A trial key only. The allowance figures are then absent.
+                    properties:
+                      calls: { type: integer }
+                      calls_used: { type: integer }
+                      calls_left: { type: integer }
+                  allowance_usd: { type: string, description: Subscribers only. }
+                  allowance_available_usd: { type: string, description: "Subscribers only — what is left, counting expiry." }
+                  withdrawable: { type: string }
+        '401':
+          description: No `X-Payment-Key`, or one that does not match a key.
 
   /public/payment-keys/{owner}/{nonce}/balance:
     get:
@@ -3523,9 +3722,9 @@ components:
       name: X-Payment-Key
       description: |
         A payment key, `{owner}:{nonce}:{secret}`. Created by
-        `POST /wallet/v1/create-payment-key` and funded on chain. An AGENT key
-        has no secret to present — it is named after its wallet, and that
-        wallet's `Authorization: Bearer wk_...` stands for it.
+        `POST /wallet/v1/create-payment-key` and funded on chain, or claimed as a
+        trial with `POST /trial-key`. A wallet's `Authorization: Bearer wk_...`
+        does not stand in for it: on `/call` it is refused as `wk_is_not_a_payer`.
 
   parameters:
     IdempotencyKey:
@@ -3777,6 +3976,18 @@ components:
         attestation_url:
           type: [string, 'null']
           description: The TEE quote for this execution.
+    TrialKeyRefusal:
+      type: object
+      description: Every refusal from `POST /trial-key`. Branch on `reason`.
+      properties:
+        error: { type: string, description: The human sentence. }
+        reason:
+          type: string
+          enum: [unauthorized, trial_disabled, trial_window_closed, trial_already_claimed, trial_unavailable, internal_error]
+        terminal:
+          type: boolean
+          description: "`false` only for `internal_error`: the same request works later. Every other refusal is final, and the way forward is a funded payment key."
+      required: [error, reason, terminal]
     CallRefusal:
       type: object
       description: >
@@ -3806,7 +4017,17 @@ components:
         reason:
           type: string
           description: Machine-readable name of the refusal.
-          enum: [allowance_no_deposit, bad_key_format, compute_limit_too_low, connector_quota_exceeded, expires_too_soon, insufficient_allowance, insufficient_balance, internal_error, invalid_key, invalid_secrets_ref, invalid_version_key, keystore_error, max_per_call_exceeded, missing_payment_key, no_bound_identity, no_deposit, operation_limit_reached, out_of_funds, project_not_allowed, project_not_found, rate_limit_exceeded, upstream_unavailable, tee_session_required, timeout, too_many_concurrent_calls, unknown_operation, vault_not_verified, vault_unlocked, wallet_not_yours, wk_is_not_a_payer]
+          enum: [allowance_no_deposit, bad_key_format, compute_limit_too_low, expires_too_soon, insufficient_allowance, insufficient_balance, internal_error, invalid_key, invalid_secrets_ref, invalid_version_key, keystore_error, max_per_call_exceeded, missing_payment_key, no_bound_identity, no_deposit, operation_limit_reached, out_of_funds, project_not_allowed, project_not_found, rate_limit_exceeded, upstream_unavailable, tee_session_required, timeout, call_already_in_flight, trial_exhausted, trial_expired, unknown_operation, vault_not_verified, vault_unlocked, wallet_not_yours, wk_is_not_a_payer]
+        expires_at:
+          type: string
+          format: date-time
+          description: On `trial_expired` only — when the trial ended.
+        used:
+          type: integer
+          description: On `trial_exhausted` only — the calls the trial key has made.
+        limit:
+          type: integer
+          description: On `trial_exhausted` — the calls a trial grants. On `operation_limit_reached` — the operation's ceiling, with `window` and `operation` beside it.
       required: [error, reason]
     CallTimedOut:
       type: object
@@ -3860,9 +4081,19 @@ components:
             `owner`.
         expires_at: { type: [string, 'null'] }
         expired: { type: boolean }
-        allowance_total_usd: { type: [string, 'null'] }
-        allowance_spent_usd: { type: [string, 'null'] }
-        allowance_available_usd: { type: [string, 'null'] }
+        trial:
+          type: object
+          description: |
+            Present for a TRIAL key and for nothing else — and then the three
+            `allowance_*` figures are absent. A trial is a number of calls; the
+            allowance behind it is the operator's and is not a budget.
+          properties:
+            calls: { type: integer, description: How many calls a trial is. }
+            calls_used: { type: integer }
+            calls_left: { type: integer, description: Zero means the next call answers `trial_exhausted`. }
+        allowance_total_usd: { type: [string, 'null'], description: Absent for a trial key. }
+        allowance_spent_usd: { type: [string, 'null'], description: Absent for a trial key. }
+        allowance_available_usd: { type: [string, 'null'], description: Absent for a trial key. }
         balance:
           type: string
           description: Money on the key. Nets out anything currently reserved by a call in flight.
@@ -3923,13 +4154,14 @@ components:
     # ----- Primitives -----
     Chain:
       type: string
-      enum: [near, ethereum, polygon, base, arbitrum, optimism, bsc, avalanche, hyperevm, solana, bitcoin]
+      enum: [near, ethereum, polygon, base, arbitrum, optimism, bsc, avalanche, hyperevm, hood, solana, bitcoin]
       description: >-
         Supported chain identifier. The EVM chains (ethereum, polygon, base,
-        arbitrum, optimism, bsc, avalanche, hyperevm) all share ONE derived
+        arbitrum, optimism, bsc, avalanche, hyperevm, hood) all share ONE derived
         address (a single secp256k1 key) and are signable via
         `/wallet/v1/evm/*`; `hyperevm` (Hyperliquid's EVM, chain id 999) is
-        signable but not a deposit or withdraw chain.
+        signable but not a deposit or withdraw chain. `hood` is Robinhood Chain,
+        an Arbitrum L2 that bridges both ways through 1Click.
         `solana` has its own derived ed25519 address and is signable via
         `/wallet/v1/solana/*`. `bitcoin` can be derived in the keystore but is
         not yet serviced by wallet v1. An endpoint that serves fewer chains
@@ -3961,7 +4193,7 @@ components:
 
     WithdrawChain:
       type: string
-      enum: [near, solana, ethereum, base, arbitrum, bitcoin, bsc, polygon, optimism, avalanche]
+      enum: [near, solana, ethereum, base, arbitrum, bitcoin, bsc, polygon, optimism, avalanche, hood]
       description: >-
         A chain funds can be withdrawn to: `near` directly, the rest through the
         1Click bridge. Narrower than `Chain` — `hyperevm` is signable but not
@@ -4111,9 +4343,9 @@ components:
           MPC-derived master instead of OutLayer's shared default. The vault
           must already be deployed and verified — **vault deployment is not
           done through this endpoint**. Use the dashboard
-          (https://outlayer.fastnear.com/vault) or the CLI
+          (https://outlayer.ai/vault) or the CLI
           (`outlayer vault init`) to deploy. Reference:
-          https://outlayer.fastnear.com/docs/vaults
+          https://outlayer.ai/docs/vaults
         - `account_id` + `pubkey` + `message` + `signature`: bind the wallet
           to a verified NEAR account via NEP-413 proof-of-ownership. Used
           by clients that want operational keys (`wk_...`) tied to a real
@@ -4164,21 +4396,23 @@ components:
 
     TrialInfo:
       type: object
+      description: |
+        The trial OFFER. Registering grants nothing; the wallet claims its key
+        with `POST /trial-key` when it wants one.
       properties:
-        calls_remaining:
+        available:
+          type: boolean
+          description: Whether this deployment offers a trial at all — not whether this wallet may still claim one.
+        calls:
           type: integer
-        expires_at:
+          description: How many connector calls a trial is. There is no other budget.
+        days:
+          type: integer
+          description: A trial is the wallet's first `days` days, counted from the wallet's creation — it can be claimed until then and stops working then, whenever it was claimed.
+        claim_url: { type: string }
+        scope:
           type: string
-          format: date-time
-        limits:
-          type: object
-          properties:
-            max_instructions:
-              type: integer
-            max_execution_seconds:
-              type: integer
-            max_memory_mb:
-              type: integer
+          description: What a trial key may call.
 
     # ----- Wallet read -----
     AddressResponse:
@@ -5075,7 +5309,11 @@ components:
               description: |-
                 Source chain. Supported: `near`, `ethereum`, `base`,
                 `arbitrum`, `solana`, `bitcoin`, `bsc`, `polygon`,
-                `optimism`, `avalanche`.
+                `optimism`, `avalanche`, `hood`. `token` defaults to `USDC`,
+                which not every chain carries — `hood` (Robinhood Chain) does
+                not, so name a token it has. `GET /wallet/v1/tokens` lists
+                them, and naming one the chain lacks answers
+                `unsupported_token` with what it does carry.
               example: ethereum
             token:
               type: string
@@ -5108,7 +5346,7 @@ components:
             - `near` — 64-char hex (NEAR implicit account), e.g.
               `f51768dc0c4d4bbb78890262da9882dee2ee5b6c2fcf2c527e56c6eadcb54353`
             - `ethereum` / `base` / `arbitrum` / `bsc` / `polygon` /
-              `optimism` / `avalanche` — `0x` + 40 hex (EVM), e.g.
+              `optimism` / `avalanche` / `hood` — `0x` + 40 hex (EVM), e.g.
               `0x582290c0b2Cb60989B35FFF66049f3e3247355bc`
             - `solana` — base58, 32-44 chars (Solana), e.g.
               `5AmGa2Bcfajbytg55UUb4vCAAzKBMYKZNQwx5S2BH2qf`
@@ -5872,6 +6110,21 @@ components:
           description: NEAR account that owns the policy.
         frozen:
           type: boolean
+        policy:
+          type: string
+          enum: [none, stored]
+          description: |
+            Whether the wallet has a policy at all. `none`: no policy is
+            stored — every operation is allowed (the engine's own rules,
+            which no policy relaxes, still hold: account-control operations
+            on the extension door are refused for every wallet). `stored`:
+            a policy exists and `rules`, `approval`, `capabilities` and
+            `authorized_key_hashes` are it, as written — every capability
+            it does not name is at that capability's default, which is DENY
+            for all but `sign_message`. Absent when the coordinator could not
+            read the chain or decrypt what it holds. This is a statement of
+            presence, not a rendering of what the policy permits; the
+            keystore's evaluator decides that.
         rules:
           $ref: '#/components/schemas/PolicyRules'
         approval:
@@ -5886,8 +6139,10 @@ components:
           type: object
           additionalProperties: {}
           description: |
-            Current accumulated usage per token, per period. Same shape as
-            `PolicyLimits` — used for client-side velocity-limit visualization.
+            Current accumulated usage per token, per period — spent amounts
+            from the coordinator's counters, present whether or not a policy
+            is stored. Same shape as `PolicyLimits` — used for client-side
+            velocity-limit visualization.
 
     EncryptPolicyRequest:
       type: object

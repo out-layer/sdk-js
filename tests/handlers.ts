@@ -9,15 +9,15 @@ export const handlers = [
       wallet_id: '00000000-0000-0000-0000-000000000001',
       api_key: 'wk_test_2a8b1f3c4d5e6789abcdef0123456789',
       near_account_id: '000000000000000000000000000000000001',
-      handoff_url: 'https://app.outlayer.ai/wallet?api_key=wk_test_...',
+      handoff_url: 'https://app.outlayer.ai/wallet?key=wk_test_...',
+      // The OFFER, which is what registering answers with: nothing is granted
+      // until the wallet claims it with POST /trial-key.
       trial: {
-        calls_remaining: 100,
-        expires_at: '2026-06-20T00:00:00Z',
-        limits: {
-          max_instructions: 100_000_000,
-          max_execution_seconds: 30,
-          max_memory_mb: 64,
-        },
+        available: true,
+        calls: 10,
+        days: 7,
+        claim_url: 'POST /trial-key',
+        scope: 'connectors.outlayer.near/*',
       },
     });
   }),

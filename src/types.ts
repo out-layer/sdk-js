@@ -1559,6 +1559,12 @@ export interface paths {
          * Get current decrypted policy
          * @description Returns the wallet's current policy (decrypted by the keystore TEE),
          *     plus the current usage counters used by velocity-limit checks.
+         *
+         *     `policy` states whether a policy exists at all: `none` — no policy is
+         *     stored and every operation is allowed; `stored` — the `rules`,
+         *     `approval`, `capabilities` and `authorized_key_hashes` fields are the
+         *     policy as written. A response without `policy` could not read the
+         *     chain; it says nothing about the policy rather than guessing.
          */
         get: operations["getPolicy"];
         put?: never;
@@ -1805,10 +1811,9 @@ export interface paths {
         put?: never;
         /**
          * Create a payment key for this wallet
-         * @description Two transactions on chain: the key's secret is stored, then funded. An
-         *     **agent** key is keyless — it is named after the wallet itself, so the
-         *     response carries no `payment_key` to hand out, and a wallet may have
-         *     exactly one.
+         * @description Two transactions on chain: the key's secret is stored, then funded. The
+         *     response carries `payment_key` (`owner:nonce:secret`), shown once — it
+         *     is what `/call` takes as `X-Payment-Key`.
          */
         post: operations["createPaymentKey"];
         delete?: never;
@@ -1862,20 +1867,17 @@ export interface paths {
         put?: never;
         /**
          * Turn balance already on a key into allowance
-         * @description Buys a plan out of the key's own balance. Needs a key STRING, so it is
-         *     for ordinary payment keys: an agent's key has none — it is named after
-         *     the wallet — and an agent's subscription is bought on chain instead,
-         *     with an `ft_transfer_call` carrying
-         *     `{"action":"buy_subscription","nonce":N,"owner":"<agent>","plan":0}`.
+         * @description Buys a plan out of the key's own balance. The same plan can be bought
+         *     on chain for any key, with an `ft_transfer_call` carrying
+         *     `{"action":"buy_subscription","nonce":N,"owner":"<key owner>","plan":0}`.
          *
          *     Only the plan's PRICE is spent; an overpayment stays on the key as
          *     balance. The allowance ADDS to whatever is there and validity extends
          *     from `max(now, expires_at)`, so buying again never shortens what is
          *     already paid for.
          *
-         *     A `wk_` is deliberately NOT accepted here: it is a read credential, and
-         *     spending on the owner's behalf is not something a compromised agent
-         *     should be able to do.
+         *     A `wk_` is deliberately NOT accepted here: it runs a wallet and does not
+         *     spend a payment key's balance.
          */
         post: operations["purchaseAllowance"];
         delete?: never;
@@ -1918,23 +1920,83 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Claim this wallet's one trial key
-         * @description A real payment key, granted rather than sold, and spent exactly like any
-         *     other — same header, same balance endpoint, same refusals.
+         * Claim this wallet's trial — ten connector calls in its first week
+         * @description **A trial is ten connector calls, within seven days of the wallet's
+         *     creation.** That is all of it. The answer is a payment key, sent as
+         *     `X-Payment-Key` like any other, plus how many calls it makes and when it
+         *     stops working.
          *
-         *     What makes it a trial: its value is an ALLOWANCE (never withdrawable, it
-         *     ends at its expiry), it is a GRANT (it cannot pay a developer through
-         *     `X-Attached-Deposit`), and it is SCOPED to the curated connector
-         *     namespace, so it cannot run arbitrary code at our expense. It carries no
-         *     wallet, so a trial call gets no custody host functions.
+         *     * The week is counted from the WALLET's creation, not from the claim: a
+         *       trial claimed on day six works for one day. Claim it when you register.
+         *     * A call counts once it is accepted and queued, whatever becomes of it
+         *       afterwards — a run that fails or times out is still one of the ten. A
+         *       refused attempt costs nothing.
+         *     * The eleventh call answers `402 trial_exhausted`, and any call after the
+         *       week `402 trial_expired` — both `terminal: true`. The next step is a
+         *       payment key with money on it (`POST /wallet/v1/create-payment-key`),
+         *       and **a funded key has no call limit at all**.
+         *     * It reaches the curated connectors and nothing else; any other project
+         *       is refused as `project_not_allowed`. It cannot pay a developer through
+         *       `X-Attached-Deposit` and cannot be withdrawn.
+         *     * `GET /subscription/status` with the key reports
+         *       `trial: { calls, calls_used, calls_left }`. There is no balance to
+         *       read: a trial is not measured in money.
          *
-         *     One per wallet, claimable within a window after the wallet is created;
-         *     the window, the days and the allowance are operator settings, and the
-         *     answer states the ones it granted. There is also a per-IP cap.
-         *
+         *     One per wallet.
          *     **The key string is shown once and cannot be re-issued.**
          */
         post: operations["claimTrialKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/connectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which connectors this deployment offers, and where to read about each
+         * @description The list comes from the same on-chain price table a call is priced by,
+         *     so a connector named here can be called and one absent here would be
+         *     refused.
+         *
+         *     What each connector SELLS is not repeated here. Its operations and their
+         *     prices are on chain, and the connector's own free `status` answers with
+         *     them — as does a refusal, which lists what could have been asked for.
+         *
+         *     `description` and `skill` are present for the curated connectors; the
+         *     test probes are documented in a README beside their code.
+         */
+        get: operations["publicConnectors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/payment-keys/balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What is left on the key presented
+         * @description The key reports on itself. Money is `available`; a subscriber also gets
+         *     the two allowance figures; a TRIAL key gets `trial` instead of them —
+         *     a trial is a number of calls and has no balance to read.
+         */
+        get: operations["paymentKeyBalance"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2151,6 +2213,15 @@ export interface components {
             /** @description The TEE quote for this execution. */
             attestation_url?: string | null;
         };
+        /** @description Every refusal from `POST /trial-key`. Branch on `reason`. */
+        TrialKeyRefusal: {
+            /** @description The human sentence. */
+            error: string;
+            /** @enum {string} */
+            reason: "unauthorized" | "trial_disabled" | "trial_window_closed" | "trial_already_claimed" | "trial_unavailable" | "internal_error";
+            /** @description `false` only for `internal_error`: the same request works later. Every other refusal is final, and the way forward is a funded payment key. */
+            terminal: boolean;
+        };
         /** @description Every refusal from `POST /call/{owner}/{project}`. `error` is a sentence written for a person and is reworded freely; `reason` is the contract — branch on it. The enum is generated from `CallError::reason()` in the coordinator and is exhaustive there, so a value outside it means the client is older than the server. */
         CallRefusal: {
             /** @description The human sentence. */
@@ -2164,7 +2235,16 @@ export interface components {
              * @description Machine-readable name of the refusal.
              * @enum {string}
              */
-            reason: "allowance_no_deposit" | "bad_key_format" | "compute_limit_too_low" | "connector_quota_exceeded" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "invalid_secrets_ref" | "invalid_version_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "too_many_concurrent_calls" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
+            reason: "allowance_no_deposit" | "bad_key_format" | "compute_limit_too_low" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "invalid_secrets_ref" | "invalid_version_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "call_already_in_flight" | "trial_exhausted" | "trial_expired" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
+            /**
+             * Format: date-time
+             * @description On `trial_expired` only — when the trial ended.
+             */
+            expires_at?: string;
+            /** @description On `trial_exhausted` only — the calls the trial key has made. */
+            used?: number;
+            /** @description On `trial_exhausted` — the calls a trial grants. On `operation_limit_reached` — the operation's ceiling, with `window` and `operation` beside it. */
+            limit?: number;
         };
         CallTimedOut: {
             error?: string;
@@ -2207,8 +2287,23 @@ export interface components {
             wallet_account?: string;
             expires_at?: string | null;
             expired?: boolean;
+            /**
+             * @description Present for a TRIAL key and for nothing else — and then the three
+             *     `allowance_*` figures are absent. A trial is a number of calls; the
+             *     allowance behind it is the operator's and is not a budget.
+             */
+            trial?: {
+                /** @description How many calls a trial is. */
+                calls?: number;
+                calls_used?: number;
+                /** @description Zero means the next call answers `trial_exhausted`. */
+                calls_left?: number;
+            };
+            /** @description Absent for a trial key. */
             allowance_total_usd?: string | null;
+            /** @description Absent for a trial key. */
             allowance_spent_usd?: string | null;
+            /** @description Absent for a trial key. */
             allowance_available_usd?: string | null;
             /** @description Money on the key. Nets out anything currently reserved by a call in flight. */
             balance?: string;
@@ -2258,10 +2353,10 @@ export interface components {
             agent_account?: string;
         };
         /**
-         * @description Supported chain identifier. The EVM chains (ethereum, polygon, base, arbitrum, optimism, bsc, avalanche, hyperevm) all share ONE derived address (a single secp256k1 key) and are signable via `/wallet/v1/evm/*`; `hyperevm` (Hyperliquid's EVM, chain id 999) is signable but not a deposit or withdraw chain. `solana` has its own derived ed25519 address and is signable via `/wallet/v1/solana/*`. `bitcoin` can be derived in the keystore but is not yet serviced by wallet v1. An endpoint that serves fewer chains than this list (balance, transfer and delete are NEAR-only; withdraw takes `WithdrawChain`) answers 400 for the ones it does not.
+         * @description Supported chain identifier. The EVM chains (ethereum, polygon, base, arbitrum, optimism, bsc, avalanche, hyperevm, hood) all share ONE derived address (a single secp256k1 key) and are signable via `/wallet/v1/evm/*`; `hyperevm` (Hyperliquid's EVM, chain id 999) is signable but not a deposit or withdraw chain. `hood` is Robinhood Chain, an Arbitrum L2 that bridges both ways through 1Click. `solana` has its own derived ed25519 address and is signable via `/wallet/v1/solana/*`. `bitcoin` can be derived in the keystore but is not yet serviced by wallet v1. An endpoint that serves fewer chains than this list (balance, transfer and delete are NEAR-only; withdraw takes `WithdrawChain`) answers 400 for the ones it does not.
          * @enum {string}
          */
-        Chain: "near" | "ethereum" | "polygon" | "base" | "arbitrum" | "optimism" | "bsc" | "avalanche" | "hyperevm" | "solana" | "bitcoin";
+        Chain: "near" | "ethereum" | "polygon" | "base" | "arbitrum" | "optimism" | "bsc" | "avalanche" | "hyperevm" | "hood" | "solana" | "bitcoin";
         /** @description A sub-key of the wallet's EVM key: a distinct secp256k1 key, and so a distinct `0x` address, of the same wallet (`subkey:{id}:evm:{sub_path}` in the keystore). Omitted or empty means the wallet's own key. EVM chains only; a Solana or NEAR endpoint refuses it. A sub-key is a separate address under the wallet's one authority, not a separate authority: any holder of the wallet's API key can sign for any path, and the same `evm_sign` capability governs every path. Nothing about a sub-key is stored; its address is derived on request, like the wallet's own. */
         SubPath: string;
         /**
@@ -2274,7 +2369,7 @@ export interface components {
          * @description A chain funds can be withdrawn to: `near` directly, the rest through the 1Click bridge. Narrower than `Chain` — `hyperevm` is signable but not bridged.
          * @enum {string}
          */
-        WithdrawChain: "near" | "solana" | "ethereum" | "base" | "arbitrum" | "bitcoin" | "bsc" | "polygon" | "optimism" | "avalanche";
+        WithdrawChain: "near" | "solana" | "ethereum" | "base" | "arbitrum" | "bitcoin" | "bsc" | "polygon" | "optimism" | "avalanche" | "hood";
         /**
          * @description Tracked async request / policy transaction type. `withdraw` is a
          *     same-chain intents withdrawal; `cross_chain_withdraw` is a separate type
@@ -2324,9 +2419,9 @@ export interface components {
          *       MPC-derived master instead of OutLayer's shared default. The vault
          *       must already be deployed and verified — **vault deployment is not
          *       done through this endpoint**. Use the dashboard
-         *       (https://outlayer.fastnear.com/vault) or the CLI
+         *       (https://outlayer.ai/vault) or the CLI
          *       (`outlayer vault init`) to deploy. Reference:
-         *       https://outlayer.fastnear.com/docs/vaults
+         *       https://outlayer.ai/docs/vaults
          *     - `account_id` + `pubkey` + `message` + `signature`: bind the wallet
          *       to a verified NEAR account via NEP-413 proof-of-ownership. Used
          *       by clients that want operational keys (`wk_...`) tied to a real
@@ -2365,15 +2460,20 @@ export interface components {
             handoff_url?: string;
             trial?: components["schemas"]["TrialInfo"];
         };
+        /**
+         * @description The trial OFFER. Registering grants nothing; the wallet claims its key
+         *     with `POST /trial-key` when it wants one.
+         */
         TrialInfo: {
-            calls_remaining?: number;
-            /** Format: date-time */
-            expires_at?: string;
-            limits?: {
-                max_instructions?: number;
-                max_execution_seconds?: number;
-                max_memory_mb?: number;
-            };
+            /** @description Whether this deployment offers a trial at all — not whether this wallet may still claim one. */
+            available?: boolean;
+            /** @description How many connector calls a trial is. There is no other budget. */
+            calls?: number;
+            /** @description A trial is the wallet's first `days` days, counted from the wallet's creation — it can be claimed until then and stops working then, whenever it was claimed. */
+            days?: number;
+            claim_url?: string;
+            /** @description What a trial key may call. */
+            scope?: string;
         };
         AddressResponse: {
             wallet_id: string;
@@ -2858,7 +2958,11 @@ export interface components {
             /**
              * @description Source chain. Supported: `near`, `ethereum`, `base`,
              *     `arbitrum`, `solana`, `bitcoin`, `bsc`, `polygon`,
-             *     `optimism`, `avalanche`.
+             *     `optimism`, `avalanche`, `hood`. `token` defaults to `USDC`,
+             *     which not every chain carries — `hood` (Robinhood Chain) does
+             *     not, so name a token it has. `GET /wallet/v1/tokens` lists
+             *     them, and naming one the chain lacks answers
+             *     `unsupported_token` with what it does carry.
              * @example ethereum
              */
             chain: string;
@@ -2880,7 +2984,7 @@ export interface components {
              *     - `near` — 64-char hex (NEAR implicit account), e.g.
              *       `f51768dc0c4d4bbb78890262da9882dee2ee5b6c2fcf2c527e56c6eadcb54353`
              *     - `ethereum` / `base` / `arbitrum` / `bsc` / `polygon` /
-             *       `optimism` / `avalanche` — `0x` + 40 hex (EVM), e.g.
+             *       `optimism` / `avalanche` / `hood` — `0x` + 40 hex (EVM), e.g.
              *       `0x582290c0b2Cb60989B35FFF66049f3e3247355bc`
              *     - `solana` — base58, 32-44 chars (Solana), e.g.
              *       `5AmGa2Bcfajbytg55UUb4vCAAzKBMYKZNQwx5S2BH2qf`
@@ -3276,13 +3380,30 @@ export interface components {
             /** @description NEAR account that owns the policy. */
             controller: string;
             frozen: boolean;
+            /**
+             * @description Whether the wallet has a policy at all. `none`: no policy is
+             *     stored — every operation is allowed (the engine's own rules,
+             *     which no policy relaxes, still hold: account-control operations
+             *     on the extension door are refused for every wallet). `stored`:
+             *     a policy exists and `rules`, `approval`, `capabilities` and
+             *     `authorized_key_hashes` are it, as written — every capability
+             *     it does not name is at that capability's default, which is DENY
+             *     for all but `sign_message`. Absent when the coordinator could not
+             *     read the chain or decrypt what it holds. This is a statement of
+             *     presence, not a rendering of what the policy permits; the
+             *     keystore's evaluator decides that.
+             * @enum {string}
+             */
+            policy?: "none" | "stored";
             rules?: components["schemas"]["PolicyRules"];
             approval?: components["schemas"]["ApprovalConfig"];
             capabilities?: components["schemas"]["Capabilities"];
             authorized_key_hashes?: string[];
             /**
-             * @description Current accumulated usage per token, per period. Same shape as
-             *     `PolicyLimits` — used for client-side velocity-limit visualization.
+             * @description Current accumulated usage per token, per period — spent amounts
+             *     from the coordinator's counters, present whether or not a policy
+             *     is stored. Same shape as `PolicyLimits` — used for client-side
+             *     velocity-limit visualization.
              */
             usage?: {
                 [key: string]: unknown;
@@ -3983,6 +4104,15 @@ export interface operations {
                         /** @enum {string} */
                         binding_status: "pending" | "active" | "suspended" | "revoked" | "unbound";
                     };
+                };
+            };
+            /** @description The secret was accepted and the body could not be read as an event. Deliberately not `422`: in this API that code means the chain answered and a receipt failed (`OnChainTxFailed`), and a client routing on it must not meet it here. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -5922,7 +6052,24 @@ export interface operations {
                     "application/json": components["schemas"]["CallRefusal"];
                 };
             };
-            /** @description The key cannot pay for this call. */
+            /**
+             * @description The key cannot pay for this call. `reason` says which way:
+             *
+             *     * `trial_exhausted` — a TRIAL key has made its calls (`used`, `limit`).
+             *       **`terminal: true`**. Create a payment key with money on it
+             *       (`POST /wallet/v1/create-payment-key`) — a funded key has no call
+             *       limit;
+             *     * `trial_expired` — a TRIAL key past the wallet's first week
+             *       (`expires_at`), with calls left or not. **`terminal: true`**, and
+             *       the same next step. A trial stops starting calls shortly before
+             *       `expires_at`, so that none is cut off mid-run;
+             *     * `insufficient_balance`, `out_of_funds`, `insufficient_allowance` —
+             *       money, as their names say;
+             *     * `expires_too_soon` — the subscription ends before this operation
+             *       could finish; extend it;
+             *     * `allowance_no_deposit` — `X-Attached-Deposit` on a call paid from
+             *       an allowance, which is not money and cannot be paid to a developer.
+             */
             402: {
                 headers: {
                     [name: string]: unknown;
@@ -5931,7 +6078,13 @@ export interface operations {
                     "application/json": components["schemas"]["CallRefusal"];
                 };
             };
-            /** @description The key's scope does not include this project. */
+            /**
+             * @description The key may not make this call. By `reason`: `project_not_allowed`
+             *     — its scope does not include this project; `no_deposit` — a key whose
+             *     value was given (a trial, a grant) sent `X-Attached-Deposit`;
+             *     `tee_session_required`, `vault_not_verified`, `wallet_not_yours` —
+             *     the wallet or vault named does not stand behind this caller.
+             */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5979,9 +6132,15 @@ export interface operations {
              *       **`terminal: false`**: it clears by itself when the call in flight
              *       finishes, so the move is to wait, or to fund the key (money is not
              *       limited this way, and a funded key answers both at once);
-             *     * `connector_quota_exceeded` — the wallet's daily connector quota,
-             *       which widens with the wallet's age and is independent of paying;
-             *     * a plain rate limit, with no `reason`.
+             *     * `operation_limit_reached` — a connector's own ceiling on one
+             *       operation (a technical cap against a loop), with `limit`,
+             *       `window`, `operation` and `retry_after_seconds`;
+             *     * `rate_limit_exceeded` — this key's calls per minute. A request
+             *       stopped earlier, by the per-address limiter, is a bare 429 with no
+             *       `reason`.
+             *
+             *     None of them is a quota on how many calls a paying caller may make:
+             *     there is no such quota.
              */
             429: {
                 headers: {
@@ -5991,11 +6150,17 @@ export interface operations {
                     "application/json": {
                         error?: string;
                         /** @enum {string} */
-                        reason?: "call_already_in_flight" | "connector_quota_exceeded";
+                        reason?: "call_already_in_flight" | "operation_limit_reached" | "rate_limit_exceeded";
                         /** @description False means waiting clears it; true means it will not. */
                         terminal?: boolean;
-                        used?: number;
+                        /** @description For `operation_limit_reached` — the ceiling that was reached. */
                         limit?: number;
+                        /** @description For `operation_limit_reached` — the period the ceiling is counted over, e.g. `day`. */
+                        window?: string;
+                        /** @description For `operation_limit_reached` — the operation the ceiling is on. */
+                        operation?: string;
+                        /** @description For `operation_limit_reached` — how long until the counter expires. */
+                        retry_after_seconds?: number | null;
                     };
                 };
             };
@@ -6145,10 +6310,9 @@ export interface operations {
                 };
             };
             /**
-             * @description No credential, or — with a `wk_` — a wallet that has no agent key
-             *     yet, which answers `Missing X-Payment-Key header`. That is the reply
-             *     to "which key of yours should I report on", not a rejected `wk_`:
-             *     create the agent key with `create-payment-key {"agent": true}`.
+             * @description No `X-Payment-Key`. The report is on one payment key, so that key is
+             *     what is presented — a `wk_` alone does not name one. A wallet gets a
+             *     key from `POST /trial-key` or `POST /wallet/v1/create-payment-key`.
              */
             401: {
                 headers: {
@@ -6254,7 +6418,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The claimed key and its terms. */
+            /** @description The claimed key and what it is good for. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6262,19 +6426,146 @@ export interface operations {
                 content: {
                     "application/json": {
                         /** @description The whole `X-Payment-Key` header value. Shown once. */
-                        payment_key?: string;
-                        owner?: string;
-                        nonce?: number;
-                        allowance_usd?: string;
-                        days?: number;
+                        payment_key: string;
+                        owner: string;
+                        nonce: number;
+                        /** @description How many connector calls this key makes. The whole of a trial's budget. */
+                        calls: number;
+                        /**
+                         * Format: date-time
+                         * @description When the key stops working, used up or not — the wallet's creation plus the trial's days.
+                         */
+                        expires_at: string;
                         /** @description Anything else is refused as `project_not_allowed`. */
-                        project_ids?: string[];
+                        project_ids: string[];
+                        note?: string;
                     };
                 };
             };
-            401: components["responses"]["Unauthorized"];
-            /** @description Already claimed, or claimed too late for this wallet's age. */
+            /** @description `unauthorized` — no `wk_`, or one that is unknown or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrialKeyRefusal"];
+                };
+            };
+            /** @description `trial_window_closed` — the wallet is past its first week. `trial_unavailable` — no trial is offered to this caller. Both terminal: the way forward is a funded payment key. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrialKeyRefusal"];
+                };
+            };
+            /** @description `trial_disabled` — this deployment offers no trial. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrialKeyRefusal"];
+                };
+            };
+            /** @description `trial_already_claimed` — this wallet has had its one. Terminal. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrialKeyRefusal"];
+                };
+            };
+            /** @description `internal_error` — the key could not be issued right now. `terminal: false`: the same request works later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrialKeyRefusal"];
+                };
+            };
+        };
+    };
+    publicConnectors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connectors of this deployment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        network?: "mainnet" | "testnet";
+                        connectors_account?: string;
+                        docs?: string;
+                        how_to_call?: string;
+                        library_skill?: string;
+                        connectors?: {
+                            id?: string;
+                            project_id?: string;
+                            description?: string;
+                            skill?: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    paymentKeyBalance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The key's money, and its allowance or trial when it has one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        owner?: string;
+                        nonce?: number;
+                        initial_balance?: string;
+                        spent?: string;
+                        reserved?: string;
+                        /** @description Money only, in minimal stablecoin units. */
+                        available?: string;
+                        last_used_at?: string | null;
+                        /** @description The value on the key was given, not paid in: it cannot be withdrawn or attached as a deposit. */
+                        is_grant?: boolean;
+                        /** @description When an allowance or a trial ends. Absent without one. */
+                        expires_at?: string;
+                        /** @description A trial key only. The allowance figures are then absent. */
+                        trial?: {
+                            calls?: number;
+                            calls_used?: number;
+                            calls_left?: number;
+                        };
+                        /** @description Subscribers only. */
+                        allowance_usd?: string;
+                        /** @description Subscribers only — what is left, counting expiry. */
+                        allowance_available_usd?: string;
+                        withdrawable?: string;
+                    };
+                };
+            };
+            /** @description No `X-Payment-Key`, or one that does not match a key. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

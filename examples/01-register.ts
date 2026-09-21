@@ -15,7 +15,7 @@ async function main(): Promise<void> {
   //
   // For sovereign custody, pass an already-deployed vault id:
   //   const result = await OutlayerClient.register({ vaultId: 'vault.alice.near' });
-  // Vaults are deployed via the dashboard (https://outlayer.fastnear.com/vault)
+  // Vaults are deployed via the dashboard (https://app.outlayer.ai/vault)
   // or the CLI (`outlayer vault init`) — NOT through this SDK. See docs/vaults.md.
   const result = await OutlayerClient.register();
 
@@ -24,9 +24,12 @@ async function main(): Promise<void> {
   console.log('NEAR account:     ', result.near_account_id);
   console.log('API key (save!):  ', result.api_key);
   console.log('Handoff URL:      ', result.handoff_url);
-  if (result.trial) {
-    console.log('Trial calls left: ', result.trial.calls_remaining);
-    console.log('Trial expires:    ', result.trial.expires_at);
+  if (result.trial?.available) {
+    console.log(
+      'Trial on offer:   ',
+      `${result.trial.calls} connector calls, in the wallet's first ${result.trial.days} days`,
+    );
+    console.log('Claim it with:    ', result.trial.claim_url);
   }
 
   if (!result.api_key) {

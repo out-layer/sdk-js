@@ -10,7 +10,7 @@ All methods return a `Promise`. All errors are typed subclasses of `OutlayerErro
 const { address, public_key } = await client.getAddress('ethereum');
 ```
 
-Supported chains: `near`, `ethereum`, `solana`, `bitcoin`, plus the EVM family — `polygon`, `base`, `arbitrum`, `optimism`, `bsc`, `avalanche` (aliases `eth` / `pol` / `matic` / `arb` / `op` / `avax`). Every EVM chain shares **one** secp256k1 address: `getAddress('ethereum')`, `getAddress('polygon')`, `getAddress('base')`, … all return the same `0x` address. The same `wallet_id` always produces the same address per chain (deterministic HMAC-SHA256 inside the TEE).
+Supported chains: `near`, `ethereum`, `solana`, `bitcoin`, plus the EVM family — `polygon`, `base`, `arbitrum`, `optimism`, `bsc`, `avalanche`, `hood` (aliases `eth` / `pol` / `matic` / `arb` / `op` / `avax`). `hood` is Robinhood Chain, an Arbitrum L2. Every EVM chain shares **one** secp256k1 address: `getAddress('ethereum')`, `getAddress('polygon')`, `getAddress('base')`, … all return the same `0x` address. The same `wallet_id` always produces the same address per chain (deterministic HMAC-SHA256 inside the TEE).
 
 ## Balance
 
@@ -147,7 +147,7 @@ To fund the wallet from another chain, create a deposit intent — 1Click return
 ```ts
 // 1. Request a deposit address on the source chain
 const intent = await client.createDepositIntent({
-  chain: 'ethereum', // ethereum, solana, base, arbitrum, polygon, optimism, avalanche, …
+  chain: 'ethereum', // ethereum, solana, base, arbitrum, polygon, optimism, avalanche, hood, …
   token: 'USDC',
   amount: '5000000', // 5 USDC, smallest unit
 });

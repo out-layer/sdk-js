@@ -34,7 +34,7 @@ Two paths; pick whichever fits your workflow.
 
 ### Dashboard (recommended for first time)
 
-1. Open https://outlayer.fastnear.com/vault
+1. Open https://app.outlayer.ai/vault
 2. Connect your NEAR wallet (the account that will be the parent / controller)
 3. Click **Deploy vault** — the dashboard builds the atomic transaction and asks your wallet to sign
 4. Wait for confirmation (a few seconds)
@@ -54,7 +54,7 @@ outlayer vault init my-app
 
 The CLI does the same atomic deploy as the dashboard but from your terminal — useful for scripted setups.
 
-**Full vault docs**: https://outlayer.fastnear.com/docs/vaults
+**Full vault docs**: https://app.outlayer.ai/docs/vaults
 
 ## Binding a wallet
 
@@ -111,7 +111,7 @@ outlayer vault finalize-recovery vault.alice.near
 
 After finalize, the parent NEAR account holds a full-access key on the vault. The per-vault master remains deterministically derivable, so you can extract every secret and wallet key on your own.
 
-**Full procedure**: https://outlayer.fastnear.com/docs/vaults#recovery
+**Full procedure**: https://app.outlayer.ai/docs/vaults#recovery
 **Source-of-truth runbook**: [`docs/LEAVING_OUTLAYER.md`](https://github.com/out-layer/near-offshore/blob/main/docs/LEAVING_OUTLAYER.md) in the main repo.
 
 ## Checking whether a wallet is vault-bound

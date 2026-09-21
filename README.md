@@ -232,7 +232,7 @@ Reusing the same key returns the original result without re-executing.
 const client = new OutlayerClient({
   apiKey: process.env.OUTLAYER_API_KEY!,
   network: 'mainnet',                           // default; or 'testnet'
-  baseUrl: 'https://api.outlayer.fastnear.com', // optional, overrides network
+  baseUrl: 'https://api.outlayer.ai', // optional, overrides network
   fetch: customFetch,                           // optional, for SSR/proxies
   retry: {
     maxAttempts: 5,
@@ -244,7 +244,7 @@ const client = new OutlayerClient({
 
 ### Testnet vs mainnet
 
-`network: 'testnet'` targets `https://api.testnet.outlayer.fastnear.com`. Useful for development without spending real funds.
+`network: 'testnet'` targets `https://testnet-api.outlayer.ai`. Useful for development without spending real funds.
 
 **Important**: NEAR Intents (cross-chain swaps and gasless withdrawals) only work on mainnet. On testnet you can still:
 - register a wallet, derive addresses

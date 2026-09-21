@@ -39,10 +39,10 @@ Output looks like:
 API key:      wk_2a8b1f3c4d5e6789abcdef0123456789
 Wallet ID:    9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20
 NEAR address: 9c3c9e101c1f4f5e9c4a1d7b9a8f3c20
-Set policy:   https://outlayer.fastnear.com/wallet?api_key=wk_2a8b...
+Set policy:   https://app.outlayer.ai/wallet?key=wk_2a8b...
 ```
 
-The wallet is now active. It has no policy, so all operations are permitted up to the trial limits.
+The wallet is now active. It has no policy, so every operation it is asked for is permitted — a policy is what restricts it. Paying for calls is a separate question: claim the wallet's trial (`POST /trial-key`, ten connector calls in its first week) or create a funded payment key.
 
 ## 3. Set a policy (optional but strongly recommended)
 

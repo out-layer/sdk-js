@@ -6,6 +6,12 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ### Added
 
+- **Robinhood Chain (`hood`)** — an Arbitrum L2, EVM like the rest: it shares
+  the wallet's one `0x` address, signs through `/wallet/v1/evm/*`, and bridges
+  both ways through 1Click. `withdraw({ chain: 'hood' })` and
+  `intentsDepositCrossChain({ chain: 'hood' })` both take it. It does not carry
+  USDC, which a deposit intent assumes when `token` is omitted, so name one of
+  its tokens (`getTokens()` lists them).
 - **EVM signing (v1)** — 3 new methods on `OutlayerClient` that sign with the
   wallet's EVM (secp256k1) key, the single `0x` address shared across all EVM
   chains: `evmSignTypedData` (EIP-712 v4 — e.g. a Polymarket CLOB order),

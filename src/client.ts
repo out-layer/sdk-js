@@ -269,7 +269,7 @@ export class OutlayerClient {
    *   already set.
    *
    * Vault deployment is NOT done here — use the dashboard
-   * (https://outlayer.fastnear.com/vault) or `outlayer vault init` CLI.
+   * (https://app.outlayer.ai/vault) or `outlayer vault init` CLI.
    * See docs/vaults.md for the full flow.
    */
   static async register(

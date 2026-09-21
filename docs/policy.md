@@ -1,6 +1,6 @@
 # Policy management
 
-A wallet without a policy is unrestricted (up to trial limits). A wallet with a policy enforces every rule **inside the TEE**, before signing. This means even if the coordinator or the operator's infrastructure is fully compromised, an attacker cannot bypass the rules.
+A wallet without a policy is unrestricted. A wallet with a policy enforces every rule **inside the TEE**, before signing. This means even if the coordinator or the operator's infrastructure is fully compromised, an attacker cannot bypass the rules.
 
 This page covers the policy schema, the on-chain storage flow, and common patterns.
 

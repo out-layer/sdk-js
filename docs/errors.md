@@ -178,7 +178,7 @@ switch (result.status) {
 | `request_not_found` | 404 | No `wallet_request` with that ID |
 | `approval_not_found` | 404 | No pending approval with that ID |
 | `rate_limited` | 429 | Too many requests |
-| `duplicate_idempotency_key` | 200 | Returns the original result; not an error |
+| `duplicate_idempotency_key` | 200 | A pointer to the original request (its id is in `message`), not its result and not an error — read the outcome with `getRequest(request_id)` |
 | `onchain_tx_failed` | 422 | Tx was broadcast (it IS on chain, `tx_hash` is real) but its execution reverted. **Never retry** — re-broadcasting duplicates the tx. Body carries `tx_hash` + the raw `failure` JSON |
 | `keystore_error` | 503 | TEE keystore unreachable or rejected the request (transient; `Retry-After` set) |
 | `confidential_jwt_expired` | 503 | Confidential upstream rejected the per-account JWT and re-auth failed (transient; `Retry-After` set) |

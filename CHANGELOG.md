@@ -4,8 +4,36 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **The auto-generated `Idempotency-Key` is now the same on every internal
+  retry of one operation**, as the README says it is. It was minted inside the
+  retried call, so each attempt carried a new key, and a write whose first
+  attempt did execute (a lost response, a 5xx after the fact) could execute
+  again. Every write method is affected; a key you pass yourself never was.
+
 ### Added
 
+- **Limit orders** — `createLimitOrder`, `getLimitOrder`, `listLimitOrders`,
+  `cancelLimitOrder`, `cancelAllLimitOrders`. A swap rested on 1Click at your
+  price, funded from the wallet's intents balance; `quantity` is in the base
+  asset's smallest units, `price` is quote per one whole base. A thin door onto
+  1Click's orders: the request carries its parameters (`recipient`,
+  `recipient_type`, …) and the answer is its order — snake_case field names,
+  lower-case enumerated values, nothing renamed or left out (`partial_fills`,
+  `payouts`, `app_fees`, the fee estimates, `order_type`, `time_in_force`, …);
+  `recipient_type` takes all three of 1Click's values (`intents`,
+  `confidential_intents`, `destination_chain`). `is_payout_status_final` is
+  the only terminal signal; a `pending_cancel` order may still fill a last
+  slice. The wallet authorises the order once and the payout happens later
+  with no further signature, so it is gated like an exit: the default-DENY
+  `limit_order` capability and transaction type, the address rules on
+  `recipient`, the amount limits. On a multisig wallet `createLimitOrder`
+  resolves to a `LimitOrderPendingApproval` — tell the two apart by `order_id`.
+  Freezing a wallet stops new orders but does not cancel resting ones —
+  `cancelAllLimitOrders` works on a frozen wallet. Exported types:
+  `LimitOrderCreateRequest`, `LimitOrder`, `LimitOrderCreated`,
+  `LimitOrderPendingApproval`, `LimitOrderCancelAllResponse`.
 - **Robinhood Chain (`hood`)** — an Arbitrum L2, EVM like the rest: it shares
   the wallet's one `0x` address, signs through `/wallet/v1/evm/*`, and bridges
   both ways through 1Click. `withdraw({ chain: 'hood' })` and

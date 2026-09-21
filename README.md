@@ -224,7 +224,7 @@ await client.withdraw({
 });
 ```
 
-Reusing the same key returns the original result without re-executing.
+Reusing the same key does not re-execute, and does not return the stored result either: the call resolves with `{ error: 'duplicate_idempotency_key', message: 'Request already processed: <request_id>' }` — a pointer. Read the outcome with `getRequest(request_id)`.
 
 ## Configuration
 

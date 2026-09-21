@@ -68,6 +68,11 @@ export type DepositIntentRequest = Schemas['DepositIntentRequest'];
 export type DepositIntentResponse = Schemas['DepositIntentResponse'];
 export type DepositStatusResponse = Schemas['DepositStatusResponse'];
 
+export type LimitOrderCreateRequest = Schemas['LimitOrderCreateRequest'];
+export type LimitOrder = Schemas['LimitOrder'];
+export type LimitOrderCreated = Schemas['LimitOrderCreated'];
+export type LimitOrderPendingApproval = Schemas['LimitOrderPendingApproval'];
+export type LimitOrderCancelAllResponse = Schemas['LimitOrderCancelAllResponse'];
 export type PaymentCheckCreateRequest = Schemas['PaymentCheckCreateRequest'];
 export type PaymentCheckCreateResponse = Schemas['PaymentCheckCreateResponse'];
 export type PaymentCheckBatchCreateRequest = Schemas['PaymentCheckBatchCreateRequest'];
@@ -123,6 +128,11 @@ export type ConfidentialBalancesResponse = Schemas['ConfidentialBalancesResponse
 
 type Idempotent = { idempotencyKey?: string };
 
+/**
+ * Called ONCE per operation, outside the closure `runWithRetry` re-runs: a key
+ * minted inside it would be a new key on every attempt, and a retry of a write
+ * that did execute would execute again.
+ */
 function idempotencyHeader(key: string | undefined): Record<string, string> {
   return { 'Idempotency-Key': key ?? newIdempotencyKey() };
 }
@@ -427,11 +437,12 @@ export class OutlayerClient {
 
   call(opts: CallRequest & Idempotent): Promise<CallResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/call', {
           body: body as CallRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -439,11 +450,12 @@ export class OutlayerClient {
 
   transfer(opts: TransferRequest & Idempotent): Promise<CallResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/transfer', {
           body: body as TransferRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -459,11 +471,12 @@ export class OutlayerClient {
    */
   delete(opts: DeleteRequest & Idempotent): Promise<DeleteResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/delete', {
           body: body as DeleteRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -478,11 +491,12 @@ export class OutlayerClient {
    */
   storageDeposit(opts: StorageDepositRequest & Idempotent): Promise<StorageDepositResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/storage-deposit', {
           body: body as StorageDepositRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -490,11 +504,12 @@ export class OutlayerClient {
 
   intentsDeposit(opts: IntentsDepositRequest & Idempotent): Promise<IntentsDepositResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/intents/deposit', {
           body: body as IntentsDepositRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -502,11 +517,12 @@ export class OutlayerClient {
 
   withdraw(opts: WithdrawRequest & Idempotent): Promise<WithdrawResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/intents/withdraw', {
           body: body as WithdrawRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -515,11 +531,12 @@ export class OutlayerClient {
   /** Transfer inside NEAR Intents to another account's intents balance — gasless, stays inside the intents pool (not a withdrawal). */
   intentsTransfer(opts: IntentsTransferRequest & Idempotent): Promise<WithdrawResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/intents/transfer', {
           body: body as IntentsTransferRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -534,11 +551,12 @@ export class OutlayerClient {
 
   swap(opts: SwapRequest & Idempotent): Promise<SwapResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/intents/swap', {
           body: body as SwapRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -685,6 +703,118 @@ export class OutlayerClient {
     return this.listCrossChainDeposits(opts);
   }
 
+  // ------- Limit orders (a swap rested at the owner's price) -------
+
+  /**
+   * Rest a limit order on 1Click, funded from the wallet's intents balance.
+   * `quantity` is in the base asset's smallest units; `price` is quote per one
+   * WHOLE base, a positive decimal string as 1Click reads it. Filled output goes to `recipient` (this
+   * wallet's own intents balance when omitted); the unfilled remainder always
+   * comes back to this wallet. MAINNET only.
+   *
+   * A thin door onto 1Click's orders: the request carries its parameters and
+   * the answer is its order — snake_case field names, lower-case enumerated
+   * values, nothing renamed. `is_payout_status_final` is the ONLY terminal
+   * signal; `fill_status` alone is not, and a `pending_cancel` order may still
+   * fill a last slice.
+   *
+   * The wallet authorises the order ONCE, here — the payout happens later, with
+   * no further signature — and a price through the market fills at once. It is
+   * therefore gated like an exit: the default-DENY `limit_order` capability and
+   * transaction type, the address rules on `recipient`, and the per-token
+   * amount limit. On a multisig wallet the answer is a
+   * {@link LimitOrderPendingApproval} — tell the two apart by `order_id`.
+   */
+  createLimitOrder(
+    opts: LimitOrderCreateRequest & Idempotent,
+  ): Promise<LimitOrderCreated | LimitOrderPendingApproval> {
+    const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
+    return runWithRetry(
+      () =>
+        this.client.POST('/wallet/v1/limit-orders', {
+          body: body as LimitOrderCreateRequest,
+          headers,
+        }),
+      this.retry,
+    );
+  }
+
+  /** One order. Read from 1Click while it is working, from the record once it has finished. 404 for an order that is not this wallet's. */
+  getLimitOrder(orderId: string): Promise<LimitOrder> {
+    return runWithRetry(
+      () =>
+        this.client.GET('/wallet/v1/limit-orders/{order_id}', {
+          params: { path: { order_id: orderId } },
+        }),
+      this.retry,
+    );
+  }
+
+  /**
+   * This wallet's orders as last recorded, newest first; `open: true` → only
+   * those not recorded as finished. Paged: `limit` 1..100 (default 50; more is
+   * refused, not trimmed) and `offset`. The list never asks 1Click — an
+   * order's record is refreshed by {@link getLimitOrder}, so poll the order
+   * you are waiting on, not the list.
+   */
+  listLimitOrders(
+    opts: { open?: boolean; limit?: number; offset?: number } = {},
+  ): Promise<LimitOrder[]> {
+    const query: { open?: boolean; limit?: number; offset?: number } = {};
+    if (opts.open) query.open = true;
+    if (opts.limit !== undefined) query.limit = opts.limit;
+    if (opts.offset !== undefined) query.offset = opts.offset;
+    return runWithRetry(
+      () =>
+        this.client.GET('/wallet/v1/limit-orders', {
+          params: { query },
+        }),
+      this.retry,
+    );
+  }
+
+  /**
+   * Ask 1Click to stop matching an order. Asynchronous and safe to repeat:
+   * `fill_status` turns `pending_cancel`, the order is finished only once
+   * `is_payout_status_final` is true, and it may still end `filled` if a last
+   * slice matched. Never policy-gated — a frozen wallet can always cancel.
+   */
+  cancelLimitOrder(orderId: string): Promise<LimitOrder> {
+    return runWithRetry(
+      () =>
+        this.client.POST('/wallet/v1/limit-orders/{order_id}/cancel', {
+          params: { path: { order_id: orderId } },
+        }),
+      this.retry,
+    );
+  }
+
+  /**
+   * Ask 1Click to cancel every order of this wallet on record as not finished.
+   * Never policy-gated and works on a frozen wallet with the same API key: a
+   * freeze stops new orders but cancels nothing and revokes no key, so this is
+   * how resting orders are cleared after one.
+   * One call covers at most 50 orders, oldest first; `complete: false` means
+   * some cancel did not go through or `remaining` orders were not reached —
+   * call again. `offset` steps over a batch that keeps failing (such a call
+   * never answers `complete: true`: the skipped orders are still resting).
+   * `limit` (1..50) is how many orders one call asks about: when 1Click is slow
+   * the call fails with `chain_unavailable` after about a minute, keeping the
+   * cancels already accepted — call again with a smaller `limit`.
+   */
+  cancelAllLimitOrders(
+    opts: { offset?: number; limit?: number } = {},
+  ): Promise<LimitOrderCancelAllResponse> {
+    const query: { offset?: number; limit?: number } = {};
+    if (opts.offset !== undefined) query.offset = opts.offset;
+    if (opts.limit !== undefined) query.limit = opts.limit;
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/limit-orders/cancel-all', { params: { query } }),
+      this.retry,
+    );
+  }
+
   // ------- Payment checks (agent-to-agent gasless payments) -------
 
   /**
@@ -699,11 +829,12 @@ export class OutlayerClient {
     opts: PaymentCheckCreateRequest & Idempotent,
   ): Promise<PaymentCheckCreateResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/payment-check/create', {
           body: body as PaymentCheckCreateRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -714,11 +845,12 @@ export class OutlayerClient {
     opts: PaymentCheckBatchCreateRequest & Idempotent,
   ): Promise<PaymentCheckBatchCreateResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/payment-check/batch-create', {
           body: body as PaymentCheckBatchCreateRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -819,11 +951,12 @@ export class OutlayerClient {
     opts: ConfidentialShieldRequest & Idempotent,
   ): Promise<ConfidentialOpResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/shield', {
           body: body as ConfidentialShieldRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -844,11 +977,12 @@ export class OutlayerClient {
     opts: ConfidentialUnshieldRequest & Idempotent,
   ): Promise<ConfidentialOpResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/unshield', {
           body: body as ConfidentialUnshieldRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -863,11 +997,12 @@ export class OutlayerClient {
     opts: ConfidentialWithdrawRequest & Idempotent,
   ): Promise<ConfidentialOpResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/withdraw', {
           body: body as ConfidentialWithdrawRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -886,11 +1021,12 @@ export class OutlayerClient {
     opts: ConfidentialTransferRequest & Idempotent,
   ): Promise<ConfidentialOpResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/transfer', {
           body: body as ConfidentialTransferRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );
@@ -899,11 +1035,12 @@ export class OutlayerClient {
   /** Swap between two distinct assets inside the confidential shard. */
   confidentialSwap(opts: ConfidentialSwapRequest & Idempotent): Promise<ConfidentialOpResponse> {
     const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/swap', {
           body: body as ConfidentialSwapRequest,
-          headers: idempotencyHeader(idempotencyKey),
+          headers,
         }),
       this.retry,
     );

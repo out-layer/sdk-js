@@ -166,6 +166,44 @@ for (let i = 0; i < 120; i++) {
 
 > **⚠️ One-time addresses, exact amounts.** Send exactly the quoted token+amount on exactly that chain. Deposit addresses expire and are single-use. Sending the wrong asset/chain is unrecoverable — see the asset warning in the README.
 
+## Limit orders (a swap rested at your price)
+
+A limit order rests on 1Click until it fills, you cancel it, or its deadline passes (7 days by default). It is funded from the wallet's intents balance. Mainnet only.
+
+```ts
+const res = await client.createLimitOrder({
+  base_asset: 'nep141:wrap.near',
+  quote_asset: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+  side: 'sell',                           // give `quantity` of base, receive quote
+  quantity: '1000000000000000000000000',  // base asset, smallest units
+  price: '5',                             // quote per one WHOLE base
+});
+
+if ('error' in res) {
+  // `duplicate_idempotency_key` (HTTP 200): this key was already used. Not an
+  // order and not a pending approval — a pointer; read `getRequest(request_id)`.
+} else if ('order_id' in res) {
+  // Created and funded. `res` is 1Click's order (snake_case, lower-case values)
+  // as it stood at creation — `awaiting_deposit` — plus `transfer_intent_hash`.
+  const order = await client.getLimitOrder(res.order_id); // live state
+} else {
+  // Multisig wallet: `res.status === 'pending_approval'`, approvers sign the terms.
+}
+```
+
+- **Policy.** The wallet authorises the order once; the payout happens later with no further signature, and a price through the market fills at once. It is gated like an exit: the default-DENY `limit_order` capability and transaction type, the address rules on `recipient` (your own intents account too, under a whitelist), the per-token amount limit. `recipient_type: 'confidential_intents'` also needs the `confidential` capability.
+- **Balance.** Short of the order's input, the call throws `insufficient_balance` before anything is created.
+- **State.** `is_payout_status_final` is the only terminal signal. `getLimitOrder` reads 1Click while the order is working; `listLimitOrders({ open, limit, offset })` returns orders as last recorded and never refreshes them — poll the order, not the list.
+
+```ts
+await client.cancelLimitOrder(orderId);        // one order
+const r = await client.cancelAllLimitOrders(); // every unfinished order of THIS wallet
+// { known, cancelled, failed, remaining, complete } — at most 50 per call;
+// while `complete` is false, call again. `{ offset: 50 }` steps over a batch that keeps failing; `{ limit: 10 }` after a `chain_unavailable` that says the call ran out of time.
+```
+
+Cancelling stops matching; what already filled is still paid out and the rest is refunded to the wallet's intents balance. It is asynchronous — an order goes `pending_cancel` and may still fill a last slice. It is never policy-gated and **works on a frozen wallet with the same API key**: a freeze stops new orders but cancels nothing, so cancelling what is resting is a separate step. It touches only limit orders placed through this API — nothing on other venues.
+
 ## Sign a message (NEP-413)
 
 ```ts
@@ -292,4 +330,4 @@ await client.withdraw({
 });
 ```
 
-If the SDK auto-generates a key (default), it's stable across the SDK's internal retries. For at-least-once delivery from a job queue, pass your own key — calling with the same key returns the original result.
+If the SDK auto-generates a key (default), it's stable across the SDK's internal retries. For at-least-once delivery from a job queue, pass your own key. A key the server has already seen is NOT executed again and does NOT return the stored result: the call resolves (HTTP 200) with `{ error: 'duplicate_idempotency_key', message: 'Request already processed: <request_id>' }` — a pointer. Read the outcome with `getRequest(request_id)`.

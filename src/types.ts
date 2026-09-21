@@ -1273,6 +1273,179 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/limit-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List this wallet's limit orders
+         * @description Newest first, paged with `limit` / `offset`, each order as this service last recorded it — the list never asks 1Click. An order's record is brought up to date by reading it (`GET /wallet/v1/limit-orders/{order_id}`) or cancelling it, so poll the one order you are waiting on, not the list.
+         */
+        get: operations["listLimitOrders"];
+        put?: never;
+        /**
+         * Rest a limit order at a price you set
+         * @description Rests a swap on 1Click at `price` or better, funded from the wallet's
+         *     intents balance. The order waits until it fills (partially or fully),
+         *     is cancelled, or reaches its `deadline` (7 days unless you set one).
+         *     Filled output goes to `recipient` — this wallet's own intents balance
+         *     when omitted; the unfilled remainder always comes back to this wallet.
+         *     MAINNET only.
+         *
+         *     This endpoint is a thin door onto 1Click's `/v0/orders`. The request
+         *     carries 1Click's own order parameters and the answer is 1Click's own
+         *     order, in this API's conventions: **field names in snake_case,
+         *     enumerated values in lower case, nothing renamed or merged**
+         *     (`fillStatus: "PENDING_CANCEL"` arrives as
+         *     `fill_status: "pending_cancel"`). A value 1Click adds later passes
+         *     through as itself.
+         *
+         *     **What makes this different from every other exit.** The wallet
+         *     authorises the order ONCE, here. The payout happens later — possibly
+         *     days later — with no further signature from the wallet. Two
+         *     consequences an owner should know before enabling it:
+         *
+         *     * **A price through the market fills at once.** A limit order is not a
+         *       gentler thing than a withdrawal; at a bad enough price it is one. It
+         *       is therefore gated like one — see below.
+         *     * **A freeze does not cancel resting orders.** Freezing a wallet takes
+         *       away the ability to place NEW orders (and to do anything else the
+         *       policy gates); orders already resting stay, and keep filling and
+         *       paying out on the terms they were authorised under. Cancelling is
+         *       never frozen, and a freeze does not revoke API keys: the same key
+         *       that placed the orders calls `cancel-all` (or cancels order by
+         *       order) to clear them. Cancelling is asynchronous, and the upstream
+         *       allows a last slice to fill after a cancel is accepted.
+         *
+         *     **Security model.** Gated by the default-DENY `limit_order` capability
+         *     AND the `limit_order` transaction type, plus the address rules on
+         *     `recipient` and the per-token amount limit on what the wallet sends — the same
+         *     gates as `cross_chain_withdraw`, which neither stands in for it nor is
+         *     implied by it. The address rules apply to the default recipient too:
+         *     under a `whitelist`, an order paying out to this wallet's own intents
+         *     account needs that account on the list. On a multisig wallet the call answers
+         *     `pending_approval`: approvers sign over the order's terms (input token
+         *     and amount, output token and minimum), and the order is created only
+         *     after the threshold.
+         *
+         *     **Amounts.** `quantity` is in the base asset's smallest units. `price`
+         *     is quote per one WHOLE base, a plain decimal string. The wallet sends
+         *     the base on a `sell` and the quote on a `buy`; the terms are computed
+         *     by this service before the order exists, and the upstream's own figures
+         *     must be no worse or the order is cancelled unfunded. Minimum order
+         *     value is 0.1 USD (the upstream's).
+         *
+         *     **Fees.** 1Click applies its own app fee to the input (reported back as
+         *     `app_fees`, in basis points). It is not set by this service.
+         *
+         *     **Balance.** The wallet's intents balance of the asset it sends is
+         *     checked before anything is created at 1Click: short of the order's
+         *     input, the call answers `insufficient_balance` with both figures.
+         *
+         *     **The answer** is the order as 1Click described it when it was created
+         *     — `fill_status: awaiting_deposit`, `deposited_amount: "0"` — together
+         *     with `transfer_intent_hash`, the transfer that funds it. 1Click picks
+         *     the deposit up within seconds; read the order to see it `open`.
+         *
+         *     **Idempotency** is the rest of this API's: a key seen before is not
+         *     executed again and answers `duplicate_idempotency_key`, naming the
+         *     `request_id` it belongs to.
+         */
+        post: operations["createLimitOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/limit-orders/cancel-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel every order this wallet still has resting
+         * @description Asks 1Click to cancel every limit order of THIS wallet that is on
+         *     record as not finished — the orders placed through this API with this
+         *     wallet, and nothing else: no other wallet, no other venue. For each
+         *     one matching stops, what already filled is still paid out to the
+         *     order's `recipient`, and the unfilled remainder is refunded to the
+         *     wallet's intents balance. With nothing resting it answers `known: 0`.
+         *
+         *     One call asks about at most 50 orders, oldest first. A wallet with more
+         *     gets `remaining` > 0 and `complete: false` — call again until
+         *     `complete` is true. If a batch keeps failing, step over it with
+         *     `offset` to reach the orders behind it; a call with an `offset` never
+         *     answers `complete: true`, because the skipped orders are still resting.
+         *
+         *     Never policy-gated and never refused to a frozen wallet: cancelling
+         *     only ever brings funds home. A freeze cancels nothing by itself and
+         *     does not revoke API keys — this call, with the same key as before, is
+         *     how the orders that were resting when a wallet was frozen are
+         *     cleared. Cancelling is asynchronous; read the
+         *     orders back to see them finish. `complete: false` means some order
+         *     could not be reached — call again.
+         */
+        post: operations["cancelAllLimitOrders"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/limit-orders/{order_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one limit order
+         * @description The order's current state: read from 1Click while it is working, from the record once it has finished paying out (it can no longer change). `404` for an order that is not this wallet's — an order id is not a bearer token.
+         */
+        get: operations["getLimitOrder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/limit-orders/{order_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel one limit order
+         * @description Asks 1Click to stop matching the order. Filled output is still paid
+         *     out and the unfilled remainder refunded to this wallet's intents
+         *     balance. Asynchronous and safe to repeat: `fill_status` turns
+         *     `pending_cancel`, the order is finished only when
+         *     `is_payout_status_final` is true, and it may still end `filled` if a
+         *     last slice matched. Never policy-gated — a frozen wallet can always
+         *     cancel.
+         */
+        post: operations["cancelLimitOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/v1/payment-check/create": {
         parameters: {
             query?: never;
@@ -2377,15 +2550,17 @@ export interface components {
          *     folded into `withdraw`). `confidential` covers every confidential-shard
          *     op (shield / unshield / withdraw / transfer / swap). The deposit family
          *     (`intents/deposit`, `storage-deposit`, cross-chain deposit) all gate as
-         *     `call`.
+         *     `call`. `limit_order` is a rested 1Click order and, like
+         *     `cross_chain_withdraw`, its own type: permitting swaps or cross-chain
+         *     exits does not permit it.
          * @enum {string}
          */
-        RequestType: "call" | "transfer" | "withdraw" | "cross_chain_withdraw" | "deposit" | "swap" | "confidential";
+        RequestType: "call" | "transfer" | "withdraw" | "cross_chain_withdraw" | "limit_order" | "deposit" | "swap" | "confidential";
         /**
          * @description `partially_failed` occurs only for `w_execute_extension` (Agent Connect's extension door) and is a NORMAL outcome, not an error: the wallet detaches its promises, they execute concurrently and independently, and one failing neither reverts the others nor undoes the value they moved. Read `result.promises[]` for which did what.
          * @enum {string}
          */
-        RequestStatus: "pending_deposit" | "processing" | "success" | "partially_failed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "cancelled" | "needs_review";
+        RequestStatus: "pending_deposit" | "processing" | "success" | "completed" | "partially_failed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "cancelled" | "needs_review";
         /** @enum {string} */
         ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
         ErrorResponse: {
@@ -2520,7 +2695,7 @@ export interface components {
              * @description What the holder is doing. Present even when `in_flight_request_id` is `null`, and worth branching on: a transfer clears in seconds while a cross-chain withdraw can run for many minutes, and that is the difference between retrying at once and backing off. `repair` is the odd one — a read of a request left unresolved settles it under the same lock, and that finishes quickly.
              * @enum {string|null}
              */
-            in_flight_operation?: null | "transfer" | "call" | "swap" | "delete" | "withdraw" | "cross_chain_withdraw" | "cross_chain_deposit" | "storage_deposit" | "intents_transfer" | "intents_deposit" | "confidential" | "confidential_deposit" | "repair";
+            in_flight_operation?: null | "transfer" | "call" | "swap" | "delete" | "withdraw" | "cross_chain_withdraw" | "cross_chain_deposit" | "limit_order" | "storage_deposit" | "intents_transfer" | "intents_deposit" | "confidential" | "confidential_deposit" | "repair";
         };
         /**
          * @description A `403` from the Agent Connect pre-flight: the request was refused BEFORE it was signed, so no gas was spent, and the refusal names the rule the wallet contract would have panicked on.
@@ -3042,6 +3217,131 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** @description 1Click's own order parameters, less the ones that are not the caller's to choose: the order is always funded from, and refunded to, this wallet's intents balance. */
+        LimitOrderCreateRequest: {
+            /** @description Defuse asset id of the asset `quantity` is denominated in. */
+            base_asset: string;
+            /** @description Defuse asset id of the asset `price` is denominated in. */
+            quote_asset: string;
+            /**
+             * @description `sell` — give `quantity` of base, receive quote at `price` or better. `buy` — receive `quantity` of base, pay quote at `price` or better.
+             * @enum {string}
+             */
+            side: "sell" | "buy";
+            /** @description Base amount in the base asset's smallest units — digits only. A buy targets this output; a sell targets this input. */
+            quantity: string;
+            /** @description Quote per one WHOLE base, as 1Click reads it: a positive decimal, optionally with an exponent (`"5"`, `"0.25"`, `".5"`, `"1.2e1"`), no sign, spaces or separators, at most 64 characters. `"5"` is 5 quote per 1 base. These are 1Click's own bounds, not additional ones. */
+            price: string;
+            /** @description Where the filled output goes. Omitted → this wallet's own intents balance. Subject to the policy's address rules either way. */
+            recipient?: string;
+            /**
+             * @description 1Click's `recipientType`, lower-cased. `intents` — `recipient` is a NEAR account credited inside NEAR Intents. `confidential_intents` — the same, on the confidential shard, and the policy must then permit the `confidential` capability as well as `limit_order`. `destination_chain` — `recipient` is an address on the output asset's own chain, and is then required. Part of the terms approvers sign.
+             * @default intents
+             * @enum {string}
+             */
+            recipient_type: "intents" | "confidential_intents" | "destination_chain";
+            /**
+             * Format: date-time
+             * @description When the order expires. Omitted → 7 days.
+             */
+            deadline?: string;
+        };
+        /** @description A 1Click order, as 1Click reports it — every attribute of its `LimitOrderAttributes` (https://1click.chaindefuser.com/docs/v0/openapi.yaml), with field names in snake_case and enumerated values in lower case, nothing renamed or left out. Enumerations are open — 1Click reserves values for order types that do not exist yet. */
+        LimitOrder: {
+            order_id: string;
+            /** @description `limit`. */
+            order_type?: string;
+            /** @description Where the wallet's funding transfer went. Informational. */
+            deposit_address: string;
+            /** @description Always `simple` — orders here are never created in memo mode. */
+            deposit_mode?: string;
+            /** @description Always `intents` — orders here are funded from the intents balance. */
+            deposit_type?: string;
+            /** @description Matching state: `awaiting_deposit`, `open`, `partially_filled`, `filled`, `pending_cancel`, `canceled`, `expired`, `untriggered`. NOT a terminal signal — see `is_payout_status_final`. */
+            fill_status: string;
+            /** @description Payout state, e.g. `not_started`, `completed`, `failed`. */
+            payout_status: string;
+            /** @description The ONLY terminal signal: filled output has been paid out and any unfilled amount refunded. `fill_status` reaching `canceled` or `filled` does not by itself mean the money has finished moving, and a `pending_cancel` order may still fill a last slice. */
+            is_payout_status_final: boolean;
+            /** @description 1Click's payout legs, verbatim: `withdrawal`, `allWithdrawals`, `refund`, each with a `status` and, once completed, a `txHash`. */
+            payouts?: Record<string, never>;
+            /** @description Fills that have already executed, verbatim (`id`, `amountIn`, `amountOut`, `createdAt`, `updatedAt`). On a `partially_filled` order this is what says how much has filled so far. */
+            partial_fills?: Record<string, never>[];
+            /** @description How much of the input the order holds, smallest units. */
+            deposited_amount?: string;
+            deposited_amount_formatted?: string;
+            base_asset: string;
+            quote_asset: string;
+            quantity: string;
+            /** @enum {string} */
+            side: "sell" | "buy";
+            price: string;
+            /** @description What the order moves, as 1Click computed it. */
+            swap_view: {
+                origin_asset?: string;
+                destination_asset?: string;
+                /** @description `exact_input` on a sell, `exact_output` on a buy. */
+                swap_type?: string;
+                /** @description Sell — what the wallet sent. */
+                amount_in?: string;
+                /** @description Sell — the least the order pays out. */
+                min_amount_out?: string;
+                /** @description Buy — the most the wallet sent. */
+                max_amount_in?: string;
+                /** @description Buy — exactly what the order pays out. */
+                amount_out?: string;
+            };
+            /** @description Fees 1Click applied to the input of its own accord, verbatim. Reported because they come out of the wallet's funds. */
+            app_fees?: {
+                recipient?: string;
+                /** @description Basis points. */
+                fee?: number;
+            }[];
+            recipient: string;
+            /** @description `intents`, `confidential_intents` or `destination_chain`. */
+            recipient_type: string;
+            /** @description Always this wallet's own intents account. */
+            refund_to: string;
+            refund_type: string;
+            estimated_withdraw_fee?: string;
+            estimated_withdraw_fee_formatted?: string;
+            estimated_refund_fee?: string;
+            estimated_refund_fee_formatted?: string;
+            /** @description Always `basic`. */
+            confidentiality?: string;
+            /** @description `gtc` — the only value 1Click offers. */
+            time_in_force?: string;
+            deadline?: string;
+            created_at?: string;
+            /** @description The intent that funded the order. The one field here that is this service's and not 1Click's. */
+            transfer_intent_hash?: string;
+        };
+        LimitOrderCreated: components["schemas"]["LimitOrder"] & {
+            /** @description This create, as the rest of the API knows it (idempotency, audit). Follow the ORDER by `order_id`. */
+            request_id: string;
+        };
+        LimitOrderPendingApproval: {
+            request_id: string;
+            /** @enum {string} */
+            status: "pending_approval";
+            approval_id: string;
+            required: number;
+            approved: number;
+            /** @description What approvers sign over — the order's terms. */
+            request_hash: string;
+        };
+        LimitOrderCancelAllResponse: {
+            /** @description Unfinished orders this call asked 1Click to cancel (at most 50). */
+            known: number;
+            /** @description Cancels 1Click accepted. */
+            cancelled: number;
+            /** @description Cancels that did not go through; those orders are still resting. */
+            failed: number;
+            /** @description Unfinished orders this call did not get to. Call again. */
+            remaining: number;
+            /** @description True when nothing failed and nothing remains. False → orders may still be resting: call again. */
+            complete: boolean;
+        };
         PaymentCheckCreateRequest: {
             /** @description Token to fund the check with. Accepts a `defuse_asset_id` (`nep141:<contract>`) or a bare NEP-141 contract id; normalized server-side. */
             token: string;
@@ -3317,6 +3617,7 @@ export interface components {
             confidential?: components["schemas"]["Capability"];
             swap?: components["schemas"]["Capability"];
             cross_chain_withdraw?: components["schemas"]["Capability"];
+            limit_order?: components["schemas"]["Capability"];
             payment_check?: components["schemas"]["Capability"];
             sign_message?: components["schemas"]["SignMessageCapability"];
             evm_sign?: components["schemas"]["EvmSignCapability"];
@@ -3802,9 +4103,17 @@ export interface components {
     };
     parameters: {
         /**
-         * @description Optional idempotency token. Resubmitting a write request with the same
-         *     key returns the original result without re-execution. Recommended for
-         *     clients that retry on network failure.
+         * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+         *     is never compared. Resubmitting a write request with a key already seen
+         *     does NOT re-execute it and does NOT return the stored result: it
+         *     answers **HTTP `200`** with
+         *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+         *     — a pointer to the original request, not an error for a retry. Read the
+         *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+         *     is `200`, a client has to check `error` in the body. Use one key per
+         *     logical operation; with no header the server mints a fresh key per
+         *     call, so nothing is deduplicated. Recommended for clients that retry
+         *     on network failure.
          */
         IdempotencyKey: string;
     };
@@ -4289,9 +4598,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4364,9 +4681,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4375,6 +4700,13 @@ export interface operations {
         };
         requestBody: {
             content: {
+                /**
+                 * @example {
+                 *       "chain": "near",
+                 *       "to": "bob.near",
+                 *       "amount": "1000000000000000000000000"
+                 *     }
+                 */
                 "application/json": components["schemas"]["TransferRequest"];
             };
         };
@@ -4400,9 +4732,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4442,9 +4782,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4483,9 +4831,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4525,9 +4881,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4587,9 +4951,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4622,9 +4994,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4832,9 +5212,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4874,9 +5262,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4916,9 +5312,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4958,9 +5362,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -5031,9 +5443,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -5074,9 +5494,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -5397,14 +5825,181 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listLimitOrders: {
+        parameters: {
+            query?: {
+                /** @description Only orders not yet recorded as finished paying out. */
+                open?: boolean;
+                /** @description Page size. A value outside 1..100 is refused with `400`, not cut down — page with `offset` for more. */
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The wallet's orders. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitOrder"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    createLimitOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "base_asset": "nep141:wrap.near",
+                 *       "quote_asset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+                 *       "side": "sell",
+                 *       "quantity": "1000000000000000000000000",
+                 *       "price": "5"
+                 *     }
+                 */
+                "application/json": components["schemas"]["LimitOrderCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The order was created and funded, or is waiting for multisig approval. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitOrderCreated"] | components["schemas"]["LimitOrderPendingApproval"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    cancelAllLimitOrders: {
+        parameters: {
+            query?: {
+                /** @description Unfinished orders to skip, oldest first. */
+                offset?: number;
+                /** @description How many orders this call asks 1Click about. If 1Click is slow the call stops after about a minute and answers `503` saying how many cancels were accepted — those stay accepted; call again with a smaller `limit`. A value outside 1..50 is refused with `400`. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many cancels were asked for and accepted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitOrderCancelAllResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getLimitOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitOrder"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    cancelLimitOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The order, as of the cancel being accepted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitOrder"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     createPaymentCheck: {
         parameters: {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -5445,9 +6040,17 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token. Resubmitting a write request with the same
-                 *     key returns the original result without re-execution. Recommended for
-                 *     clients that retry on network failure.
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };

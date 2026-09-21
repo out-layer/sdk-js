@@ -880,19 +880,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/TransferRequest'
-            examples:
-              canonical:
-                summary: Canonical `to` field
-                value:
-                  chain: near
-                  to: bob.near
-                  amount: '1000000000000000000000000'
-              legacyReceiverId:
-                summary: Legacy `receiver_id` alias (still accepted)
-                value:
-                  chain: near
-                  receiver_id: bob.near
-                  amount: '1000000000000000000000000'
+            example:
+              chain: near
+              to: bob.near
+              amount: '1000000000000000000000000'
       responses:
         '200':
           description: Transfer submitted
@@ -2188,6 +2179,266 @@ paths:
   # ============================================================================
   # Payment checks — agent-to-agent gasless payments via ephemeral intents keys
   # ============================================================================
+  /wallet/v1/limit-orders:
+    post:
+      tags: [Wallet]
+      operationId: createLimitOrder
+      summary: Rest a limit order at a price you set
+      description: |
+        Rests a swap on 1Click at `price` or better, funded from the wallet's
+        intents balance. The order waits until it fills (partially or fully),
+        is cancelled, or reaches its `deadline` (7 days unless you set one).
+        Filled output goes to `recipient` — this wallet's own intents balance
+        when omitted; the unfilled remainder always comes back to this wallet.
+        MAINNET only.
+
+        This endpoint is a thin door onto 1Click's `/v0/orders`. The request
+        carries 1Click's own order parameters and the answer is 1Click's own
+        order, in this API's conventions: **field names in snake_case,
+        enumerated values in lower case, nothing renamed or merged**
+        (`fillStatus: "PENDING_CANCEL"` arrives as
+        `fill_status: "pending_cancel"`). A value 1Click adds later passes
+        through as itself.
+
+        **What makes this different from every other exit.** The wallet
+        authorises the order ONCE, here. The payout happens later — possibly
+        days later — with no further signature from the wallet. Two
+        consequences an owner should know before enabling it:
+
+        * **A price through the market fills at once.** A limit order is not a
+          gentler thing than a withdrawal; at a bad enough price it is one. It
+          is therefore gated like one — see below.
+        * **A freeze does not cancel resting orders.** Freezing a wallet takes
+          away the ability to place NEW orders (and to do anything else the
+          policy gates); orders already resting stay, and keep filling and
+          paying out on the terms they were authorised under. Cancelling is
+          never frozen, and a freeze does not revoke API keys: the same key
+          that placed the orders calls `cancel-all` (or cancels order by
+          order) to clear them. Cancelling is asynchronous, and the upstream
+          allows a last slice to fill after a cancel is accepted.
+
+        **Security model.** Gated by the default-DENY `limit_order` capability
+        AND the `limit_order` transaction type, plus the address rules on
+        `recipient` and the per-token amount limit on what the wallet sends — the same
+        gates as `cross_chain_withdraw`, which neither stands in for it nor is
+        implied by it. The address rules apply to the default recipient too:
+        under a `whitelist`, an order paying out to this wallet's own intents
+        account needs that account on the list. On a multisig wallet the call answers
+        `pending_approval`: approvers sign over the order's terms (input token
+        and amount, output token and minimum), and the order is created only
+        after the threshold.
+
+        **Amounts.** `quantity` is in the base asset's smallest units. `price`
+        is quote per one WHOLE base, a plain decimal string. The wallet sends
+        the base on a `sell` and the quote on a `buy`; the terms are computed
+        by this service before the order exists, and the upstream's own figures
+        must be no worse or the order is cancelled unfunded. Minimum order
+        value is 0.1 USD (the upstream's).
+
+        **Fees.** 1Click applies its own app fee to the input (reported back as
+        `app_fees`, in basis points). It is not set by this service.
+
+        **Balance.** The wallet's intents balance of the asset it sends is
+        checked before anything is created at 1Click: short of the order's
+        input, the call answers `insufficient_balance` with both figures.
+
+        **The answer** is the order as 1Click described it when it was created
+        — `fill_status: awaiting_deposit`, `deposited_amount: "0"` — together
+        with `transfer_intent_hash`, the transfer that funds it. 1Click picks
+        the deposit up within seconds; read the order to see it `open`.
+
+        **Idempotency** is the rest of this API's: a key seen before is not
+        executed again and answers `duplicate_idempotency_key`, naming the
+        `request_id` it belongs to.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LimitOrderCreateRequest'
+            example:
+              base_asset: nep141:wrap.near
+              quote_asset: nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1
+              side: sell
+              quantity: '1000000000000000000000000'
+              price: '5'
+      responses:
+        '200':
+          description: The order was created and funded, or is waiting for multisig approval.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LimitOrderCreated'
+                  - $ref: '#/components/schemas/LimitOrderPendingApproval'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      tags: [Wallet]
+      operationId: listLimitOrders
+      summary: List this wallet's limit orders
+      description: >-
+        Newest first, paged with `limit` / `offset`, each order as this service
+        last recorded it — the list never asks 1Click. An order's record is brought up to date by
+        reading it (`GET /wallet/v1/limit-orders/{order_id}`) or cancelling it,
+        so poll the one order you are waiting on, not the list.
+      parameters:
+        - name: open
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Only orders not yet recorded as finished paying out.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+          description: >-
+            Page size. A value outside 1..100 is refused with `400`, not cut
+            down — page with `offset` for more.
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: The wallet's orders.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LimitOrder'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /wallet/v1/limit-orders/cancel-all:
+    post:
+      tags: [Wallet]
+      operationId: cancelAllLimitOrders
+      summary: Cancel every order this wallet still has resting
+      description: |
+        Asks 1Click to cancel every limit order of THIS wallet that is on
+        record as not finished — the orders placed through this API with this
+        wallet, and nothing else: no other wallet, no other venue. For each
+        one matching stops, what already filled is still paid out to the
+        order's `recipient`, and the unfilled remainder is refunded to the
+        wallet's intents balance. With nothing resting it answers `known: 0`.
+
+        One call asks about at most 50 orders, oldest first. A wallet with more
+        gets `remaining` > 0 and `complete: false` — call again until
+        `complete` is true. If a batch keeps failing, step over it with
+        `offset` to reach the orders behind it; a call with an `offset` never
+        answers `complete: true`, because the skipped orders are still resting.
+
+        Never policy-gated and never refused to a frozen wallet: cancelling
+        only ever brings funds home. A freeze cancels nothing by itself and
+        does not revoke API keys — this call, with the same key as before, is
+        how the orders that were resting when a wallet was frozen are
+        cleared. Cancelling is asynchronous; read the
+        orders back to see them finish. `complete: false` means some order
+        could not be reached — call again.
+      parameters:
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: Unfinished orders to skip, oldest first.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+          description: >-
+            How many orders this call asks 1Click about. If 1Click is slow the
+            call stops after about a minute and answers `503` saying how many
+            cancels were accepted — those stay accepted; call again with a
+            smaller `limit`. A value outside 1..50 is refused with `400`.
+      responses:
+        '200':
+          description: How many cancels were asked for and accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LimitOrderCancelAllResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /wallet/v1/limit-orders/{order_id}:
+    get:
+      tags: [Wallet]
+      operationId: getLimitOrder
+      summary: Read one limit order
+      description: >-
+        The order's current state: read from 1Click while it is working, from
+        the record once it has finished paying out (it can no longer change).
+        `404` for an order that is not this wallet's — an order id is not a
+        bearer token.
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LimitOrder'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /wallet/v1/limit-orders/{order_id}/cancel:
+    post:
+      tags: [Wallet]
+      operationId: cancelLimitOrder
+      summary: Cancel one limit order
+      description: |
+        Asks 1Click to stop matching the order. Filled output is still paid
+        out and the unfilled remainder refunded to this wallet's intents
+        balance. Asynchronous and safe to repeat: `fill_status` turns
+        `pending_cancel`, the order is finished only when
+        `is_payout_status_final` is true, and it may still end `filled` if a
+        last slice matched. Never policy-gated — a frozen wallet can always
+        cancel.
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The order, as of the cancel being accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LimitOrder'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
   /wallet/v1/payment-check/create:
     post:
       tags: [Wallet]
@@ -3734,9 +3985,17 @@ components:
       schema:
         type: string
       description: |
-        Optional idempotency token. Resubmitting a write request with the same
-        key returns the original result without re-execution. Recommended for
-        clients that retry on network failure.
+        Optional idempotency token, scoped to `(wallet, key)`; the request body
+        is never compared. Resubmitting a write request with a key already seen
+        does NOT re-execute it and does NOT return the stored result: it
+        answers **HTTP `200`** with
+        `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+        — a pointer to the original request, not an error for a retry. Read the
+        outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+        is `200`, a client has to check `error` in the body. Use one key per
+        logical operation; with no header the server mints a fresh key per
+        call, so nothing is deduplicated. Recommended for clients that retry
+        on network failure.
 
   responses:
     BadRequest:
@@ -4208,12 +4467,15 @@ components:
         folded into `withdraw`). `confidential` covers every confidential-shard
         op (shield / unshield / withdraw / transfer / swap). The deposit family
         (`intents/deposit`, `storage-deposit`, cross-chain deposit) all gate as
-        `call`.
+        `call`. `limit_order` is a rested 1Click order and, like
+        `cross_chain_withdraw`, its own type: permitting swaps or cross-chain
+        exits does not permit it.
       enum:
         - call
         - transfer
         - withdraw
         - cross_chain_withdraw
+        - limit_order
         - deposit
         - swap
         - confidential
@@ -4230,6 +4492,9 @@ components:
         - pending_deposit
         - processing
         - success
+        # What a payment check's request row says from the moment it is
+        # written: the check exists. Every other operation ends in `success`.
+        - completed
         - partially_failed
         - failed
         - refunded
@@ -4533,6 +4798,7 @@ components:
             - withdraw
             - cross_chain_withdraw
             - cross_chain_deposit
+            - limit_order
             - storage_deposit
             - intents_transfer
             - intents_deposit
@@ -5413,6 +5679,254 @@ components:
           additionalProperties: {}
 
     # ----- Payment checks -----
+    LimitOrderCreateRequest:
+      type: object
+      description: >-
+        1Click's own order parameters, less the ones that are not the caller's
+        to choose: the order is always funded from, and refunded to, this
+        wallet's intents balance.
+      required: [base_asset, quote_asset, side, quantity, price]
+      properties:
+        base_asset:
+          type: string
+          description: Defuse asset id of the asset `quantity` is denominated in.
+        quote_asset:
+          type: string
+          description: Defuse asset id of the asset `price` is denominated in.
+        side:
+          type: string
+          enum: [sell, buy]
+          description: >-
+            `sell` — give `quantity` of base, receive quote at `price` or
+            better. `buy` — receive `quantity` of base, pay quote at `price` or
+            better.
+        quantity:
+          type: string
+          pattern: '^[0-9]+$'
+          maxLength: 65
+          description: >-
+            Base amount in the base asset's smallest units — digits only. A buy
+            targets this output; a sell targets this input.
+        price:
+          type: string
+          maxLength: 64
+          pattern: '^([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$'
+          description: >-
+            Quote per one WHOLE base, as 1Click reads it: a positive decimal,
+            optionally with an exponent (`"5"`, `"0.25"`, `".5"`, `"1.2e1"`), no
+            sign, spaces or separators, at most 64 characters. `"5"` is 5 quote
+            per 1 base. These are 1Click's own bounds, not additional ones.
+        recipient:
+          type: string
+          description: >-
+            Where the filled output goes. Omitted → this wallet's own intents
+            balance. Subject to the policy's address rules either way.
+        recipient_type:
+          type: string
+          enum: [intents, confidential_intents, destination_chain]
+          default: intents
+          description: >-
+            1Click's `recipientType`, lower-cased. `intents` — `recipient` is a
+            NEAR account credited inside NEAR Intents. `confidential_intents` —
+            the same, on the confidential shard, and the policy must then
+            permit the `confidential` capability as well as `limit_order`.
+            `destination_chain` — `recipient` is an address on the output
+            asset's own chain, and is then required. Part of the terms
+            approvers sign.
+        deadline:
+          type: string
+          format: date-time
+          description: When the order expires. Omitted → 7 days.
+
+    LimitOrder:
+      type: object
+      description: >-
+        A 1Click order, as 1Click reports it — every attribute of its
+        `LimitOrderAttributes`
+        (https://1click.chaindefuser.com/docs/v0/openapi.yaml), with field
+        names in snake_case and enumerated values in lower case, nothing
+        renamed or left out. Enumerations are open — 1Click reserves values
+        for order types that do not exist yet.
+      required:
+        - order_id
+        - deposit_address
+        - fill_status
+        - payout_status
+        - is_payout_status_final
+        - base_asset
+        - quote_asset
+        - quantity
+        - side
+        - price
+        - swap_view
+        - recipient
+        - recipient_type
+        - refund_to
+        - refund_type
+      properties:
+        order_id:
+          type: string
+        order_type:
+          type: string
+          description: '`limit`.'
+        deposit_address:
+          type: string
+          description: Where the wallet's funding transfer went. Informational.
+        deposit_mode:
+          type: string
+          description: Always `simple` — orders here are never created in memo mode.
+        deposit_type:
+          type: string
+          description: Always `intents` — orders here are funded from the intents balance.
+        fill_status:
+          type: string
+          description: >-
+            Matching state: `awaiting_deposit`, `open`, `partially_filled`,
+            `filled`, `pending_cancel`, `canceled`, `expired`, `untriggered`.
+            NOT a terminal signal — see `is_payout_status_final`.
+        payout_status:
+          type: string
+          description: Payout state, e.g. `not_started`, `completed`, `failed`.
+        is_payout_status_final:
+          type: boolean
+          description: >-
+            The ONLY terminal signal: filled output has been paid out and any
+            unfilled amount refunded. `fill_status` reaching `canceled` or
+            `filled` does not by itself mean the money has finished moving, and
+            a `pending_cancel` order may still fill a last slice.
+        payouts:
+          type: object
+          description: >-
+            1Click's payout legs, verbatim: `withdrawal`, `allWithdrawals`,
+            `refund`, each with a `status` and, once completed, a `txHash`.
+        partial_fills:
+          type: array
+          description: >-
+            Fills that have already executed, verbatim (`id`, `amountIn`,
+            `amountOut`, `createdAt`, `updatedAt`). On a `partially_filled`
+            order this is what says how much has filled so far.
+          items:
+            type: object
+        deposited_amount:
+          type: string
+          description: How much of the input the order holds, smallest units.
+        deposited_amount_formatted: { type: string }
+        base_asset: { type: string }
+        quote_asset: { type: string }
+        quantity: { type: string }
+        side:
+          type: string
+          enum: [sell, buy]
+        price: { type: string }
+        swap_view:
+          type: object
+          description: What the order moves, as 1Click computed it.
+          properties:
+            origin_asset: { type: string }
+            destination_asset: { type: string }
+            swap_type:
+              type: string
+              description: '`exact_input` on a sell, `exact_output` on a buy.'
+            amount_in:
+              type: string
+              description: Sell — what the wallet sent.
+            min_amount_out:
+              type: string
+              description: Sell — the least the order pays out.
+            max_amount_in:
+              type: string
+              description: Buy — the most the wallet sent.
+            amount_out:
+              type: string
+              description: Buy — exactly what the order pays out.
+        app_fees:
+          type: array
+          description: >-
+            Fees 1Click applied to the input of its own accord, verbatim.
+            Reported because they come out of the wallet's funds.
+          items:
+            type: object
+            properties:
+              recipient: { type: string }
+              fee:
+                type: integer
+                description: Basis points.
+        recipient: { type: string }
+        recipient_type:
+          type: string
+          description: '`intents`, `confidential_intents` or `destination_chain`.'
+        refund_to:
+          type: string
+          description: Always this wallet's own intents account.
+        refund_type:
+          type: string
+        estimated_withdraw_fee: { type: string }
+        estimated_withdraw_fee_formatted: { type: string }
+        estimated_refund_fee: { type: string }
+        estimated_refund_fee_formatted: { type: string }
+        confidentiality:
+          type: string
+          description: Always `basic`.
+        time_in_force:
+          type: string
+          description: '`gtc` — the only value 1Click offers.'
+        deadline: { type: string }
+        created_at: { type: string }
+        transfer_intent_hash:
+          type: string
+          description: >-
+            The intent that funded the order. The one field here that is this
+            service's and not 1Click's.
+
+    LimitOrderCreated:
+      allOf:
+        - $ref: '#/components/schemas/LimitOrder'
+        - type: object
+          required: [request_id]
+          properties:
+            request_id:
+              type: string
+              description: >-
+                This create, as the rest of the API knows it (idempotency,
+                audit). Follow the ORDER by `order_id`.
+
+    LimitOrderPendingApproval:
+      type: object
+      required: [request_id, status, approval_id, required, approved, request_hash]
+      properties:
+        request_id: { type: string }
+        status:
+          type: string
+          enum: [pending_approval]
+        approval_id: { type: string }
+        required: { type: integer }
+        approved: { type: integer }
+        request_hash:
+          type: string
+          description: What approvers sign over — the order's terms.
+
+    LimitOrderCancelAllResponse:
+      type: object
+      required: [known, cancelled, failed, remaining, complete]
+      properties:
+        known:
+          type: integer
+          description: Unfinished orders this call asked 1Click to cancel (at most 50).
+        cancelled:
+          type: integer
+          description: Cancels 1Click accepted.
+        failed:
+          type: integer
+          description: Cancels that did not go through; those orders are still resting.
+        remaining:
+          type: integer
+          description: Unfinished orders this call did not get to. Call again.
+        complete:
+          type: boolean
+          description: >-
+            True when nothing failed and nothing remains. False → orders may
+            still be resting: call again.
+
     PaymentCheckCreateRequest:
       type: object
       required: [token, amount]
@@ -5963,6 +6477,8 @@ components:
         swap:
           $ref: '#/components/schemas/Capability'
         cross_chain_withdraw:
+          $ref: '#/components/schemas/Capability'
+        limit_order:
           $ref: '#/components/schemas/Capability'
         payment_check:
           $ref: '#/components/schemas/Capability'

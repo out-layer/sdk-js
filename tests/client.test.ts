@@ -1418,6 +1418,32 @@ describe('Idempotency-Key', () => {
     expect(receivedKey).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it('sends the SAME auto-generated key on every retry of one operation', async () => {
+    // A key minted per attempt would make a retried write a new request: the
+    // server could not tell it from a second order, withdrawal or transfer.
+    const keys: (string | null)[] = [];
+    server.use(
+      http.post(`${BASE}/wallet/v1/intents/withdraw`, ({ request }) => {
+        keys.push(request.headers.get('Idempotency-Key'));
+        if (keys.length === 1) {
+          return HttpResponse.json({ error: 'internal_error' }, { status: 500 });
+        }
+        return HttpResponse.json({
+          request_id: '33333333-3333-3333-3333-333333333333',
+          status: 'processing',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey, retry: { initialDelayMs: 1, maxDelayMs: 2 } });
+    await client.withdraw({ chain: 'near', to: 'bob.near', amount: '1' });
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(keys[1]).toBe(keys[0]);
+    // …and a second operation gets a key of its own.
+    await client.withdraw({ chain: 'near', to: 'bob.near', amount: '1' });
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
   it('respects a user-supplied Idempotency-Key', async () => {
     let receivedKey: string | null = null;
     server.use(
@@ -2248,5 +2274,141 @@ describe('wallet_busy is the one 409 worth asking again', () => {
       client.transfer({ chain: 'near', to: 'bob.near', amount: '1' }),
     ).rejects.toThrow();
     expect(attempts).toBe(1);
+  });
+});
+
+// ============================================================================
+// Limit orders
+// ============================================================================
+
+describe('Limit orders', () => {
+  // A 1Click order as this API reports it: snake_case names, lower-case values.
+  const order = {
+    order_id: 'order_7A9J0b3TP4yjYvGDL3xy9',
+    deposit_address: '5a56efb1258406710198281a65b0dd01025b36bb30c777c9178e3e26c36027a7',
+    fill_status: 'open',
+    payout_status: 'not_started',
+    is_payout_status_final: false,
+    base_asset: 'nep141:wrap.near',
+    quote_asset: 'nep141:usdc.near',
+    side: 'sell',
+    quantity: '100000000000000000000000',
+    price: '12',
+    deposited_amount: '100000000000000000000000',
+    swap_view: {
+      origin_asset: 'nep141:wrap.near',
+      destination_asset: 'nep141:usdc.near',
+      swap_type: 'exact_input',
+      amount_in: '100000000000000000000000',
+      min_amount_out: '1200000',
+    },
+    app_fees: [{ recipient: 'fee.near', fee: 20 }],
+    recipient: 'wallet.near',
+    recipient_type: 'intents',
+    refund_to: 'wallet.near',
+    refund_type: 'intents',
+  };
+
+  it('sends the order as the body and the idempotency key as a header, never both in one', async () => {
+    let seenBody: unknown;
+    let seenKey: string | null = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/limit-orders`, async ({ request }) => {
+        seenBody = await request.json();
+        seenKey = request.headers.get('x-idempotency-key') ?? request.headers.get('idempotency-key');
+        return HttpResponse.json({ request_id: 'r1', ...order, transfer_intent_hash: 'h' });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const res = await client.createLimitOrder({
+      base_asset: 'nep141:wrap.near',
+      quote_asset: 'nep141:usdc.near',
+      side: 'sell',
+      quantity: '100000000000000000000000',
+      price: '12',
+      recipient: '0x1111111111111111111111111111111111111111',
+      recipient_type: 'destination_chain',
+      idempotencyKey: 'once',
+    });
+    expect(res).toMatchObject({ order_id: order.order_id, request_id: 'r1' });
+    expect(seenKey).toBe('once');
+    expect(seenBody).not.toHaveProperty('idempotencyKey');
+    // 1Click's own parameter names go through as they are.
+    expect(seenBody).toMatchObject({ side: 'sell', price: '12', recipient_type: 'destination_chain' });
+  });
+
+  it('hands back the pending approval of a multisig wallet as it is, told apart by order_id', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/limit-orders`, () =>
+        HttpResponse.json({
+          request_id: '11111111-1111-1111-1111-111111111111',
+          status: 'pending_approval',
+          approval_id: '22222222-2222-2222-2222-222222222222',
+          required: 2,
+          approved: 0,
+          request_hash: 'abc',
+        }),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const res = await client.createLimitOrder({
+      base_asset: 'a', quote_asset: 'b', side: 'buy', quantity: '1', price: '0.5',
+    });
+    expect('order_id' in res).toBe(false);
+    expect(res).toHaveProperty('approval_id');
+  });
+
+  it('reads, lists and cancels by the paths the API serves', async () => {
+    const hit: string[] = [];
+    server.use(
+      http.get(`${BASE}/wallet/v1/limit-orders/:id`, ({ params }) => {
+        hit.push(`get:${params.id}`);
+        return HttpResponse.json(order);
+      }),
+      http.get(`${BASE}/wallet/v1/limit-orders`, ({ request }) => {
+        const sp = new URL(request.url).searchParams;
+        hit.push(sp.has('limit') ? `list:${sp.get('limit')}/${sp.get('offset')}` : `list:${sp.get('open')}`);
+        return HttpResponse.json([order]);
+      }),
+      http.post(`${BASE}/wallet/v1/limit-orders/:id/cancel`, ({ params }) => {
+        hit.push(`cancel:${params.id}`);
+        return HttpResponse.json({ ...order, fill_status: 'pending_cancel' });
+      }),
+      http.post(`${BASE}/wallet/v1/limit-orders/cancel-all`, ({ request }) => {
+        const offset = new URL(request.url).searchParams.get('offset');
+        hit.push(offset === null ? 'cancel-all' : `cancel-all:${offset}`);
+        return HttpResponse.json({ known: 1, cancelled: 1, failed: 0, remaining: 0, complete: true });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.getLimitOrder('order_x');
+    await client.listLimitOrders({ open: true });
+    await client.listLimitOrders();
+    await client.listLimitOrders({ limit: 100, offset: 200 });
+    const cancelled = await client.cancelLimitOrder('order_x');
+    const all = await client.cancelAllLimitOrders();
+    await client.cancelAllLimitOrders({ offset: 50 });
+
+    expect(hit).toEqual(['get:order_x', 'list:true', 'list:null', 'list:100/200', 'cancel:order_x', 'cancel-all', 'cancel-all:50']);
+    // Accepted for cancellation is not finished: a last slice may still fill,
+    // and the only terminal signal is the payout flag.
+    expect(cancelled.fill_status).toBe('pending_cancel');
+    expect(cancelled.is_payout_status_final).toBe(false);
+    expect(all.complete).toBe(true);
+  });
+
+  it('turns a policy refusal into the error a caller already handles', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/limit-orders`, () =>
+        HttpResponse.json(
+          { error: 'policy_denied', message: "Capability for 'limit_order' is not enabled by policy" },
+          { status: 403 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(
+      client.createLimitOrder({ base_asset: 'a', quote_asset: 'b', side: 'sell', quantity: '1', price: '1' }),
+    ).rejects.toBeInstanceOf(PolicyDeniedError);
   });
 });

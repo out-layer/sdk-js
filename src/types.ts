@@ -2539,10 +2539,10 @@ export interface components {
          */
         NearOnlyChain: "near";
         /**
-         * @description A chain funds can be withdrawn to: `near` directly, the rest through the 1Click bridge. Narrower than `Chain` — `hyperevm` is signable but not bridged.
+         * @description A chain funds can be withdrawn to: `near` directly, the rest through the 1Click bridge. Neither a subset nor a superset of `Chain` — `hyperevm` is signable but not bridged, and `hypercore` (Hyperliquid's L1, whose accounts are EVM addresses) is bridged but not signable: `to` is a HyperCore account, and USDC lands on its spot balance.
          * @enum {string}
          */
-        WithdrawChain: "near" | "solana" | "ethereum" | "base" | "arbitrum" | "bitcoin" | "bsc" | "polygon" | "optimism" | "avalanche" | "hood";
+        WithdrawChain: "near" | "solana" | "ethereum" | "base" | "arbitrum" | "bitcoin" | "bsc" | "polygon" | "optimism" | "avalanche" | "hood" | "hypercore";
         /**
          * @description Tracked async request / policy transaction type. `withdraw` is a
          *     same-chain intents withdrawal; `cross_chain_withdraw` is a separate type
@@ -3133,9 +3133,11 @@ export interface components {
             /**
              * @description Source chain. Supported: `near`, `ethereum`, `base`,
              *     `arbitrum`, `solana`, `bitcoin`, `bsc`, `polygon`,
-             *     `optimism`, `avalanche`, `hood`. `token` defaults to `USDC`,
-             *     which not every chain carries — `hood` (Robinhood Chain) does
-             *     not, so name a token it has. `GET /wallet/v1/tokens` lists
+             *     `optimism`, `avalanche`, `hood`, `hypercore`. `token` defaults
+             *     to `USDC`, which not every chain carries — `hood` (Robinhood
+             *     Chain) does not, so name a token it has. On `hypercore`
+             *     (Hyperliquid's L1) `USDC` is the spot HIP-1 token, and `amount`
+             *     is in its units: 8 decimals, not 6. `GET /wallet/v1/tokens` lists
              *     them, and naming one the chain lacks answers
              *     `unsupported_token` with what it does carry.
              * @example ethereum
@@ -3161,6 +3163,9 @@ export interface components {
              *     - `ethereum` / `base` / `arbitrum` / `bsc` / `polygon` /
              *       `optimism` / `avalanche` / `hood` — `0x` + 40 hex (EVM), e.g.
              *       `0x582290c0b2Cb60989B35FFF66049f3e3247355bc`
+             *     - `hypercore` — `0x` + 40 hex as well, but a HyperCore account,
+             *       not an EVM contract address: send with a HyperCore spot
+             *       transfer (`spotSend`), never an EVM transaction
              *     - `solana` — base58, 32-44 chars (Solana), e.g.
              *       `5AmGa2Bcfajbytg55UUb4vCAAzKBMYKZNQwx5S2BH2qf`
              *     - `bitcoin` — `bc1…` (segwit) or `1…` / `3…` (legacy)

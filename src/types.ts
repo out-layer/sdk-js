@@ -886,11 +886,13 @@ export interface paths {
          *     never appears on chain — only the destination-chain receiver does, on the
          *     destination chain.
          *
-         *     `chain` must be either the token's **home chain** (e.g. `chain=zcash`
-         *     for `nep141:zec.omft.near`, delivering the native asset to a
-         *     destination-chain address) or `"near"`; any other combination is
-         *     rejected with 400 — the destination is derived from the token, so a
-         *     mismatched `chain` would describe a withdrawal that cannot happen.
+         *     `chain` is the token's **home chain** (e.g. `chain=zcash` for
+         *     `nep141:zec.omft.near`, delivering the native asset to a
+         *     destination-chain address), `"near"`, or any other supported chain:
+         *     there the SAME symbol on that chain's 1Click listing is delivered,
+         *     swapped on the way — NEAR USDC withdrawn with `chain=hypercore`
+         *     arrives as HyperCore's HIP-1 USDC, with `chain=polygon` as Polygon
+         *     USDC. A token with no listing of its symbol on that chain is refused.
          *
          *     `chain="near"` delivers to the named NEAR account. For NEAR-native
          *     tokens (`nep141:wrap.near` → **native NEAR** via a `native_withdraw`
@@ -1035,6 +1037,14 @@ export interface paths {
          *     touches the public side** — this is the most private way to fund a
          *     confidential balance. Poll `GET /wallet/v1/requests/{id}` for status.
          *
+         *     **Refunds.** A failed bridge refunds into the confidential balance,
+         *     except from `hypercore`, whose assets refund only on their origin
+         *     chain. There the address is resolved as on the public route: the
+         *     wallet policy's `refund_addresses.hypercore`; a policy without one →
+         *     the wallet's derived HyperCore address, and the request's
+         *     `refund_address` is ignored (the `hint` says so); no policy → the
+         *     request's `refund_address` (format-checked), else the derived address.
+         *
          *     **Legacy alias:** `POST /wallet/v1/confidential/deposit-intent` still
          *     works and resolves to the same handler.
          */
@@ -1130,6 +1140,13 @@ export interface paths {
          *
          *     Amounts are in the token's smallest unit. There's a small solver fee,
          *     so `amount_out` < `amount`.
+         *
+         *     **Refunds.** If the bridge fails, funds return on the source chain.
+         *     Where is the owner's decision: the wallet policy's `refund_addresses`
+         *     entry for that chain; a policy without one → the wallet's derived
+         *     address on the chain, and the request's `refund_address` is ignored
+         *     (the `hint` says so); no policy → the request's `refund_address`
+         *     (format-checked for the chain), else the derived address.
          *
          *     The returned `deposit_address` is chain-specific — see the
          *     [`DepositIntentResponse.deposit_address`](#/components/schemas/DepositIntentResponse)
@@ -3139,12 +3156,63 @@ export interface components {
          */
         DestinationAsset: components["schemas"]["DefuseAssetId"];
         /**
-         * @description Request body for `createDepositIntent`. Two shapes accepted; see the
-         *     `anyOf` branches below. `amount` is always required. The
+         * @description Defuse asset id that lands in the confidential balance. Omitted: USDC
+         *     from any chain lands as NEAR USDC (the one USDC the confidential
+         *     balance and every connector count in), and any other token lands as
+         *     the SAME asset, bridged. There is no NEAR USDC default for a non-USDC
+         *     token on this route — name `destination_asset` to swap on the way.
+         */
+        ConfidentialDestinationAsset: components["schemas"]["DefuseAssetId"];
+        /**
+         * @description NEAR Intents `defuse_asset_id` of the source token. The
+         *     source chain is derived from this id.
+         * @example nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near
+         */
+        DepositIntentSourceAsset: components["schemas"]["DefuseAssetId"];
+        /**
+         * @description Source chain. Supported: `near`, `ethereum`, `base`,
+         *     `arbitrum`, `solana`, `bitcoin`, `bsc`, `polygon`,
+         *     `optimism`, `avalanche`, `hood`, `hypercore`. `token` defaults
+         *     to `USDC`, which not every chain carries — `hood` (Robinhood
+         *     Chain) does not, so name a token it has. On `hypercore`
+         *     (Hyperliquid's L1) `USDC` is the spot HIP-1 token, and `amount`
+         *     is in its units: 8 decimals, not 6. `GET /wallet/v1/tokens` lists
+         *     them, and naming one the chain lacks answers
+         *     `unsupported_token` with what it does carry.
+         * @example ethereum
+         */
+        DepositIntentChain: string;
+        /**
+         * @description Source token symbol on the origin chain. Defaults to `USDC`.
+         * @default USDC
+         */
+        DepositIntentToken: string;
+        /** @description Amount in the source token's smallest unit (e.g. `5000000` = 5 USDC). */
+        DepositIntentAmount: string;
+        /**
+         * @description Address on the source chain a failed cross-chain deposit refunds to.
+         *     Consulted only on a wallet WITHOUT a policy, and format-checked for
+         *     the chain (`0x` + 40 hex on EVM chains and HyperCore, base58 on
+         *     Solana, an account id on NEAR). Under a policy the owner decides —
+         *     the policy's `refund_addresses` entry for the chain, else the
+         *     wallet's derived address on it — and this field is ignored; the
+         *     response `hint` then says so and names the address a refund goes to.
+         */
+        DepositRefundAddress: string;
+        /**
+         * @description Request body for `intentsDepositCrossChain`. Two shapes accepted; see
+         *     the `anyOf` branches below. `amount` is always required. The
          *     `destination_asset` field defaults to NEAR USDC
          *     (`nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1`)
          *     when omitted — see
          *     [`DestinationAsset`](#/components/schemas/DestinationAsset).
+         *
+         *     Where a failed deposit refunds is resolved in this order: the wallet
+         *     policy's `refund_addresses` entry for the source chain; a policy
+         *     without one → the wallet's derived address on that chain (the
+         *     request's `refund_address` is ignored); no policy → the request's
+         *     `refund_address`, else the derived address. See
+         *     [`DepositRefundAddress`](#/components/schemas/DepositRefundAddress).
          *
          *     Uses `anyOf` (not `oneOf`) deliberately — a request that supplies
          *     both `source_asset` and `chain` matches both branches; the
@@ -3153,45 +3221,19 @@ export interface components {
          *     would needlessly reject valid requests.
          */
         DepositIntentRequest: {
-            /**
-             * @description NEAR Intents `defuse_asset_id` of the source token. The
-             *     source chain is derived from this id.
-             * @example nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near
-             */
-            source_asset: components["schemas"]["DefuseAssetId"];
+            source_asset: components["schemas"]["DepositIntentSourceAsset"];
             destination_asset?: components["schemas"]["DestinationAsset"];
-            /** @description Amount in the source token's smallest unit (e.g. `5000000` = 5 USDC). */
-            amount: string;
-            /**
-             * @description Address on the source chain to refund to if the cross-chain
-             *     deposit fails. Defaults to the wallet's derived address on that
-             *     chain.
-             */
-            refund_address?: string;
+            amount: components["schemas"]["DepositIntentAmount"];
+            refund_address?: components["schemas"]["DepositRefundAddress"];
         } | {
-            /**
-             * @description Source chain. Supported: `near`, `ethereum`, `base`,
-             *     `arbitrum`, `solana`, `bitcoin`, `bsc`, `polygon`,
-             *     `optimism`, `avalanche`, `hood`, `hypercore`. `token` defaults
-             *     to `USDC`, which not every chain carries — `hood` (Robinhood
-             *     Chain) does not, so name a token it has. On `hypercore`
-             *     (Hyperliquid's L1) `USDC` is the spot HIP-1 token, and `amount`
-             *     is in its units: 8 decimals, not 6. `GET /wallet/v1/tokens` lists
-             *     them, and naming one the chain lacks answers
-             *     `unsupported_token` with what it does carry.
-             * @example ethereum
-             */
-            chain: string;
-            /**
-             * @description Source token symbol on the origin chain. Defaults to `USDC`.
-             * @default USDC
-             */
-            token: string;
+            chain: components["schemas"]["DepositIntentChain"];
+            token?: components["schemas"]["DepositIntentToken"];
             destination_asset?: components["schemas"]["DestinationAsset"];
-            amount: string;
-            refund_address?: string;
+            amount: components["schemas"]["DepositIntentAmount"];
+            refund_address?: components["schemas"]["DepositRefundAddress"];
         };
-        DepositIntentResponse: {
+        /** @description The fields every cross-chain deposit response carries. */
+        DepositIntentResponseFields: {
             intent_id: string;
             /**
              * @description One-time address on the source chain — send funds here. The
@@ -3215,9 +3257,14 @@ export interface components {
              */
             deposit_address: string;
             amount: string;
-            /** @description Amount credited after the cross-chain deposit fee. */
-            amount_out: string;
-            min_amount_out: string;
+            /**
+             * @description Amount credited after the cross-chain deposit fee, in the
+             *     DESTINATION asset's smallest unit — not the origin's (HIP-1 USDC
+             *     on `hypercore` has 8 decimals, NEAR USDC 6).
+             */
+            amount_out?: string;
+            /** @description Minimum credited after slippage, in the destination asset's smallest unit. */
+            min_amount_out?: string;
             /**
              * Format: date-time
              * @description Deadline after which the deposit address is no longer
@@ -3231,16 +3278,24 @@ export interface components {
              */
             estimated_time_secs?: number;
             /**
-             * @description Non-binding advisory when a faster / cheaper endpoint exists
-             *     for the same logical operation. Present only when the resolved
-             *     source chain is `near` — in that case the caller's funds are
-             *     already on NEAR and `POST /wallet/v1/intents/deposit` would do
-             *     the deposit in one direct `ft_transfer_call` without the
-             *     1Click solver hop. Clients that don't read this field are
-             *     unaffected; clients that prefer the most direct path can
-             *     switch endpoints on receiving it.
+             * @description Non-binding advisory. Present when the resolved source chain is
+             *     `near` — the caller's funds are already on NEAR and
+             *     `POST /wallet/v1/intents/deposit` would do the deposit in one
+             *     direct `ft_transfer_call` without the 1Click solver hop — and
+             *     when the request's `refund_address` was ignored because the
+             *     wallet policy governs refunds on that chain; then it names the
+             *     address a failed deposit refunds to. Clients that don't read
+             *     this field are unaffected.
              */
             hint?: string;
+        };
+        /**
+         * @description A public cross-chain deposit. `amount_out` and `min_amount_out` are
+         *     always present: 1Click states them for every public route.
+         */
+        DepositIntentResponse: components["schemas"]["DepositIntentResponseFields"] & {
+            amount_out: string;
+            min_amount_out: string;
         };
         DepositStatusResponse: {
             intent_id: string;
@@ -3744,6 +3799,7 @@ export interface components {
             approval?: components["schemas"]["ApprovalConfig"];
             capabilities?: components["schemas"]["Capabilities"];
             authorized_key_hashes?: string[];
+            refund_addresses?: components["schemas"]["RefundAddresses"];
             /**
              * @description Current accumulated usage per token, per period — spent amounts
              *     from the coordinator's counters, present whether or not a policy
@@ -3763,6 +3819,24 @@ export interface components {
             /** Format: uri */
             webhook_url?: string;
             authorized_key_hashes?: string[];
+            refund_addresses?: components["schemas"]["RefundAddresses"];
+        };
+        /**
+         * @description Where a failed cross-chain deposit refunds, per source chain: the
+         *     chain name as the deposit endpoints accept it (`hypercore`, `base`,
+         *     `solana`, …; stored canonical) → an address on that chain. Each
+         *     address is format-checked for its chain when the policy is encrypted,
+         *     and a chain the deposit endpoints do not accept is refused. A chain
+         *     without an entry refunds to the wallet's own derived address on it.
+         *     Whenever a policy exists, the deposit request's `refund_address` is
+         *     ignored — the owner decides where a refund lands, not the caller.
+         * @example {
+         *       "hypercore": "0x582290c0b2Cb60989B35FFF66049f3e3247355bc",
+         *       "solana": "5AmGa2Bcfajbytg55UUb4vCAAzKBMYKZNQwx5S2BH2qf"
+         *     }
+         */
+        RefundAddresses: {
+            [key: string]: string;
         };
         EncryptPolicyResponse: {
             encrypted_base64: string;
@@ -3983,14 +4057,47 @@ export interface components {
         ConfidentialShieldRequest: components["schemas"]["IntentsDepositRequest"];
         /** @description UNSHIELD body — same shape as `IntentsDepositRequest`. */
         ConfidentialUnshieldRequest: components["schemas"]["IntentsDepositRequest"];
-        /** @description Confidential withdraw body — same shape as `WithdrawRequest`; `token` is required (the source confidential asset to deliver). `chain` must be the token's home chain or `"near"` (mismatches are rejected). `chain="near"` delivers native NEAR for `nep141:wrap.near` (via `intents.near native_withdraw`) and the NEP-141 token on NEAR for omft bridge assets (use `confidentialUnshield` if you want to send to your own public balance instead). */
+        /** @description Confidential withdraw body — same shape as `WithdrawRequest`; `token` is required (the source confidential asset to deliver). `chain` is the token's home chain, `"near"`, or another chain that lists the same symbol (delivered as that listing, swapped on the way). `chain="near"` delivers native NEAR for `nep141:wrap.near` (via `intents.near native_withdraw`) and the NEP-141 token on NEAR for omft bridge assets (use `confidentialUnshield` if you want to send to your own public balance instead). */
         ConfidentialWithdrawRequest: components["schemas"]["WithdrawRequest"];
         /** @description Confidential swap body — same shape as `SwapRequest` (`token_in` / `amount_in` / `token_out` / optional `min_amount_out`). On a multisig wallet the confidential swap binds `token_out` and `min_amount_out` into the approved op (like a public swap), so approvers commit to the output terms — a compromised coordinator cannot change them after approval. */
         ConfidentialSwapRequest: components["schemas"]["SwapRequest"];
-        /** @description Cross-chain deposit body — same shape as `DepositIntentRequest` (`source_asset` or `chain`+`token`). NOTE: for the confidential endpoint `destination_asset` and `refund_address` are **ignored** — the destination is forced to the origin asset (same-asset cross-chain deposit into the confidential shard) and refund is forced to the wallet's 64-hex intentsUserId (the `refundType=CONFIDENTIAL_INTENTS` invariant). */
-        ConfidentialDepositIntentRequest: components["schemas"]["DepositIntentRequest"];
-        /** @description Cross-chain deposit address — same shape as `DepositIntentResponse`. */
-        ConfidentialDepositIntentResponse: components["schemas"]["DepositIntentResponse"];
+        /**
+         * @description Cross-chain deposit body — the same two shapes as
+         *     `DepositIntentRequest` (`source_asset` or `chain`+`token`), with the
+         *     confidential route's own `destination_asset` rule: what lands in the
+         *     confidential balance is `destination_asset` when given; otherwise USDC
+         *     from any chain lands as NEAR USDC (as on the public route), and any
+         *     other token lands as the SAME asset, bridged — see
+         *     [`ConfidentialDestinationAsset`](#/components/schemas/ConfidentialDestinationAsset).
+         *
+         *     A failed bridge refunds into the confidential balance (the wallet's
+         *     64-hex intentsUserId), except from `hypercore`, whose assets refund
+         *     only on their origin chain. There the refund address follows the same
+         *     rule as the public route — the wallet policy's `refund_addresses`
+         *     entry for `hypercore`; a policy without one → the wallet's derived
+         *     HyperCore address (the request's `refund_address` is ignored); no
+         *     policy → `refund_address`, else the derived address.
+         */
+        ConfidentialDepositIntentRequest: {
+            source_asset: components["schemas"]["DepositIntentSourceAsset"];
+            destination_asset?: components["schemas"]["ConfidentialDestinationAsset"];
+            amount: components["schemas"]["DepositIntentAmount"];
+            refund_address?: components["schemas"]["DepositRefundAddress"];
+        } | {
+            chain: components["schemas"]["DepositIntentChain"];
+            token?: components["schemas"]["DepositIntentToken"];
+            destination_asset?: components["schemas"]["ConfidentialDestinationAsset"];
+            amount: components["schemas"]["DepositIntentAmount"];
+            refund_address?: components["schemas"]["DepositRefundAddress"];
+        };
+        /**
+         * @description Cross-chain deposit address — the fields of `DepositIntentResponse`,
+         *     with `amount_out` / `min_amount_out` ABSENT when the confidential
+         *     upstream states none for the route (it does for some same-asset
+         *     deposits). They are never substituted with `amount`, which is in the
+         *     origin asset's units.
+         */
+        ConfidentialDepositIntentResponse: components["schemas"]["DepositIntentResponseFields"];
         /** @description Private confidential→confidential transfer. No `chain` (NEAR-only context); `token` required (no native-asset concept inside the confidential shard). */
         ConfidentialTransferRequest: {
             /** @description Recipient NEAR account id (intentsUserId / 64-hex implicit account). */

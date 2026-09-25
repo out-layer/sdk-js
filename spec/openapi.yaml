@@ -55,8 +55,8 @@ tags:
       being curated adds is a price per `operation` on chain and the right to
       read a secret its owner stored for it. A caller who pays is never limited
       by a count of calls — money bounds a funded key, an allowance bounds a
-      subscriber — and the one count there is belongs to the trial: ten calls, in
-      a wallet's first week (`POST /trial-key`).
+      subscriber — and the one count there is belongs to the trial: fifty calls, in
+      a wallet's first week (`POST /trial-key`; the answer's `calls` is the number).
 
 
       Which ones exist here, and the skill describing each, come from
@@ -3580,9 +3580,9 @@ paths:
     post:
       tags: [Subscriptions]
       operationId: claimTrialKey
-      summary: Claim this wallet's trial — ten connector calls in its first week
+      summary: Claim this wallet's trial — fifty connector calls in its first week
       description: |
-        **A trial is ten connector calls, within seven days of the wallet's
+        **A trial is fifty connector calls, within seven days of the wallet's
         creation.** That is all of it. The answer is a payment key, sent as
         `X-Payment-Key` like any other, plus how many calls it makes and when it
         stops working.
@@ -3703,6 +3703,64 @@ paths:
                         project_id: { type: string }
                         description: { type: string }
                         skill: { type: string }
+  /public/connectors/{id}/describe:
+    get:
+      tags: [Connectors]
+      operationId: publicConnectorDescribe
+      summary: What a connector does and takes, from the wasm that is deployed
+      description: |
+        The `describe` block of the `outlayer.manifest` section in the
+        connector's ACTIVE version — the bytes the workers run, covered by the
+        hash the contract records. The operations come back as a list in the
+        manifest's order, each with its class, one sentence, and the parameters
+        it reads. No prices: those are on chain and in the connector's `status`.
+
+        This is what `app.outlayer.ai/connectors/{id}` renders. The connector's
+        build holds the block to its code, so a description that fell behind
+        the code could not have been published.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          example: gmail
+      responses:
+        '200':
+          description: The connector, described by its own manifest.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connector_id: { type: string }
+                  project_id: { type: string }
+                  network: { type: string, enum: [mainnet, testnet] }
+                  version: { type: string, description: The active version's wasm hash. }
+                  display: { type: object }
+                  summary: { type: string }
+                  operations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        class: { type: string, enum: [read, write] }
+                        doc: { type: string }
+                        params:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              name: { type: string }
+                              type: { type: string, description: "Prose for a developer, not a schema language." }
+                              required: { type: boolean }
+                              doc: { type: string }
+                  limits: { type: array, items: { type: object } }
+        '404':
+          description: No such connector on this network, not published, or a version without a `describe` block.
+        '503':
+          description: The contract could not be read.
   /payment-keys/balance:
     get:
       tags: [Subscriptions]

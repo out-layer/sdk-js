@@ -2093,8 +2093,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Claim this wallet's trial — ten connector calls in its first week
-         * @description **A trial is ten connector calls, within seven days of the wallet's
+         * Claim this wallet's trial — fifty connector calls in its first week
+         * @description **A trial is fifty connector calls, within seven days of the wallet's
          *     creation.** That is all of it. The answer is a payment key, sent as
          *     `X-Payment-Key` like any other, plus how many calls it makes and when it
          *     stops working.
@@ -2146,6 +2146,34 @@ export interface paths {
          *     test probes are documented in a README beside their code.
          */
         get: operations["publicConnectors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/connectors/{id}/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a connector does and takes, from the wasm that is deployed
+         * @description The `describe` block of the `outlayer.manifest` section in the
+         *     connector's ACTIVE version — the bytes the workers run, covered by the
+         *     hash the contract records. The operations come back as a list in the
+         *     manifest's order, each with its class, one sentence, and the parameters
+         *     it reads. No prices: those are on chain and in the connector's `status`.
+         *
+         *     This is what `app.outlayer.ai/connectors/{id}` renders. The connector's
+         *     build holds the block to its code, so a description that fell behind
+         *     the code could not have been published.
+         */
+        get: operations["publicConnectorDescribe"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7127,6 +7155,66 @@ export interface operations {
                         }[];
                     };
                 };
+            };
+        };
+    };
+    publicConnectorDescribe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @example gmail */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connector, described by its own manifest. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        connector_id?: string;
+                        project_id?: string;
+                        /** @enum {string} */
+                        network?: "mainnet" | "testnet";
+                        /** @description The active version's wasm hash. */
+                        version?: string;
+                        display?: Record<string, never>;
+                        summary?: string;
+                        operations?: {
+                            name?: string;
+                            /** @enum {string} */
+                            class?: "read" | "write";
+                            doc?: string;
+                            params?: {
+                                name?: string;
+                                /** @description Prose for a developer, not a schema language. */
+                                type?: string;
+                                required?: boolean;
+                                doc?: string;
+                            }[];
+                        }[];
+                        limits?: Record<string, never>[];
+                    };
+                };
+            };
+            /** @description No such connector on this network, not published, or a version without a `describe` block. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The contract could not be read. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

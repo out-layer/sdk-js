@@ -2041,8 +2041,13 @@ export interface paths {
         /**
          * Turn balance already on a key into allowance
          * @description Buys a plan out of the key's own balance. The same plan can be bought
-         *     on chain for any key, with an `ft_transfer_call` carrying
+         *     on chain for any payment key, with an `ft_transfer_call` carrying
          *     `{"action":"buy_subscription","nonce":N,"owner":"<key owner>","plan":0}`.
+         *
+         *     Never on the wallet's trial key (nonce 0): the contract keeps no record
+         *     there, and its subscription is OutLayer's to give. That key is answered
+         *     `400` with `reason: trial_key_not_purchasable`; buy on a payment key
+         *     the wallet creates (nonce ≥ 1).
          *
          *     Only the plan's PRICE is spent; an overpayment stays on the key as
          *     balance. The allowance ADDS to whatever is there and validity extends
@@ -2436,7 +2441,7 @@ export interface components {
              * @description Machine-readable name of the refusal.
              * @enum {string}
              */
-            reason: "allowance_no_deposit" | "bad_key_format" | "compute_limit_too_low" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "invalid_secrets_ref" | "invalid_version_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "call_already_in_flight" | "trial_exhausted" | "trial_expired" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
+            reason: "allowance_no_deposit" | "bad_key_format" | "compute_limit_too_low" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "invalid_secrets_ref" | "invalid_version_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "call_already_in_flight" | "trial_exhausted" | "trial_expired" | "trial_key_not_purchasable" | "invalid_request" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
             /**
              * Format: date-time
              * @description On `trial_expired` only — when the trial ended.
@@ -2479,6 +2484,12 @@ export interface components {
         SubscriptionStatus: {
             owner?: string;
             nonce?: number;
+            /**
+             * @description A subscription on this key: an allowance with an end, bought or
+             *     given by the operator. Never true for a trial key; a trial the
+             *     operator converted to a subscription reports `true`, with its
+             *     `expires_at`.
+             */
             has_subscription?: boolean;
             /**
              * @description The custody wallet this key belongs to, when it belongs to one.
@@ -2567,7 +2578,7 @@ export interface components {
          */
         NearOnlyChain: "near";
         /**
-         * @description A chain funds can be withdrawn to: `near` directly, the rest through the 1Click bridge. Neither a subset nor a superset of `Chain` — `hyperevm` is signable but not bridged, and `hypercore` (Hyperliquid's L1, whose accounts are EVM addresses) is bridged but not signable: `to` is a HyperCore account, and USDC lands on its spot balance.
+         * @description A chain funds can be withdrawn to: `near` directly, the rest through the 1Click bridge. Neither a subset nor a superset of `Chain` — `hyperevm` is signable but not bridged, and `hypercore` (Hyperliquid's L1, whose accounts are EVM addresses) is bridged but not signable: `to` is a HyperCore account, and 1Click credits the USDC to its perps balance.
          * @enum {string}
          */
         WithdrawChain: "near" | "solana" | "ethereum" | "base" | "arbitrum" | "bitcoin" | "bsc" | "polygon" | "optimism" | "avalanche" | "hood" | "hypercore";
@@ -7002,7 +7013,20 @@ export interface operations {
                     };
                 };
             };
-            400: components["responses"]["BadRequest"];
+            /**
+             * @description `reason: invalid_request` — `amount_usd` is not a positive integer,
+             *     or buys no plan on sale (the message names the cheapest); or
+             *     `reason: trial_key_not_purchasable` — the key presented is the
+             *     wallet's trial key (nonce 0). **`terminal: true`**.
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallRefusal"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             /** @description The key's balance does not cover the cheapest plan on sale. */
             402: {

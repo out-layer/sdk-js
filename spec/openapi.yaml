@@ -1815,9 +1815,10 @@ paths:
 
         **Refunds.** A failed bridge refunds into the confidential balance,
         except from `hypercore`, whose assets refund only on their origin
-        chain. There the address is resolved as on the public route: the
-        wallet policy's `refund_addresses.hypercore`; a policy without one →
-        the wallet's derived HyperCore address, and the request's
+        chain. There the address is resolved as on the public route
+        ([`DepositIntentRequest`](#/components/schemas/DepositIntentRequest)):
+        the wallet policy's `refund_addresses.hypercore`; a policy without one
+        → the wallet's derived HyperCore address, and the request's
         `refund_address` is ignored (the `hint` says so); no policy → the
         request's `refund_address` (format-checked), else the derived address.
 
@@ -1960,9 +1961,13 @@ paths:
         **Refunds.** If the bridge fails, funds return on the source chain.
         Where is the owner's decision: the wallet policy's `refund_addresses`
         entry for that chain; a policy without one → the wallet's derived
-        address on the chain, and the request's `refund_address` is ignored
-        (the `hint` says so); no policy → the request's `refund_address`
-        (format-checked for the chain), else the derived address.
+        address on the chain when it has one (NEAR, Solana, EVM chains,
+        HyperCore), and the request's `refund_address` is ignored (the `hint`
+        says so); else → the request's `refund_address`. No policy → the
+        request's `refund_address`, else the derived address. A request
+        address is format-checked for the chain. A deposit from a chain the
+        wallet has no address on (Bitcoin, Zcash, Tron, …) with neither a
+        policy entry nor a `refund_address` is refused with `400`.
 
         The returned `deposit_address` is chain-specific — see the
         [`DepositIntentResponse.deposit_address`](#/components/schemas/DepositIntentResponse)
@@ -3319,9 +3324,12 @@ paths:
         '503':
           description: |
             `upstream_unavailable` — something this call depends on has not
-            caught up yet, and the same call works later. `keystore_error` —
+            caught up yet, or this deployment's database could not serve the
+            request right now, and the same call works later. `keystore_error` —
             the TEE keystore was unreachable or refused to sign. Both are
-            transient and both are sent with a `Retry-After` interval.
+            transient and both are sent with a `Retry-After` interval. Sent
+            only before the job is queued: nothing ran and nothing was charged,
+            so resending is safe.
 
             Deliberately not `service_unavailable`: on `/wallet/v1/*` that code
             means a feature this deployment does not offer and carries no
@@ -3332,6 +3340,18 @@ paths:
               description: Seconds to wait before retrying.
               schema:
                 type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallRefusal'
+        '500':
+          description: |
+            `internal_error` — a failure on our side, with a fixed sentence and
+            no `Retry-After`. A synchronous call whose job was already queued
+            answers this, never `503`, when the database fails while it waits:
+            the job may still run and be charged, and `/call` takes no
+            idempotency key, so a resend would run — and bill — a second call.
+            Do not resend it blindly.
           content:
             application/json:
               schema:
@@ -3411,6 +3431,12 @@ paths:
                 $ref: '#/components/schemas/ProjectCallResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No call has this id; `reason` is `call_not_found`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallRefusal'
 
   # ============================================================================
   # Payment keys and subscriptions
@@ -4173,7 +4199,10 @@ components:
         Nothing happened and nothing was charged — transient, retry after the
         `Retry-After` header. `keystore_error`: the TEE keystore (signing / key
         derivation) was unreachable or rejected the request — transient, retry
-        after `Retry-After`. `confidential_jwt_expired`: the confidential
+        after `Retry-After`. `upstream_unavailable`: this deployment's database
+        could not serve the request right now — transient, retry after
+        `Retry-After`; the same code `/call` answers the condition with.
+        `confidential_jwt_expired`: the confidential
         per-account JWT was rejected by the 1Click upstream and
         re-authentication also failed — transient, retry after `Retry-After`.
         (Transient upstream failures use 503 rather than 502 because
@@ -4183,7 +4212,7 @@ components:
         Retry-After:
           description: >-
             Present on transient failures (`chain_unavailable`,
-            `keystore_error`, `confidential_jwt_expired`) — seconds to wait
+            `keystore_error`, `upstream_unavailable`, `confidential_jwt_expired`) — seconds to wait
             before retrying. Absent on `service_unavailable`, which is not
             transient: there is no interval after which an unset environment
             variable becomes set.
@@ -4364,7 +4393,7 @@ components:
         reason:
           type: string
           description: Machine-readable name of the refusal.
-          enum: [allowance_no_deposit, bad_key_format, compute_limit_too_low, expires_too_soon, insufficient_allowance, insufficient_balance, internal_error, invalid_key, invalid_secrets_ref, invalid_version_key, keystore_error, max_per_call_exceeded, missing_payment_key, no_bound_identity, no_deposit, operation_limit_reached, out_of_funds, project_not_allowed, project_not_found, rate_limit_exceeded, upstream_unavailable, tee_session_required, timeout, call_already_in_flight, trial_exhausted, trial_expired, trial_key_not_purchasable, invalid_request, unknown_operation, vault_not_verified, vault_unlocked, wallet_not_yours, wk_is_not_a_payer]
+          enum: [allowance_no_deposit, bad_key_format, call_not_found, compute_limit_too_low, expires_too_soon, insufficient_allowance, insufficient_balance, internal_error, invalid_key, invalid_secrets_ref, invalid_version_key, keystore_error, max_per_call_exceeded, missing_payment_key, no_bound_identity, no_deposit, operation_limit_reached, out_of_funds, project_not_allowed, project_not_found, rate_limit_exceeded, upstream_unavailable, tee_session_required, timeout, call_already_in_flight, trial_exhausted, trial_expired, trial_key_not_purchasable, invalid_request, unknown_operation, vault_not_verified, vault_unlocked, wallet_not_yours, wk_is_not_a_payer]
         expires_at:
           type: string
           format: date-time
@@ -4641,6 +4670,12 @@ components:
         # clears by itself and carries a Retry-After. They were one code once,
         # and the header could then only be right for one of them.
         - chain_unavailable
+        # 503 + Retry-After: this deployment's database could not serve the
+        # request right now. The name `/call` answers the same condition with,
+        # so one retry rule covers both doors. Any other database failure is
+        # `internal_error` (500), which is not retried; neither carries the
+        # database's own text.
+        - upstream_unavailable
         # 422, and the OPPOSITE instruction to `chain_unavailable` above. The
         # chain ANSWERED, and the answer was about the account asked rather than
         # a value: no such account, no contract code, no such method, or code
@@ -5591,13 +5626,22 @@ components:
       properties:
         amount_out:
           type: string
+          description: |-
+            Expected output in minimal units. Absent on a confidential
+            swap-quote or withdraw dry-run when 1Click gave no estimate for the
+            route; `hint` then says so. Such an answer is final for the route:
+            asking again quotes the same way.
         min_amount_out:
           type: string
+          description: Minimum guaranteed output (after slippage). Absent together with `amount_out`.
         deadline:
           type: string
           format: date-time
         time_estimate_seconds:
           type: integer
+        hint:
+          type: string
+          description: Present only when `amount_out` is absent, and says why.
 
     DefuseAssetId:
       type: string
@@ -5660,13 +5704,16 @@ components:
     DepositRefundAddress:
       type: string
       description: |-
-        Address on the source chain a failed cross-chain deposit refunds to.
-        Consulted only on a wallet WITHOUT a policy, and format-checked for
-        the chain (`0x` + 40 hex on EVM chains and HyperCore, base58 on
-        Solana, an account id on NEAR). Under a policy the owner decides —
-        the policy's `refund_addresses` entry for the chain, else the
-        wallet's derived address on it — and this field is ignored; the
-        response `hint` then says so and names the address a refund goes to.
+        Address on the source chain a failed cross-chain deposit refunds to,
+        format-checked for the chain (`0x` + 40 hex on EVM chains and
+        HyperCore, base58 on Solana, an account id on NEAR, `bc1` / `1` / `3`
+        on Bitcoin). Used on a wallet without a policy, and on a wallet whose
+        policy names no `refund_addresses` entry for a chain the wallet has
+        no address of its own on (Bitcoin, Zcash, Tron, …) — there it is
+        required. Otherwise the owner decides — the policy's
+        `refund_addresses` entry for the chain, else the wallet's derived
+        address on it — and this field is ignored; the response `hint` then
+        says so and names the address a refund goes to.
 
     DepositIntentRequest:
       description: |-
@@ -5679,9 +5726,11 @@ components:
 
         Where a failed deposit refunds is resolved in this order: the wallet
         policy's `refund_addresses` entry for the source chain; a policy
-        without one → the wallet's derived address on that chain (the
-        request's `refund_address` is ignored); no policy → the request's
-        `refund_address`, else the derived address. See
+        without one → the wallet's derived address on that chain when it has
+        one — NEAR, Solana, EVM chains, HyperCore (the request's
+        `refund_address` is ignored) — else the request's `refund_address`;
+        no policy → the request's `refund_address`, else the derived address.
+        No address at all is a `400`. See
         [`DepositRefundAddress`](#/components/schemas/DepositRefundAddress).
 
         Uses `anyOf` (not `oneOf`) deliberately — a request that supplies
@@ -6849,9 +6898,12 @@ components:
         `solana`, …; stored canonical) → an address on that chain. Each
         address is format-checked for its chain when the policy is encrypted,
         and a chain the deposit endpoints do not accept is refused. A chain
-        without an entry refunds to the wallet's own derived address on it.
-        Whenever a policy exists, the deposit request's `refund_address` is
-        ignored — the owner decides where a refund lands, not the caller.
+        without an entry refunds to the wallet's own derived address on it
+        (NEAR, Solana, EVM chains, HyperCore), and the deposit request's
+        `refund_address` is ignored — the owner decides where a refund lands,
+        not the caller. On a chain the wallet has no address of its own on
+        (Bitcoin, Zcash, Tron, …) and no entry names, the request's
+        `refund_address` is used, and a deposit without one is refused.
       additionalProperties:
         type: string
       example:
@@ -7277,7 +7329,9 @@ components:
         rule as the public route — the wallet policy's `refund_addresses`
         entry for `hypercore`; a policy without one → the wallet's derived
         HyperCore address (the request's `refund_address` is ignored); no
-        policy → `refund_address`, else the derived address.
+        policy → `refund_address`, else the derived address. HyperCore always
+        has a derived address, so the request's address is never required
+        here.
       anyOf:
         - title: BySourceAsset
           type: object

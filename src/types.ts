@@ -1039,9 +1039,10 @@ export interface paths {
          *
          *     **Refunds.** A failed bridge refunds into the confidential balance,
          *     except from `hypercore`, whose assets refund only on their origin
-         *     chain. There the address is resolved as on the public route: the
-         *     wallet policy's `refund_addresses.hypercore`; a policy without one →
-         *     the wallet's derived HyperCore address, and the request's
+         *     chain. There the address is resolved as on the public route
+         *     ([`DepositIntentRequest`](#/components/schemas/DepositIntentRequest)):
+         *     the wallet policy's `refund_addresses.hypercore`; a policy without one
+         *     → the wallet's derived HyperCore address, and the request's
          *     `refund_address` is ignored (the `hint` says so); no policy → the
          *     request's `refund_address` (format-checked), else the derived address.
          *
@@ -1144,9 +1145,13 @@ export interface paths {
          *     **Refunds.** If the bridge fails, funds return on the source chain.
          *     Where is the owner's decision: the wallet policy's `refund_addresses`
          *     entry for that chain; a policy without one → the wallet's derived
-         *     address on the chain, and the request's `refund_address` is ignored
-         *     (the `hint` says so); no policy → the request's `refund_address`
-         *     (format-checked for the chain), else the derived address.
+         *     address on the chain when it has one (NEAR, Solana, EVM chains,
+         *     HyperCore), and the request's `refund_address` is ignored (the `hint`
+         *     says so); else → the request's `refund_address`. No policy → the
+         *     request's `refund_address`, else the derived address. A request
+         *     address is format-checked for the chain. A deposit from a chain the
+         *     wallet has no address on (Bitcoin, Zcash, Tron, …) with neither a
+         *     policy entry nor a `refund_address` is refused with `400`.
          *
          *     The returned `deposit_address` is chain-specific — see the
          *     [`DepositIntentResponse.deposit_address`](#/components/schemas/DepositIntentResponse)
@@ -2458,7 +2463,7 @@ export interface components {
              * @description Machine-readable name of the refusal.
              * @enum {string}
              */
-            reason: "allowance_no_deposit" | "bad_key_format" | "compute_limit_too_low" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "invalid_secrets_ref" | "invalid_version_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "call_already_in_flight" | "trial_exhausted" | "trial_expired" | "trial_key_not_purchasable" | "invalid_request" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
+            reason: "allowance_no_deposit" | "bad_key_format" | "call_not_found" | "compute_limit_too_low" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "invalid_secrets_ref" | "invalid_version_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "call_already_in_flight" | "trial_exhausted" | "trial_expired" | "trial_key_not_purchasable" | "invalid_request" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
             /**
              * Format: date-time
              * @description On `trial_expired` only — when the trial ended.
@@ -2618,7 +2623,7 @@ export interface components {
          */
         RequestStatus: "pending_deposit" | "processing" | "success" | "completed" | "partially_failed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "cancelled" | "needs_review";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -3135,11 +3140,20 @@ export interface components {
             request_hash?: string | null;
         };
         SwapQuoteResponse: {
+            /**
+             * @description Expected output in minimal units. Absent on a confidential
+             *     swap-quote or withdraw dry-run when 1Click gave no estimate for the
+             *     route; `hint` then says so. Such an answer is final for the route:
+             *     asking again quotes the same way.
+             */
             amount_out?: string;
+            /** @description Minimum guaranteed output (after slippage). Absent together with `amount_out`. */
             min_amount_out?: string;
             /** Format: date-time */
             deadline?: string;
             time_estimate_seconds?: number;
+            /** @description Present only when `amount_out` is absent, and says why. */
+            hint?: string;
         };
         /**
          * @description NEAR Intents `defuse_asset_id`. Currently always a NEP-141 token
@@ -3190,13 +3204,16 @@ export interface components {
         /** @description Amount in the source token's smallest unit (e.g. `5000000` = 5 USDC). */
         DepositIntentAmount: string;
         /**
-         * @description Address on the source chain a failed cross-chain deposit refunds to.
-         *     Consulted only on a wallet WITHOUT a policy, and format-checked for
-         *     the chain (`0x` + 40 hex on EVM chains and HyperCore, base58 on
-         *     Solana, an account id on NEAR). Under a policy the owner decides —
-         *     the policy's `refund_addresses` entry for the chain, else the
-         *     wallet's derived address on it — and this field is ignored; the
-         *     response `hint` then says so and names the address a refund goes to.
+         * @description Address on the source chain a failed cross-chain deposit refunds to,
+         *     format-checked for the chain (`0x` + 40 hex on EVM chains and
+         *     HyperCore, base58 on Solana, an account id on NEAR, `bc1` / `1` / `3`
+         *     on Bitcoin). Used on a wallet without a policy, and on a wallet whose
+         *     policy names no `refund_addresses` entry for a chain the wallet has
+         *     no address of its own on (Bitcoin, Zcash, Tron, …) — there it is
+         *     required. Otherwise the owner decides — the policy's
+         *     `refund_addresses` entry for the chain, else the wallet's derived
+         *     address on it — and this field is ignored; the response `hint` then
+         *     says so and names the address a refund goes to.
          */
         DepositRefundAddress: string;
         /**
@@ -3209,9 +3226,11 @@ export interface components {
          *
          *     Where a failed deposit refunds is resolved in this order: the wallet
          *     policy's `refund_addresses` entry for the source chain; a policy
-         *     without one → the wallet's derived address on that chain (the
-         *     request's `refund_address` is ignored); no policy → the request's
-         *     `refund_address`, else the derived address. See
+         *     without one → the wallet's derived address on that chain when it has
+         *     one — NEAR, Solana, EVM chains, HyperCore (the request's
+         *     `refund_address` is ignored) — else the request's `refund_address`;
+         *     no policy → the request's `refund_address`, else the derived address.
+         *     No address at all is a `400`. See
          *     [`DepositRefundAddress`](#/components/schemas/DepositRefundAddress).
          *
          *     Uses `anyOf` (not `oneOf`) deliberately — a request that supplies
@@ -3827,9 +3846,12 @@ export interface components {
          *     `solana`, …; stored canonical) → an address on that chain. Each
          *     address is format-checked for its chain when the policy is encrypted,
          *     and a chain the deposit endpoints do not accept is refused. A chain
-         *     without an entry refunds to the wallet's own derived address on it.
-         *     Whenever a policy exists, the deposit request's `refund_address` is
-         *     ignored — the owner decides where a refund lands, not the caller.
+         *     without an entry refunds to the wallet's own derived address on it
+         *     (NEAR, Solana, EVM chains, HyperCore), and the deposit request's
+         *     `refund_address` is ignored — the owner decides where a refund lands,
+         *     not the caller. On a chain the wallet has no address of its own on
+         *     (Bitcoin, Zcash, Tron, …) and no entry names, the request's
+         *     `refund_address` is used, and a deposit without one is refused.
          * @example {
          *       "hypercore": "0x582290c0b2Cb60989B35FFF66049f3e3247355bc",
          *       "solana": "5AmGa2Bcfajbytg55UUb4vCAAzKBMYKZNQwx5S2BH2qf"
@@ -4076,7 +4098,9 @@ export interface components {
          *     rule as the public route — the wallet policy's `refund_addresses`
          *     entry for `hypercore`; a policy without one → the wallet's derived
          *     HyperCore address (the request's `refund_address` is ignored); no
-         *     policy → `refund_address`, else the derived address.
+         *     policy → `refund_address`, else the derived address. HyperCore always
+         *     has a derived address, so the request's address is never required
+         *     here.
          */
         ConfidentialDepositIntentRequest: {
             source_asset: components["schemas"]["DepositIntentSourceAsset"];
@@ -4231,10 +4255,10 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Unavailable — either permanently on this deployment or transiently, and the code says which. `service_unavailable`: feature not enabled/configured (e.g. the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off, the binding-event endpoints without a webhook secret, or NEAR Intents on a network with no solvers) — do not retry; no interval is sent because none would be true. `chain_unavailable`: the chain, or a node in front of it, could not answer this second — a balance that could not be read, a code hash that could not be fetched, a binding that could not be verified, a transaction that expired against a block the node has forgotten. Nothing happened and nothing was charged — transient, retry after the `Retry-After` header. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request — transient, retry after `Retry-After`. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed — transient, retry after `Retry-After`. (Transient upstream failures use 503 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, hiding the JSON body from clients.) */
+        /** @description Unavailable — either permanently on this deployment or transiently, and the code says which. `service_unavailable`: feature not enabled/configured (e.g. the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off, the binding-event endpoints without a webhook secret, or NEAR Intents on a network with no solvers) — do not retry; no interval is sent because none would be true. `chain_unavailable`: the chain, or a node in front of it, could not answer this second — a balance that could not be read, a code hash that could not be fetched, a binding that could not be verified, a transaction that expired against a block the node has forgotten. Nothing happened and nothing was charged — transient, retry after the `Retry-After` header. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request — transient, retry after `Retry-After`. `upstream_unavailable`: this deployment's database could not serve the request right now — transient, retry after `Retry-After`; the same code `/call` answers the condition with. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed — transient, retry after `Retry-After`. (Transient upstream failures use 503 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, hiding the JSON body from clients.) */
         ServiceUnavailable: {
             headers: {
-                /** @description Present on transient failures (`chain_unavailable`, `keystore_error`, `confidential_jwt_expired`) — seconds to wait before retrying. Absent on `service_unavailable`, which is not transient: there is no interval after which an unset environment variable becomes set. */
+                /** @description Present on transient failures (`chain_unavailable`, `keystore_error`, `upstream_unavailable`, `confidential_jwt_expired`) — seconds to wait before retrying. Absent on `service_unavailable`, which is not transient: there is no interval after which an unset environment variable becomes set. */
                 "Retry-After"?: number;
                 [name: string]: unknown;
             };
@@ -6919,10 +6943,29 @@ export interface operations {
                 };
             };
             /**
+             * @description `internal_error` — a failure on our side, with a fixed sentence and
+             *     no `Retry-After`. A synchronous call whose job was already queued
+             *     answers this, never `503`, when the database fails while it waits:
+             *     the job may still run and be charged, and `/call` takes no
+             *     idempotency key, so a resend would run — and bill — a second call.
+             *     Do not resend it blindly.
+             */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallRefusal"];
+                };
+            };
+            /**
              * @description `upstream_unavailable` — something this call depends on has not
-             *     caught up yet, and the same call works later. `keystore_error` —
+             *     caught up yet, or this deployment's database could not serve the
+             *     request right now, and the same call works later. `keystore_error` —
              *     the TEE keystore was unreachable or refused to sign. Both are
-             *     transient and both are sent with a `Retry-After` interval.
+             *     transient and both are sent with a `Retry-After` interval. Sent
+             *     only before the job is queued: nothing ran and nothing was charged,
+             *     so resending is safe.
              *
              *     Deliberately not `service_unavailable`: on `/wallet/v1/*` that code
              *     means a feature this deployment does not offer and carries no
@@ -6962,6 +7005,15 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            /** @description No call has this id; `reason` is `call_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallRefusal"];
+                };
+            };
         };
     };
     createPaymentKey: {

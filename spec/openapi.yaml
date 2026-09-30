@@ -3480,16 +3480,17 @@ paths:
     get:
       tags: [Inbox]
       operationId: getInboxTaskOrigin
-      summary: The run that made a task, and what it answered
+      summary: The run that made a task, what it was asked and what it answered
       description: |
         With the run's attestation — public, at
         `GET /attestations/by-call/{call_id}` or
         `GET /attestations/by-request/{request_id}` — this is what a page
         needs to tell that a task was made by a published build of its
         project. The attestation names the build that ran and the SHA-256 of
-        the run's answer; `output` is that answer, byte for byte; and the
-        answer names the task's id and `task_hash`. A request on chain
-        answered in its transaction, so `output` is `null` for it.
+        the run's input and of its answer; `input` and `output` are those
+        bytes, byte for byte; and the answer names the task's id and
+        `task_hash`. A request on chain carries its input and its answer in
+        its transaction, so both are `null` for it.
       security:
         - OwnerSession: []
       parameters:
@@ -3501,13 +3502,26 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [run, door, output]
+                required: [run, door, output, input]
                 properties:
                   run: { type: string }
                   door: { type: string, enum: [https, chain] }
                   call_id: { type: string, format: uuid, description: "With `door: https`." }
                   request_id: { type: integer, description: "With `door: chain`." }
-                  output: { type: [string, 'null'] }
+                  output:
+                    type: [string, 'null']
+                    description: |
+                      What the run answered, as the bytes the attestation's
+                      `output_hash` is the SHA-256 of. Present for a call over
+                      HTTPS that completed; `null` for a request on chain.
+                  input:
+                    type: [string, 'null']
+                    description: |
+                      What the run was asked, as the bytes the attestation's
+                      `input_hash` is the SHA-256 of: the call's `input` as the
+                      coordinator serialised it, keys in the order the caller
+                      sent them. Present for a call over HTTPS; `null` for a
+                      request on chain, whose transaction carries it.
         '400':
           $ref: '#/components/responses/InboxRefused'
         '401':
@@ -4434,6 +4448,25 @@ paths:
                               required: { type: boolean }
                               doc: { type: string }
                   limits: { type: array, items: { type: object } }
+                  callers:
+                    type: [object, 'null']
+                    description: |
+                      The manifest's `callers` block as written: which doors a
+                      run may come through (`direct`, `contract`, `https`,
+                      `meta_tx`). `null` when the manifest declares none, which
+                      admits every door. A door the block leaves out is
+                      `allow`, except `meta_tx`, which is `deny`.
+                    properties:
+                      direct: { type: string, enum: [allow, deny] }
+                      contract:
+                        oneOf:
+                          - { type: string, enum: [allow, deny] }
+                          - type: object
+                            required: [only]
+                            properties:
+                              only: { type: array, items: { type: string }, minItems: 1, maxItems: 32 }
+                      https: { type: string, enum: [allow, deny] }
+                      meta_tx: { type: string, enum: [allow, deny] }
         '404':
           description: No such connector on this network, not published, or a version without a `describe` block.
         '503':

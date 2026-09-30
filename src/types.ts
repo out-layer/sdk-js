@@ -2069,15 +2069,16 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The run that made a task, and what it answered
+         * The run that made a task, what it was asked and what it answered
          * @description With the run's attestation — public, at
          *     `GET /attestations/by-call/{call_id}` or
          *     `GET /attestations/by-request/{request_id}` — this is what a page
          *     needs to tell that a task was made by a published build of its
          *     project. The attestation names the build that ran and the SHA-256 of
-         *     the run's answer; `output` is that answer, byte for byte; and the
-         *     answer names the task's id and `task_hash`. A request on chain
-         *     answered in its transaction, so `output` is `null` for it.
+         *     the run's input and of its answer; `input` and `output` are those
+         *     bytes, byte for byte; and the answer names the task's id and
+         *     `task_hash`. A request on chain carries its input and its answer in
+         *     its transaction, so both are `null` for it.
          */
         get: operations["getInboxTaskOrigin"];
         put?: never;
@@ -7451,7 +7452,20 @@ export interface operations {
                         call_id?: string;
                         /** @description With `door: chain`. */
                         request_id?: number;
+                        /**
+                         * @description What the run answered, as the bytes the attestation's
+                         *     `output_hash` is the SHA-256 of. Present for a call over
+                         *     HTTPS that completed; `null` for a request on chain.
+                         */
                         output: string | null;
+                        /**
+                         * @description What the run was asked, as the bytes the attestation's
+                         *     `input_hash` is the SHA-256 of: the call's `input` as the
+                         *     coordinator serialised it, keys in the order the caller
+                         *     sent them. Present for a call over HTTPS; `null` for a
+                         *     request on chain, whose transaction carries it.
+                         */
+                        input: string | null;
                     };
                 };
             };
@@ -8337,6 +8351,24 @@ export interface operations {
                             }[];
                         }[];
                         limits?: Record<string, never>[];
+                        /**
+                         * @description The manifest's `callers` block as written: which doors a
+                         *     run may come through (`direct`, `contract`, `https`,
+                         *     `meta_tx`). `null` when the manifest declares none, which
+                         *     admits every door. A door the block leaves out is
+                         *     `allow`, except `meta_tx`, which is `deny`.
+                         */
+                        callers?: {
+                            /** @enum {string} */
+                            direct?: "allow" | "deny";
+                            contract?: ("allow" | "deny") | {
+                                only: string[];
+                            };
+                            /** @enum {string} */
+                            https?: "allow" | "deny";
+                            /** @enum {string} */
+                            meta_tx?: "allow" | "deny";
+                        } | null;
                     };
                 };
             };

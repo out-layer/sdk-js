@@ -103,6 +103,27 @@ tags:
     description: Encrypted on-chain policy lifecycle (read, encrypt, sign, cache).
   - name: Approvals
     description: Multisig approval workflows for actions that exceed policy thresholds.
+  - name: Inbox
+    description: >-
+      Tasks between an agent and its owner. An agent's run of a project,
+      admitted to an owner's secret row by name, leaves that owner a task —
+      "confirm this email", "give me your photo"; the owner reads it here,
+      inside a session and with no run, and acts on it with a call of their own
+      to the operation the task names (`POST /call/{owner}/{project}`, with
+      `task_id` and `task_hash`). Reading, rejecting, deleting and muting need
+      the session and nothing else.
+
+
+      What a task shows is ciphertext to this API: `content` is under the
+      task's content key, and `device_copy` is that key encrypted to the
+      public key of the device the session was opened on. A page opens them
+      with the device's private key, which it holds and cannot export
+      (ECDH on P-256, HKDF-SHA256, AES-256-GCM). The hash the owner's answer
+      names is the SHA-256 of the bytes that were opened.
+
+
+      Every refusal is an `InboxRefusal`. "Nothing waits" is `{"tasks": []}`,
+      never a refusal, and a refusal is never an empty list.
   - name: Audit
     description: Event history for the wallet.
   - name: Requests
@@ -3049,16 +3070,84 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /wallet/v1/pending_approvals_by_pubkey:
+    get:
+      tags: [Approvals]
+      operationId: listPendingApprovalsOfWallet
+      summary: What waits for approval on one wallet, for its owner
+      description: |
+        The pending approvals of the wallet `near_pubkey`, for the dashboard's
+        bell and inbox. Told inside an owner's session (`POST /inbox/session`)
+        and to the wallet's owner only: the session's account is the owner of
+        the wallet's policy on the contract. The answer carries each operation
+        whole (`op`, `op_canonical`), so nobody else is given it.
+      security:
+        - OwnerSession: []
+      parameters:
+        - name: near_pubkey
+          in: query
+          required: true
+          description: The wallet's public key, as `get_wallet_policies_by_owner` lists it.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pending approvals of the wallet; an empty list when nothing waits
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [near_pubkey, pending_approvals]
+                properties:
+                  near_pubkey: { type: string }
+                  pending_approvals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PendingApproval'
+        '401':
+          description: >
+            No session, or one that ended (`session_required`); or one that
+            ended because the account signed in elsewhere (`session_replaced`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                session_required:
+                  value: { error: session_required }
+                session_replaced:
+                  value: { error: session_replaced }
+        '403':
+          description: The session's account does not own the wallet (`not_wallet_owner`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_wallet_owner:
+                  value: { error: not_wallet_owner }
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: The database or the chain did not answer; `Retry-After` says when to come back
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /wallet/v1/approval/{id}:
     get:
       tags: [Approvals]
       operationId: getApprovalDetail
-      summary: Get a single pending approval's detail (public, read-only)
+      summary: Get a single pending approval's detail
       description: |
-        Returns non-sensitive detail for one pending approval — used by the
-        dashboard approval-detail page. No auth: rate-limited by IP, returns only
-        public metadata. The `wallet_pubkey` and `request_hash` are the values an
-        approver binds into the NEP-413 vote message
+        One approval, for the page and the program an approver votes with.
+        Told to whoever holds the approval's id, which is random and is handed
+        to an approver by the wallet's owner or by the webhook; rate-limited
+        by IP. What waits on a wallet is listed only to its owner
+        (`GET /wallet/v1/pending_approvals_by_pubkey`). The
+        `wallet_pubkey` and `request_hash` are the values an approver binds
+        into the NEP-413 vote message
         (`approve:{id}:{wallet_pubkey}:{request_hash}` /
         `reject:{id}:{wallet_pubkey}:{request_hash}`); the dashboard renders `op`.
       security: []
@@ -3188,6 +3277,538 @@ paths:
   # ============================================================================
   # Execution
   # ============================================================================
+  /inbox/session:
+    post:
+      tags: [Inbox]
+      operationId: openOwnerSession
+      summary: Sign in on a device
+      description: |
+        Opens a session from one statement the owner's wallet signed (NEP-413,
+        recipient: the OutLayer contract, a fresh 32-byte nonce):
+
+            Sign in to OutLayer as {account_id}. Device key: {device_pubkey}. Valid until {valid_until as YYYY-MM-DDTHH:MM:SSZ}.
+
+        The sentence is rebuilt here from the three fields, so what was signed
+        is exactly it. The key that signed must be a full-access key of the
+        account on chain. One statement opens one session. An account has
+        five devices in force at most, each with a session of its own; one
+        more retires the device signed in longest ago, which is answered 401
+        `session_replaced` from then on.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OwnerSignIn'
+      responses:
+        '200':
+          description: The session. `token` is returned this once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerSession'
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '429':
+          $ref: '#/components/responses/InboxTooManyRequests'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+    delete:
+      tags: [Inbox]
+      operationId: closeOwnerSession
+      summary: Sign out of this device
+      security:
+        - OwnerSession: []
+      responses:
+        '200':
+          description: The device is withdrawn and its session ended
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked]
+                properties:
+                  revoked: { type: boolean }
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/tasks:
+    get:
+      tags: [Inbox]
+      operationId: listInboxTasks
+      summary: The owner's tasks, of every project
+      security:
+        - OwnerSession: []
+      parameters:
+        - name: show
+          in: query
+          required: false
+          description: "`waiting` — what waits for the owner and what is being acted on; `closed` — the outcomes kept, 30 days."
+          schema:
+            type: string
+            enum: [waiting, closed]
+            default: waiting
+      responses:
+        '200':
+          description: The tasks; an empty list when there are none
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tasks, more]
+                properties:
+                  tasks:
+                    type: array
+                    description: The newest, 200 at most.
+                    items:
+                      $ref: '#/components/schemas/InboxTask'
+                  more:
+                    type: boolean
+                    description: More exist than are listed; the list is not whole.
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '429':
+          $ref: '#/components/responses/InboxTooManyRequests'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+    delete:
+      tags: [Inbox]
+      operationId: deleteInboxTasks
+      summary: Delete every task addressed to the owner
+      description: In any state. Narrowed to an agent's or a project's tasks when the query names one.
+      security:
+        - OwnerSession: []
+      parameters:
+        - name: preparer
+          in: query
+          required: false
+          schema: { type: string }
+        - name: project_uuid
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: How many were deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxDeleted'
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/tasks/{id}:
+    delete:
+      tags: [Inbox]
+      operationId: deleteInboxTask
+      summary: Delete one task, in any state
+      security:
+        - OwnerSession: []
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxDeleted'
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '404':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/tasks/{id}/files/{n}:
+    get:
+      tags: [Inbox]
+      operationId: getInboxTaskFile
+      summary: One file of a task that waits
+      description: |
+        A file the owner is given to open beside the task's fields, as
+        ciphertext: `0x01 || nonce (12) || AES-256-GCM` under the task's
+        content key, bound to `{task id}:file:{n}`. The task's envelope names
+        each file's `name`, `content_type`, `size` and `sha256`; a page holds
+        the bytes it opened to that size and hash, and hands the file to the
+        owner as a download.
+      security:
+        - OwnerSession: []
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - name: n
+          in: path
+          required: true
+          description: The file's place among the task's files, from 0.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 9
+      responses:
+        '200':
+          description: The file
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ciphertext]
+                properties:
+                  ciphertext:
+                    type: string
+                    contentEncoding: base64
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '404':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/tasks/{id}/origin:
+    get:
+      tags: [Inbox]
+      operationId: getInboxTaskOrigin
+      summary: The run that made a task, and what it answered
+      description: |
+        With the run's attestation — public, at
+        `GET /attestations/by-call/{call_id}` or
+        `GET /attestations/by-request/{request_id}` — this is what a page
+        needs to tell that a task was made by a published build of its
+        project. The attestation names the build that ran and the SHA-256 of
+        the run's answer; `output` is that answer, byte for byte; and the
+        answer names the task's id and `task_hash`. A request on chain
+        answered in its transaction, so `output` is `null` for it.
+      security:
+        - OwnerSession: []
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: The run
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run, door, output]
+                properties:
+                  run: { type: string }
+                  door: { type: string, enum: [https, chain] }
+                  call_id: { type: string, format: uuid, description: "With `door: https`." }
+                  request_id: { type: integer, description: "With `door: chain`." }
+                  output: { type: [string, 'null'] }
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '404':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/tasks/{id}/reject:
+    post:
+      tags: [Inbox]
+      operationId: rejectInboxTask
+      summary: Say no to a task, with a reason
+      description: |
+        No run. The reason is encrypted by the page to the task's
+        `reply_pubkey` (purpose `rejection`), so it is ciphertext here and the
+        agent's next run reads it.
+      security:
+        - OwnerSession: []
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reason:
+                  type: [string, 'null']
+                  contentEncoding: base64
+                  description: The reason, encrypted to the task's `reply_pubkey`; at most 8192 bytes.
+      responses:
+        '200':
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, state]
+                properties:
+                  id: { type: string }
+                  state:
+                    $ref: '#/components/schemas/TaskState'
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '404':
+          $ref: '#/components/responses/InboxRefused'
+        '409':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/mutes:
+    get:
+      tags: [Inbox]
+      operationId: listInboxMutes
+      summary: Whom the owner silenced
+      security:
+        - OwnerSession: []
+      responses:
+        '200':
+          description: The agents and projects whose tasks are refused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxMutes'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+    post:
+      tags: [Inbox]
+      operationId: muteInInbox
+      summary: Silence an agent or a project
+      description: Its next task is refused `muted`. With `delete_waiting`, its tasks already addressed to the owner are deleted at once.
+      security:
+        - OwnerSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [subject_is, subject]
+              properties:
+                subject_is: { type: string, enum: [agent, project] }
+                subject: { type: string, description: An account id for an agent; a uuid for a project. }
+                delete_waiting: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Muted; how many tasks were deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxDeleted'
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+    delete:
+      tags: [Inbox]
+      operationId: unmuteInInbox
+      summary: Let an agent or a project write again
+      security:
+        - OwnerSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboxMute'
+      responses:
+        '200':
+          description: The mutes that remain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxMutes'
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/webhook:
+    get:
+      tags: [Inbox]
+      operationId: getInboxWebhook
+      summary: Where the owner is told of a task
+      security:
+        - OwnerSession: []
+      responses:
+        '200':
+          description: The URL, or `null`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxWebhook'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+    put:
+      tags: [Inbox]
+      operationId: setInboxWebhook
+      summary: Name the URL task events go to
+      description: |
+        `task_created`, `task_answered` and `task_expired` are POSTed there,
+        signed with a secret of the owner's own (`X-Webhook-Signature`, the
+        HMAC-SHA256 of the body in hex), with `X-Wallet-Id: owner:{account}`.
+        The secret is in the answer to this call and nowhere else. A body says who asked whom, of what
+        kind and when, and links to the inbox; nothing of what the task shows.
+        The URL is an HTTPS URL on a public host, without credentials in it;
+        the sender follows no redirect. The URL stays in force when the
+        session that named it ends, and says which session that was.
+
+        Naming the URL takes the owner's signature beside the session (see
+        `OwnerConfirmation`): the sentence names the URL by its SHA-256.
+        Without one that holds: 403 `confirmation_required`.
+      security:
+        - OwnerSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [url, confirmation]
+              properties:
+                url: { type: string, format: uri, description: "An HTTPS URL on a public host, without credentials." }
+                confirmation:
+                  $ref: '#/components/schemas/OwnerConfirmation'
+      responses:
+        '200':
+          description: The URL now in force
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxWebhook'
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+    delete:
+      tags: [Inbox]
+      operationId: deleteInboxWebhook
+      summary: Stop the events
+      description: Takes the owner's signature for `remove the webhook` (see `OwnerConfirmation`).
+      security:
+        - OwnerSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirmation]
+              properties:
+                confirmation:
+                  $ref: '#/components/schemas/OwnerConfirmation'
+      responses:
+        '200':
+          description: No URL is in force
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxWebhook'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/devices:
+    get:
+      tags: [Inbox]
+      operationId: listOwnerDevices
+      summary: The owner's devices in force
+      security:
+        - OwnerSession: []
+      responses:
+        '200':
+          description: The devices
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [devices]
+                properties:
+                  devices:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OwnerDevice'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/devices/{id}:
+    delete:
+      tags: [Inbox]
+      operationId: withdrawOwnerDevice
+      summary: Withdraw a device
+      description: |
+        Its session ends and no task is encrypted to it from now on. A device
+        that is lost with the wallet key that signed it in is cut off for
+        certain by removing that key (`signer_pubkey`) from the account on
+        chain: every statement it signed stops holding, whatever is stored here.
+
+        The session's own device signs out on its token alone. Another device
+        of the account takes the owner's signature for
+        `withdraw the device {id}` (see `OwnerConfirmation`); without one that
+        holds: 403 `confirmation_required`.
+      security:
+        - OwnerSession: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                confirmation:
+                  $ref: '#/components/schemas/OwnerConfirmation'
+      responses:
+        '200':
+          description: Whether a device of the owner's was withdrawn
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked]
+                properties:
+                  revoked: { type: boolean }
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
   /call/{owner}/{project}:
     post:
       tags: [Execution]
@@ -4081,6 +4702,19 @@ components:
       description: |
         API key returned by `POST /register`. Format `wk_<hex>`. Pass as
         `Authorization: Bearer wk_...`.
+    OwnerSession:
+      type: http
+      scheme: bearer
+      bearerFormat: os_<64-hex-chars>
+      description: |
+        An owner's session on one device, opened by `POST /inbox/session` with
+        a statement the owner's wallet signed. Pass as
+        `Authorization: Bearer os_...`. It ends at the statement's deadline,
+        30 days at most, and is not extended: a new statement opens a new one,
+        beside the ones in force. A session also ends when the key that signed
+        it is removed from the account, or stops being a full-access key: the
+        chain is asked on a timer, and its answer ends a session when it is
+        given twice.
     PaymentKeyAuth:
       type: apiKey
       in: header
@@ -4092,6 +4726,14 @@ components:
         does not stand in for it: on `/call` it is refused as `wk_is_not_a_payer`.
 
   parameters:
+    TaskId:
+      name: id
+      in: path
+      required: true
+      description: A task's id — 1 to 80 of `a-z`, `0-9` and `-`.
+      schema:
+        type: string
+        pattern: '^[a-z0-9-]{1,80}$'
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -4112,6 +4754,29 @@ components:
         on network failure.
 
   responses:
+    InboxRefused:
+      description: The inbox refused; branch on `reason`
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InboxRefusal'
+    InboxUnavailable:
+      description: The database or the chain did not answer
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds until the same request is worth repeating.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InboxRefusal'
+    InboxTooManyRequests:
+      description: Too many requests
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: Too many requests. Try again later.
     BadRequest:
       description: Invalid request
       content:
@@ -4352,6 +5017,161 @@ components:
         attestation_url:
           type: [string, 'null']
           description: The TEE quote for this execution.
+    InboxRefusal:
+      type: object
+      description: >
+        Every refusal of the inbox. `error` is a sentence written for a person
+        and is reworded freely; `reason` is the contract — branch on it. A
+        value outside the enum means the client is older than the server: it
+        is not a success and not an empty inbox.
+      required: [error, reason, terminal]
+      properties:
+        error: { type: string, description: The human sentence. }
+        reason:
+          type: string
+          description: "`confirmation_required` (403): the action takes the owner's signature, and the request carries none that holds."
+          enum: [session_required, session_replaced, invalid_statement, task_not_found, task_closed, invalid_request, confirmation_required, upstream_unavailable, internal_error]
+        terminal:
+          type: boolean
+          description: "`true`: the same request can never succeed. `false` on `session_required` and `session_replaced` (sign in) and `upstream_unavailable` (come back)."
+        state:
+          $ref: '#/components/schemas/TaskState'
+    TaskState:
+      type: string
+      description: >
+        `open` waits for the owner. `answering`: the owner answered and the run
+        named in `run` acts. `done`: that run ended well and the project
+        reported. `failed`: it ended any other way — its status is the
+        ordinary status of a call. A task never returns to `open`.
+      enum: [open, answering, done, failed, rejected, cancelled, expired, void]
+    TaskKind:
+      type: string
+      description: "`confirm` — yes or no; `input` — the owner supplies something."
+      enum: [confirm, input]
+    InboxTask:
+      type: object
+      required: [id, project_id, project_uuid, preparer, profile, vault, kind, state, created_at, expires_at, reply_pubkey, content, device_copy, locked]
+      properties:
+        id: { type: string }
+        project_id: { type: string, description: "The project whose run made the task, and whose operation answers it." }
+        project_uuid: { type: string }
+        preparer: { type: string, description: The account whose run made the task. }
+        profile: { type: string, description: "The profile of the owner's secret row the task was made for: what the owner's call names in `secrets_ref`." }
+        vault:
+          type: [string, 'null']
+          description: "The vault that row is bound to, whose master seals the task; `null` for the default master."
+        kind:
+          $ref: '#/components/schemas/TaskKind'
+        state:
+          $ref: '#/components/schemas/TaskState'
+        created_at: { type: integer, description: Unix seconds. }
+        expires_at: { type: integer, description: Unix seconds. }
+        run: { type: string, description: "The call that acts, or acted, on the owner's answer." }
+        reply_pubkey: { type: string, description: "`p256:` and the uncompressed point in base64url: what the owner's answer and reason are encrypted to." }
+        content:
+          type: [string, 'null']
+          contentEncoding: base64
+          description: "The task's envelope under its content key: `0x01 || nonce (12) || AES-256-GCM`, bound to the task's id. `null` once the task is closed."
+        device_copy:
+          type: [string, 'null']
+          contentEncoding: base64
+          description: "The content key encrypted to this session's device. `null` when the device has none."
+        locked:
+          type: boolean
+          description: An open task this device has no copy of. It opens after one call of the project's `tasks_unlock` by the owner.
+    InboxDeleted:
+      type: object
+      required: [deleted]
+      properties:
+        deleted: { type: integer }
+    InboxMute:
+      type: object
+      additionalProperties: false
+      required: [subject_is, subject]
+      properties:
+        subject_is: { type: string, enum: [agent, project] }
+        subject: { type: string }
+    InboxMutes:
+      type: object
+      required: [mutes]
+      properties:
+        mutes:
+          type: array
+          items:
+            $ref: '#/components/schemas/InboxMute'
+    InboxWebhook:
+      type: object
+      required: [url, set_at, set_by_key, set_here]
+      properties:
+        url: { type: [string, 'null'] }
+        set_at: { type: [integer, 'null'], description: "When the URL was named, in Unix seconds; `null` with no URL." }
+        set_by_key:
+          type: [string, 'null']
+          description: The wallet key that signed in the session that named the URL; `null` with no URL.
+        set_here:
+          type: boolean
+          description: >
+            Whether the URL was named in the session that asks. `false` is a
+            URL named in a session that is over, or on another device: one the
+            owner should recognise, or remove.
+        secret:
+          type: string
+          description: >
+            The secret the owner's events are signed with (`X-Webhook-Signature`
+            is the HMAC-SHA256 of the body, in hex). Present only in the answer
+            to `PUT`: told once, never again. Naming a URL again makes a new
+            secret.
+    OwnerSignIn:
+      type: object
+      additionalProperties: false
+      required: [account_id, device_pubkey, valid_until, public_key, signature, nonce]
+      properties:
+        account_id: { type: string }
+        device_pubkey: { type: string, description: "`p256:` and the uncompressed point of the device's public key, base64url without padding." }
+        valid_until: { type: integer, description: "Unix seconds; in the future, 30 days at most." }
+        public_key: { type: string, description: "The key that signed, `ed25519:<base58>`." }
+        signature: { type: string, description: "Base64, 64 bytes." }
+        nonce: { type: string, description: "Base64, 32 bytes." }
+    OwnerSession:
+      type: object
+      required: [token, device_id, account_id, valid_until]
+      properties:
+        token: { type: string, description: "`os_` and 64 hex characters. Returned this once; kept here as its hash." }
+        device_id: { type: string, format: uuid }
+        account_id: { type: string }
+        valid_until: { type: integer }
+    OwnerConfirmation:
+      type: object
+      additionalProperties: false
+      required: [at, public_key, signature, nonce]
+      description: |
+        The owner's signature for one action a session must not do alone:
+        withdrawing another device, naming or removing the webhook. NEP-413,
+        recipient: the OutLayer contract, a fresh 32-byte nonce, over the
+        sentence
+
+            Confirm in OutLayer as {account_id}: {action}. At {at as YYYY-MM-DDTHH:MM:SSZ}.
+
+        where `{action}` is `withdraw the device {id}`, `name the webhook
+        {sha256 of the URL, hex}` or `remove the webhook`. The sentence is
+        rebuilt from the session's account, the request's action and `at`.
+        Good for ten minutes either side of now, once: the nonce is spent.
+        The key that signed must be a full-access key of the account.
+      properties:
+        at: { type: integer, description: "Unix seconds, the moment the sentence names." }
+        public_key: { type: string, description: "`ed25519:<base58>`" }
+        signature: { type: string, description: "Base64, 64 bytes." }
+        nonce: { type: string, description: "Base64, 32 bytes." }
+    OwnerDevice:
+      type: object
+      required: [id, device_pubkey, signer_pubkey, created_at, valid_until, this]
+      properties:
+        id: { type: string, format: uuid }
+        device_pubkey: { type: string }
+        signer_pubkey: { type: string, description: The wallet key that signed the device in. }
+        created_at: { type: integer }
+        valid_until: { type: integer }
+        this: { type: boolean, description: The device this session is on. }
     TrialKeyRefusal:
       type: object
       description: Every refusal from `POST /trial-key`. Branch on `reason`.
@@ -4634,6 +5454,9 @@ components:
       enum:
         - missing_auth
         - invalid_api_key
+        - session_required
+        - session_replaced
+        - not_wallet_owner
         - missing_wallet_id
         - invalid_wallet_id
         - missing_signature

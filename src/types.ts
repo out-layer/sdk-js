@@ -1859,6 +1859,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/pending_approvals_by_pubkey": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What waits for approval on one wallet, for its owner
+         * @description The pending approvals of the wallet `near_pubkey`, for the dashboard's
+         *     bell and inbox. Told inside an owner's session (`POST /inbox/session`)
+         *     and to the wallet's owner only: the session's account is the owner of
+         *     the wallet's policy on the contract. The answer carries each operation
+         *     whole (`op`, `op_canonical`), so nobody else is given it.
+         */
+        get: operations["listPendingApprovalsOfWallet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/v1/approval/{id}": {
         parameters: {
             query?: never;
@@ -1867,11 +1891,14 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get a single pending approval's detail (public, read-only)
-         * @description Returns non-sensitive detail for one pending approval — used by the
-         *     dashboard approval-detail page. No auth: rate-limited by IP, returns only
-         *     public metadata. The `wallet_pubkey` and `request_hash` are the values an
-         *     approver binds into the NEP-413 vote message
+         * Get a single pending approval's detail
+         * @description One approval, for the page and the program an approver votes with.
+         *     Told to whoever holds the approval's id, which is random and is handed
+         *     to an approver by the wallet's owner or by the webhook; rate-limited
+         *     by IP. What waits on a wallet is listed only to its owner
+         *     (`GET /wallet/v1/pending_approvals_by_pubkey`). The
+         *     `wallet_pubkey` and `request_hash` are the values an approver binds
+         *     into the NEP-413 vote message
          *     (`approve:{id}:{wallet_pubkey}:{request_hash}` /
          *     `reject:{id}:{wallet_pubkey}:{request_hash}`); the dashboard renders `op`.
          */
@@ -1935,6 +1962,252 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in on a device
+         * @description Opens a session from one statement the owner's wallet signed (NEP-413,
+         *     recipient: the OutLayer contract, a fresh 32-byte nonce):
+         *
+         *         Sign in to OutLayer as {account_id}. Device key: {device_pubkey}. Valid until {valid_until as YYYY-MM-DDTHH:MM:SSZ}.
+         *
+         *     The sentence is rebuilt here from the three fields, so what was signed
+         *     is exactly it. The key that signed must be a full-access key of the
+         *     account on chain. One statement opens one session. An account has
+         *     five devices in force at most, each with a session of its own; one
+         *     more retires the device signed in longest ago, which is answered 401
+         *     `session_replaced` from then on.
+         */
+        post: operations["openOwnerSession"];
+        /** Sign out of this device */
+        delete: operations["closeOwnerSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The owner's tasks, of every project */
+        get: operations["listInboxTasks"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete every task addressed to the owner
+         * @description In any state. Narrowed to an agent's or a project's tasks when the query names one.
+         */
+        delete: operations["deleteInboxTasks"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/tasks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete one task, in any state */
+        delete: operations["deleteInboxTask"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/tasks/{id}/files/{n}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One file of a task that waits
+         * @description A file the owner is given to open beside the task's fields, as
+         *     ciphertext: `0x01 || nonce (12) || AES-256-GCM` under the task's
+         *     content key, bound to `{task id}:file:{n}`. The task's envelope names
+         *     each file's `name`, `content_type`, `size` and `sha256`; a page holds
+         *     the bytes it opened to that size and hash, and hands the file to the
+         *     owner as a download.
+         */
+        get: operations["getInboxTaskFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/tasks/{id}/origin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The run that made a task, and what it answered
+         * @description With the run's attestation — public, at
+         *     `GET /attestations/by-call/{call_id}` or
+         *     `GET /attestations/by-request/{request_id}` — this is what a page
+         *     needs to tell that a task was made by a published build of its
+         *     project. The attestation names the build that ran and the SHA-256 of
+         *     the run's answer; `output` is that answer, byte for byte; and the
+         *     answer names the task's id and `task_hash`. A request on chain
+         *     answered in its transaction, so `output` is `null` for it.
+         */
+        get: operations["getInboxTaskOrigin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/tasks/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Say no to a task, with a reason
+         * @description No run. The reason is encrypted by the page to the task's
+         *     `reply_pubkey` (purpose `rejection`), so it is ciphertext here and the
+         *     agent's next run reads it.
+         */
+        post: operations["rejectInboxTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/mutes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whom the owner silenced */
+        get: operations["listInboxMutes"];
+        put?: never;
+        /**
+         * Silence an agent or a project
+         * @description Its next task is refused `muted`. With `delete_waiting`, its tasks already addressed to the owner are deleted at once.
+         */
+        post: operations["muteInInbox"];
+        /** Let an agent or a project write again */
+        delete: operations["unmuteInInbox"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Where the owner is told of a task */
+        get: operations["getInboxWebhook"];
+        /**
+         * Name the URL task events go to
+         * @description `task_created`, `task_answered` and `task_expired` are POSTed there,
+         *     signed with a secret of the owner's own (`X-Webhook-Signature`, the
+         *     HMAC-SHA256 of the body in hex), with `X-Wallet-Id: owner:{account}`.
+         *     The secret is in the answer to this call and nowhere else. A body says who asked whom, of what
+         *     kind and when, and links to the inbox; nothing of what the task shows.
+         *     The URL is an HTTPS URL on a public host, without credentials in it;
+         *     the sender follows no redirect. The URL stays in force when the
+         *     session that named it ends, and says which session that was.
+         *
+         *     Naming the URL takes the owner's signature beside the session (see
+         *     `OwnerConfirmation`): the sentence names the URL by its SHA-256.
+         *     Without one that holds: 403 `confirmation_required`.
+         */
+        put: operations["setInboxWebhook"];
+        post?: never;
+        /**
+         * Stop the events
+         * @description Takes the owner's signature for `remove the webhook` (see `OwnerConfirmation`).
+         */
+        delete: operations["deleteInboxWebhook"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The owner's devices in force */
+        get: operations["listOwnerDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbox/devices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Withdraw a device
+         * @description Its session ends and no task is encrypted to it from now on. A device
+         *     that is lost with the wallet key that signed it in is cut off for
+         *     certain by removing that key (`signer_pubkey`) from the account on
+         *     chain: every statement it signed stops holding, whatever is stored here.
+         *
+         *     The session's own device signs out on its token alone. Another device
+         *     of the account takes the owner's signature for
+         *     `withdraw the device {id}` (see `OwnerConfirmation`); without one that
+         *     holds: 403 `confirmation_required`.
+         */
+        delete: operations["withdrawOwnerDevice"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2441,6 +2714,135 @@ export interface components {
             /** @description The TEE quote for this execution. */
             attestation_url?: string | null;
         };
+        /** @description Every refusal of the inbox. `error` is a sentence written for a person and is reworded freely; `reason` is the contract — branch on it. A value outside the enum means the client is older than the server: it is not a success and not an empty inbox. */
+        InboxRefusal: {
+            /** @description The human sentence. */
+            error: string;
+            /**
+             * @description `confirmation_required` (403): the action takes the owner's signature, and the request carries none that holds.
+             * @enum {string}
+             */
+            reason: "session_required" | "session_replaced" | "invalid_statement" | "task_not_found" | "task_closed" | "invalid_request" | "confirmation_required" | "upstream_unavailable" | "internal_error";
+            /** @description `true`: the same request can never succeed. `false` on `session_required` and `session_replaced` (sign in) and `upstream_unavailable` (come back). */
+            terminal: boolean;
+            state?: components["schemas"]["TaskState"];
+        };
+        /**
+         * @description `open` waits for the owner. `answering`: the owner answered and the run named in `run` acts. `done`: that run ended well and the project reported. `failed`: it ended any other way — its status is the ordinary status of a call. A task never returns to `open`.
+         * @enum {string}
+         */
+        TaskState: "open" | "answering" | "done" | "failed" | "rejected" | "cancelled" | "expired" | "void";
+        /**
+         * @description `confirm` — yes or no; `input` — the owner supplies something.
+         * @enum {string}
+         */
+        TaskKind: "confirm" | "input";
+        InboxTask: {
+            id: string;
+            /** @description The project whose run made the task, and whose operation answers it. */
+            project_id: string;
+            project_uuid: string;
+            /** @description The account whose run made the task. */
+            preparer: string;
+            /** @description The profile of the owner's secret row the task was made for: what the owner's call names in `secrets_ref`. */
+            profile: string;
+            /** @description The vault that row is bound to, whose master seals the task; `null` for the default master. */
+            vault: string | null;
+            kind: components["schemas"]["TaskKind"];
+            state: components["schemas"]["TaskState"];
+            /** @description Unix seconds. */
+            created_at: number;
+            /** @description Unix seconds. */
+            expires_at: number;
+            /** @description The call that acts, or acted, on the owner's answer. */
+            run?: string;
+            /** @description `p256:` and the uncompressed point in base64url: what the owner's answer and reason are encrypted to. */
+            reply_pubkey: string;
+            /** @description The task's envelope under its content key: `0x01 || nonce (12) || AES-256-GCM`, bound to the task's id. `null` once the task is closed. */
+            content: string | null;
+            /** @description The content key encrypted to this session's device. `null` when the device has none. */
+            device_copy: string | null;
+            /** @description An open task this device has no copy of. It opens after one call of the project's `tasks_unlock` by the owner. */
+            locked: boolean;
+        };
+        InboxDeleted: {
+            deleted: number;
+        };
+        InboxMute: {
+            /** @enum {string} */
+            subject_is: "agent" | "project";
+            subject: string;
+        };
+        InboxMutes: {
+            mutes: components["schemas"]["InboxMute"][];
+        };
+        InboxWebhook: {
+            url: string | null;
+            /** @description When the URL was named, in Unix seconds; `null` with no URL. */
+            set_at: number | null;
+            /** @description The wallet key that signed in the session that named the URL; `null` with no URL. */
+            set_by_key: string | null;
+            /** @description Whether the URL was named in the session that asks. `false` is a URL named in a session that is over, or on another device: one the owner should recognise, or remove. */
+            set_here: boolean;
+            /** @description The secret the owner's events are signed with (`X-Webhook-Signature` is the HMAC-SHA256 of the body, in hex). Present only in the answer to `PUT`: told once, never again. Naming a URL again makes a new secret. */
+            secret?: string;
+        };
+        OwnerSignIn: {
+            account_id: string;
+            /** @description `p256:` and the uncompressed point of the device's public key, base64url without padding. */
+            device_pubkey: string;
+            /** @description Unix seconds; in the future, 30 days at most. */
+            valid_until: number;
+            /** @description The key that signed, `ed25519:<base58>`. */
+            public_key: string;
+            /** @description Base64, 64 bytes. */
+            signature: string;
+            /** @description Base64, 32 bytes. */
+            nonce: string;
+        };
+        OwnerSession: {
+            /** @description `os_` and 64 hex characters. Returned this once; kept here as its hash. */
+            token: string;
+            /** Format: uuid */
+            device_id: string;
+            account_id: string;
+            valid_until: number;
+        };
+        /**
+         * @description The owner's signature for one action a session must not do alone:
+         *     withdrawing another device, naming or removing the webhook. NEP-413,
+         *     recipient: the OutLayer contract, a fresh 32-byte nonce, over the
+         *     sentence
+         *
+         *         Confirm in OutLayer as {account_id}: {action}. At {at as YYYY-MM-DDTHH:MM:SSZ}.
+         *
+         *     where `{action}` is `withdraw the device {id}`, `name the webhook
+         *     {sha256 of the URL, hex}` or `remove the webhook`. The sentence is
+         *     rebuilt from the session's account, the request's action and `at`.
+         *     Good for ten minutes either side of now, once: the nonce is spent.
+         *     The key that signed must be a full-access key of the account.
+         */
+        OwnerConfirmation: {
+            /** @description Unix seconds, the moment the sentence names. */
+            at: number;
+            /** @description `ed25519:<base58>` */
+            public_key: string;
+            /** @description Base64, 64 bytes. */
+            signature: string;
+            /** @description Base64, 32 bytes. */
+            nonce: string;
+        };
+        OwnerDevice: {
+            /** Format: uuid */
+            id: string;
+            device_pubkey: string;
+            /** @description The wallet key that signed the device in. */
+            signer_pubkey: string;
+            created_at: number;
+            valid_until: number;
+            /** @description The device this session is on. */
+            this: boolean;
+        };
         /** @description Every refusal from `POST /trial-key`. Branch on `reason`. */
         TrialKeyRefusal: {
             /** @description The human sentence. */
@@ -2623,7 +3025,7 @@ export interface components {
          */
         RequestStatus: "pending_deposit" | "processing" | "success" | "completed" | "partially_failed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "cancelled" | "needs_review";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -4201,6 +4603,35 @@ export interface components {
         };
     };
     responses: {
+        /** @description The inbox refused; branch on `reason` */
+        InboxRefused: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["InboxRefusal"];
+            };
+        };
+        /** @description The database or the chain did not answer */
+        InboxUnavailable: {
+            headers: {
+                /** @description Seconds until the same request is worth repeating. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["InboxRefusal"];
+            };
+        };
+        /** @description Too many requests */
+        InboxTooManyRequests: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "text/plain": string;
+            };
+        };
         /** @description Invalid request */
         BadRequest: {
             headers: {
@@ -4277,6 +4708,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description A task's id — 1 to 80 of `a-z`, `0-9` and `-`. */
+        TaskId: string;
         /**
          * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
          *     is never compared. Resubmitting a write request with a key already seen
@@ -6661,6 +7094,60 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listPendingApprovalsOfWallet: {
+        parameters: {
+            query: {
+                /** @description The wallet's public key, as `get_wallet_policies_by_owner` lists it. */
+                near_pubkey: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending approvals of the wallet; an empty list when nothing waits */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        near_pubkey: string;
+                        pending_approvals: components["schemas"]["PendingApproval"][];
+                    };
+                };
+            };
+            /** @description No session, or one that ended (`session_required`); or one that ended because the account signed in elsewhere (`session_replaced`) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The session's account does not own the wallet (`not_wallet_owner`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+            /** @description The database or the chain did not answer; `Retry-After` says when to come back */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getApprovalDetail: {
         parameters: {
             query?: never;
@@ -6766,6 +7253,474 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    openOwnerSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OwnerSignIn"];
+            };
+        };
+        responses: {
+            /** @description The session. `token` is returned this once. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnerSession"];
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            429: components["responses"]["InboxTooManyRequests"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    closeOwnerSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device is withdrawn and its session ended */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        revoked: boolean;
+                    };
+                };
+            };
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    listInboxTasks: {
+        parameters: {
+            query?: {
+                /** @description `waiting` — what waits for the owner and what is being acted on; `closed` — the outcomes kept, 30 days. */
+                show?: "waiting" | "closed";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tasks; an empty list when there are none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The newest, 200 at most. */
+                        tasks: components["schemas"]["InboxTask"][];
+                        /** @description More exist than are listed; the list is not whole. */
+                        more: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            429: components["responses"]["InboxTooManyRequests"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    deleteInboxTasks: {
+        parameters: {
+            query?: {
+                preparer?: string;
+                project_uuid?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many were deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxDeleted"];
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    deleteInboxTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A task's id — 1 to 80 of `a-z`, `0-9` and `-`. */
+                id: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxDeleted"];
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            404: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    getInboxTaskFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A task's id — 1 to 80 of `a-z`, `0-9` and `-`. */
+                id: components["parameters"]["TaskId"];
+                /** @description The file's place among the task's files, from 0. */
+                n: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ciphertext: string;
+                    };
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            404: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    getInboxTaskOrigin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A task's id — 1 to 80 of `a-z`, `0-9` and `-`. */
+                id: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run: string;
+                        /** @enum {string} */
+                        door: "https" | "chain";
+                        /**
+                         * Format: uuid
+                         * @description With `door: https`.
+                         */
+                        call_id?: string;
+                        /** @description With `door: chain`. */
+                        request_id?: number;
+                        output: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            404: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    rejectInboxTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A task's id — 1 to 80 of `a-z`, `0-9` and `-`. */
+                id: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The reason, encrypted to the task's `reply_pubkey`; at most 8192 bytes. */
+                    reason?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Rejected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id: string;
+                        state: components["schemas"]["TaskState"];
+                    };
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            404: components["responses"]["InboxRefused"];
+            409: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    listInboxMutes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agents and projects whose tasks are refused */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxMutes"];
+                };
+            };
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    muteInInbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    subject_is: "agent" | "project";
+                    /** @description An account id for an agent; a uuid for a project. */
+                    subject: string;
+                    /** @default false */
+                    delete_waiting?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Muted; how many tasks were deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxDeleted"];
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    unmuteInInbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InboxMute"];
+            };
+        };
+        responses: {
+            /** @description The mutes that remain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxMutes"];
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    getInboxWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The URL, or `null` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxWebhook"];
+                };
+            };
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    setInboxWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uri
+                     * @description An HTTPS URL on a public host, without credentials.
+                     */
+                    url: string;
+                    confirmation: components["schemas"]["OwnerConfirmation"];
+                };
+            };
+        };
+        responses: {
+            /** @description The URL now in force */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxWebhook"];
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    deleteInboxWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    confirmation: components["schemas"]["OwnerConfirmation"];
+                };
+            };
+        };
+        responses: {
+            /** @description No URL is in force */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxWebhook"];
+                };
+            };
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    listOwnerDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The devices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        devices: components["schemas"]["OwnerDevice"][];
+                    };
+                };
+            };
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    withdrawOwnerDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    confirmation?: components["schemas"]["OwnerConfirmation"];
+                };
+            };
+        };
+        responses: {
+            /** @description Whether a device of the owner's was withdrawn */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        revoked: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
         };
     };
     callProject: {

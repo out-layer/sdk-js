@@ -3562,12 +3562,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [id, state]
-                properties:
-                  id: { type: string }
-                  state:
-                    $ref: '#/components/schemas/TaskState'
+                $ref: '#/components/schemas/InboxTaskMoved'
         '400':
           $ref: '#/components/responses/InboxRefused'
         '401':
@@ -3575,6 +3570,84 @@ paths:
         '404':
           $ref: '#/components/responses/InboxRefused'
         '409':
+          description: "`task_closed` with `state`: an `approved` task cannot be rejected — the owner said yes and a run may be acting."
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/tasks/{id}/approve:
+    post:
+      tags: [Inbox]
+      operationId: approveInboxTask
+      summary: Say yes to a task, with one signature of the wallet
+      description: |
+        No run of the owner's and no transaction. The owner's wallet signs one
+        NEP-413 message (recipient: the OutLayer contract; a fresh 32-byte
+        nonce; a full-access key of the account):
+
+            Approve in OutLayer as <account>: task <id> with hash <task_hash> and supply <digest>. At <YYYY-MM-DDTHH:MM:SSZ>.
+
+        `<task_hash>` is the SHA-256, lowercase hex, of the envelope the page
+        opened. `<digest>` is the SHA-256, hex, of the canonical JSON
+        `{"note":<base64|null>,"supplied":<base64|null>}` over `supplied` and
+        `note` exactly as this request sends them (members in that order,
+        standard base64, no whitespace); with neither it is the digest of
+        `{"note":null,"supplied":null}`. `<at>` is the minute the signature
+        names, good within ten minutes of the server's clock, once.
+
+        On a signature that holds the task is `approved` and the platform
+        starts a run of the AGENT that prepared it, on the agent's own payment
+        key, wallet and identity, within the compute limit of the preparing
+        run, in the operation the task names, with the approval in its input.
+        The enclave verifies the same signature before the run acts. The
+        answer names that run. A run that cannot be started fails the task at
+        once: `state: failed` with `failure_reason`, and the agent prepares
+        again.
+      security:
+        - OwnerSession: []
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [task_hash, approval]
+              properties:
+                task_hash:
+                  type: string
+                  pattern: '^[0-9a-f]{64}$'
+                  description: SHA-256 of the envelope the page opened, lowercase hex.
+                approval:
+                  $ref: '#/components/schemas/OwnerConfirmation'
+                supplied:
+                  type: [string, 'null']
+                  contentEncoding: base64
+                  description: "What the owner supplies (an `input` task), encrypted to the task's `reply_pubkey` with purpose `answer`; at most 8192 bytes."
+                note:
+                  type: [string, 'null']
+                  contentEncoding: base64
+                  description: "What the owner wrote beside the approval, encrypted to `reply_pubkey` with purpose `note`; at most 8192 bytes. Handed to the project's code with the answer."
+      responses:
+        '200':
+          description: "Approved, with the run started — or failed at once, with the reason."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxTaskMoved'
+        '400':
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '403':
+          description: "`confirmation_required`: the signature does not hold, is older than ten minutes, was signed by a key that is not a full-access key of the account, or was spent."
+          $ref: '#/components/responses/InboxRefused'
+        '404':
+          $ref: '#/components/responses/InboxRefused'
+        '409':
+          description: "`task_closed` with `state`: the task is not `open`."
           $ref: '#/components/responses/InboxRefused'
         '503':
           $ref: '#/components/responses/InboxUnavailable'
@@ -3678,7 +3751,8 @@ paths:
       operationId: setInboxWebhook
       summary: Name the URL task events go to
       description: |
-        `task_created`, `task_answered` and `task_expired` are POSTed there,
+        `task_created`, `task_approved`, `task_answered`, `task_failed`
+        (with `failure_reason`) and `task_expired` are POSTed there,
         signed with a secret of the owner's own (`X-Webhook-Signature`, the
         HMAC-SHA256 of the body in hex), with `X-Wallet-Id: owner:{account}`.
         The secret is in the answer to this call and nowhere else. A body says who asked whom, of what
@@ -5072,11 +5146,14 @@ components:
     TaskState:
       type: string
       description: >
-        `open` waits for the owner. `answering`: the owner answered and the run
-        named in `run` acts. `done`: that run ended well and the project
-        reported. `failed`: it ended any other way — its status is the
-        ordinary status of a call. A task never returns to `open`.
-      enum: [open, answering, done, failed, rejected, cancelled, expired, void]
+        `open` waits for the owner. `approved`: the owner signed, and the run
+        named in `run` — a run of the agent that prepared the task, on the
+        agent's own payment key — is started and has not yet taken the task.
+        `answering`: that run took it and acts. `done`: it ended well and the
+        project reported. `failed`: it ended any other way — its status is the
+        ordinary status of a call — or the task failed before the run acted,
+        and `failure_reason` says why. A task never returns to `open`.
+      enum: [open, approved, answering, done, failed, rejected, cancelled, expired, void]
     TaskKind:
       type: string
       description: "`confirm` — yes or no; `input` — the owner supplies something."
@@ -5099,12 +5176,14 @@ components:
           $ref: '#/components/schemas/TaskState'
         created_at: { type: integer, description: Unix seconds. }
         expires_at: { type: integer, description: Unix seconds. }
-        run: { type: string, description: "The call that acts, or acted, on the owner's answer." }
-        reply_pubkey: { type: string, description: "`p256:` and the uncompressed point in base64url: what the owner's answer and reason are encrypted to." }
+        run: { type: string, description: "The call that acts, or acted, on the owner's approval: a run of the task's preparer, started by the platform." }
+        failure_reason:
+          $ref: '#/components/schemas/TaskFailureReason'
+        reply_pubkey: { type: string, description: "`p256:` and the uncompressed point in base64url: what the owner's answer, note and reason are encrypted to." }
         content:
           type: [string, 'null']
           contentEncoding: base64
-          description: "The task's envelope under its content key: `0x01 || nonce (12) || AES-256-GCM`, bound to the task's id. `null` once the task is closed."
+          description: "The task's envelope under its content key: `0x01 || nonce (12) || AES-256-GCM`, bound to the task's id. Present while the task is `open` or `approved`; `null` once it is closed or being acted on."
         device_copy:
           type: [string, 'null']
           contentEncoding: base64
@@ -5112,6 +5191,34 @@ components:
         locked:
           type: boolean
           description: An open task this device has no copy of. It opens after one call of the project's `tasks_unlock` by the owner.
+    TaskFailureReason:
+      type: string
+      description: >
+        Why a task is `failed` before its run acted. `preparer_key_unavailable`:
+        the payment key that prepared the task could not pay for the run
+        (deleted, out of funds, spent, expiring, or no longer reaching the
+        project). `operation_priced`: the answering operation has a price and
+        must be free. `operation_unknown`: the connector sells no such
+        operation. `operation_limit_reached`: a limit on the operation is
+        reached. `wallet_unresolved`: the key's wallet or its bound identity is
+        not the preparing run's. `queue_unavailable`: the platform could not
+        start the run. `run_not_started`: the run did not take the task in
+        time. `run_refused:<reason>`: the run was refused the task by the host
+        with `<reason>` (`hash-mismatch`, `not-the-preparer`,
+        `approval-invalid`, `expired`, `unavailable`, …) or ended without
+        reporting (`unreported`). Absent when the run acted and ended any way.
+        The agent prepares again on any of them.
+      pattern: '^[a-z_]+(:[a-z-]+)?$'
+    InboxTaskMoved:
+      type: object
+      required: [id, state]
+      properties:
+        id: { type: string }
+        state:
+          $ref: '#/components/schemas/TaskState'
+        run: { type: string, description: "On an approval: the call started for the task's preparer." }
+        failure_reason:
+          $ref: '#/components/schemas/TaskFailureReason'
     InboxDeleted:
       type: object
       required: [deleted]

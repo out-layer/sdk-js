@@ -2111,6 +2111,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/inbox/tasks/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Say yes to a task, with one signature of the wallet
+         * @description No run of the owner's and no transaction. The owner's wallet signs one
+         *     NEP-413 message (recipient: the OutLayer contract; a fresh 32-byte
+         *     nonce; a full-access key of the account):
+         *
+         *         Approve in OutLayer as <account>: task <id> with hash <task_hash> and supply <digest>. At <YYYY-MM-DDTHH:MM:SSZ>.
+         *
+         *     `<task_hash>` is the SHA-256, lowercase hex, of the envelope the page
+         *     opened. `<digest>` is the SHA-256, hex, of the canonical JSON
+         *     `{"note":<base64|null>,"supplied":<base64|null>}` over `supplied` and
+         *     `note` exactly as this request sends them (members in that order,
+         *     standard base64, no whitespace); with neither it is the digest of
+         *     `{"note":null,"supplied":null}`. `<at>` is the minute the signature
+         *     names, good within ten minutes of the server's clock, once.
+         *
+         *     On a signature that holds the task is `approved` and the platform
+         *     starts a run of the AGENT that prepared it, on the agent's own payment
+         *     key, wallet and identity, within the compute limit of the preparing
+         *     run, in the operation the task names, with the approval in its input.
+         *     The enclave verifies the same signature before the run acts. The
+         *     answer names that run. A run that cannot be started fails the task at
+         *     once: `state: failed` with `failure_reason`, and the agent prepares
+         *     again.
+         */
+        post: operations["approveInboxTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/inbox/mutes": {
         parameters: {
             query?: never;
@@ -2144,7 +2185,8 @@ export interface paths {
         get: operations["getInboxWebhook"];
         /**
          * Name the URL task events go to
-         * @description `task_created`, `task_answered` and `task_expired` are POSTed there,
+         * @description `task_created`, `task_approved`, `task_answered`, `task_failed`
+         *     (with `failure_reason`) and `task_expired` are POSTed there,
          *     signed with a secret of the owner's own (`X-Webhook-Signature`, the
          *     HMAC-SHA256 of the body in hex), with `X-Wallet-Id: owner:{account}`.
          *     The secret is in the answer to this call and nowhere else. A body says who asked whom, of what
@@ -2729,10 +2771,10 @@ export interface components {
             state?: components["schemas"]["TaskState"];
         };
         /**
-         * @description `open` waits for the owner. `answering`: the owner answered and the run named in `run` acts. `done`: that run ended well and the project reported. `failed`: it ended any other way — its status is the ordinary status of a call. A task never returns to `open`.
+         * @description `open` waits for the owner. `approved`: the owner signed, and the run named in `run` — a run of the agent that prepared the task, on the agent's own payment key — is started and has not yet taken the task. `answering`: that run took it and acts. `done`: it ended well and the project reported. `failed`: it ended any other way — its status is the ordinary status of a call — or the task failed before the run acted, and `failure_reason` says why. A task never returns to `open`.
          * @enum {string}
          */
-        TaskState: "open" | "answering" | "done" | "failed" | "rejected" | "cancelled" | "expired" | "void";
+        TaskState: "open" | "approved" | "answering" | "done" | "failed" | "rejected" | "cancelled" | "expired" | "void";
         /**
          * @description `confirm` — yes or no; `input` — the owner supplies something.
          * @enum {string}
@@ -2755,16 +2797,26 @@ export interface components {
             created_at: number;
             /** @description Unix seconds. */
             expires_at: number;
-            /** @description The call that acts, or acted, on the owner's answer. */
+            /** @description The call that acts, or acted, on the owner's approval: a run of the task's preparer, started by the platform. */
             run?: string;
-            /** @description `p256:` and the uncompressed point in base64url: what the owner's answer and reason are encrypted to. */
+            failure_reason?: components["schemas"]["TaskFailureReason"];
+            /** @description `p256:` and the uncompressed point in base64url: what the owner's answer, note and reason are encrypted to. */
             reply_pubkey: string;
-            /** @description The task's envelope under its content key: `0x01 || nonce (12) || AES-256-GCM`, bound to the task's id. `null` once the task is closed. */
+            /** @description The task's envelope under its content key: `0x01 || nonce (12) || AES-256-GCM`, bound to the task's id. Present while the task is `open` or `approved`; `null` once it is closed or being acted on. */
             content: string | null;
             /** @description The content key encrypted to this session's device. `null` when the device has none. */
             device_copy: string | null;
             /** @description An open task this device has no copy of. It opens after one call of the project's `tasks_unlock` by the owner. */
             locked: boolean;
+        };
+        /** @description Why a task is `failed` before its run acted. `preparer_key_unavailable`: the payment key that prepared the task could not pay for the run (deleted, out of funds, spent, expiring, or no longer reaching the project). `operation_priced`: the answering operation has a price and must be free. `operation_unknown`: the connector sells no such operation. `operation_limit_reached`: a limit on the operation is reached. `wallet_unresolved`: the key's wallet or its bound identity is not the preparing run's. `queue_unavailable`: the platform could not start the run. `run_not_started`: the run did not take the task in time. `run_refused:<reason>`: the run was refused the task by the host with `<reason>` (`hash-mismatch`, `not-the-preparer`, `approval-invalid`, `expired`, `unavailable`, …) or ended without reporting (`unreported`). Absent when the run acted and ended any way. The agent prepares again on any of them. */
+        TaskFailureReason: string;
+        InboxTaskMoved: {
+            id: string;
+            state: components["schemas"]["TaskState"];
+            /** @description On an approval: the call started for the task's preparer. */
+            run?: string;
+            failure_reason?: components["schemas"]["TaskFailureReason"];
         };
         InboxDeleted: {
             deleted: number;
@@ -7500,15 +7552,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        id: string;
-                        state: components["schemas"]["TaskState"];
-                    };
+                    "application/json": components["schemas"]["InboxTaskMoved"];
                 };
             };
             400: components["responses"]["InboxRefused"];
             401: components["responses"]["InboxRefused"];
             404: components["responses"]["InboxRefused"];
+            /** @description `task_closed` with `state`: an `approved` task cannot be rejected — the owner said yes and a run may be acting. */
+            409: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    approveInboxTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A task's id — 1 to 80 of `a-z`, `0-9` and `-`. */
+                id: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description SHA-256 of the envelope the page opened, lowercase hex. */
+                    task_hash: string;
+                    approval: components["schemas"]["OwnerConfirmation"];
+                    /** @description What the owner supplies (an `input` task), encrypted to the task's `reply_pubkey` with purpose `answer`; at most 8192 bytes. */
+                    supplied?: string | null;
+                    /** @description What the owner wrote beside the approval, encrypted to `reply_pubkey` with purpose `note`; at most 8192 bytes. Handed to the project's code with the answer. */
+                    note?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Approved, with the run started — or failed at once, with the reason. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxTaskMoved"];
+                };
+            };
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            /** @description `confirmation_required`: the signature does not hold, is older than ten minutes, was signed by a key that is not a full-access key of the account, or was spent. */
+            403: components["responses"]["InboxRefused"];
+            404: components["responses"]["InboxRefused"];
+            /** @description `task_closed` with `state`: the task is not `open`. */
             409: components["responses"]["InboxRefused"];
             503: components["responses"]["InboxUnavailable"];
         };

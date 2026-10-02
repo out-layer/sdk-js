@@ -1518,7 +1518,11 @@ export interface paths {
          * Create up to 10 payment checks in one call
          * @description Creates between 1 and 10 payment checks in a single request, each backed
          *     by its own ephemeral intents account. The wallet's intents balance must
-         *     cover the sum per token across the batch.
+         *     cover the sum per token across the batch; a batch it does not cover is
+         *     refused whole, before any check is funded. Each check answers as
+         *     `createPaymentCheck` does (`unclaimed`, or `creating` + `poll_url`). If
+         *     the batch stops part way, the checks already created are listed with
+         *     their keys and `error` says why the rest were not created.
          *
          *     **Security model:** identical to `createPaymentCheck` — gated by the
          *     default-DENY `payment_check` capability and its per-transaction amount cap
@@ -1547,7 +1551,13 @@ export interface paths {
          *     intents balance. Signed by the ephemeral `check_key` (NEP-413), so the
          *     caller need only hold the key. Omit `amount` for a full claim, or pass a
          *     partial amount (minimal units) to claim part and leave the remainder
-         *     claimable. Expired or already-settled checks are rejected.
+         *     claimable. Expired or already-settled checks are rejected, and so is a
+         *     check with another claim or reclaim in flight, or one still `creating`.
+         *
+         *     When the transfer is not confirmed in time — or the call fails after
+         *     handing it over — the answer is `status=processing` with `request_id`
+         *     and `poll_url` (`GET /wallet/v1/requests/{request_id}`), never an error:
+         *     the transfer may land, and the request settles from the chain.
          */
         post: operations["claimPaymentCheck"];
         delete?: never;
@@ -1572,7 +1582,8 @@ export interface paths {
          *     was never claimed. Identified by `check_id` and scoped to the creating
          *     wallet. Signed by the ephemeral check key (re-derived inside the
          *     keystore), not the keystore's wallet key. Omit `amount` for a full
-         *     reclaim or pass a partial amount.
+         *     reclaim or pass a partial amount. Answers `processing` + `poll_url` as
+         *     `claimPaymentCheck` does.
          */
         post: operations["reclaimPaymentCheck"];
         delete?: never;
@@ -3955,6 +3966,16 @@ export interface components {
             /** @description What approvers sign over — the order's terms. */
             request_hash: string;
         };
+        /** @description The order exists and its funding transfer was handed to the relay, but was not confirmed in time (or the call failed after handing it over). Not an error, and not to be retried: the transfer may land. The request settles from the chain — `success` once the transfer executed, or `failed` with `never_executed: true` once its deadline passed unused, and only then is the order cancelled. */
+        LimitOrderProcessing: {
+            request_id: string;
+            /** @enum {string} */
+            status: "processing";
+            /** @description The order being funded; follow it by `GET /wallet/v1/limit-orders/{order_id}`. */
+            order_id: string;
+            /** @description `GET /wallet/v1/requests/{request_id}` — the funding, until it settles. */
+            poll_url: string;
+        };
         LimitOrderCancelAllResponse: {
             /** @description Unfinished orders this call asked 1Click to cancel (at most 50). */
             known: number;
@@ -3986,8 +4007,15 @@ export interface components {
              * @description Server-side identifier for the check (used by status / reclaim).
              */
             check_id: string;
-            /** @description The ephemeral account's ed25519 private key (64 hex chars). Bearer secret — whoever holds it can claim the funds. Returned ONCE. */
+            /** @description The ephemeral account's ed25519 private key (64 hex chars). Bearer secret — whoever holds it can claim the funds. Returned ONCE, whatever `status` says. */
             check_key: string;
+            /**
+             * @description `unclaimed`: funded. `creating`: the funding transfer was handed to the relay and is not confirmed yet — follow `poll_url` until the check reads `unclaimed` (or `failed`: the transfer never executed and nothing moved).
+             * @enum {string}
+             */
+            status: "unclaimed" | "creating";
+            /** @description Present with `status=creating` — the check's status endpoint. */
+            poll_url?: string;
             token: string;
             amount: string;
             memo?: string | null;
@@ -4001,6 +4029,8 @@ export interface components {
         };
         PaymentCheckBatchCreateResponse: {
             checks: components["schemas"]["PaymentCheckCreateResponse"][];
+            /** @description Present when the batch stopped before its last check: why, and which checks were not created. Every check listed in `checks` was. */
+            error?: string;
         };
         PaymentCheckClaimRequest: {
             /** @description The check's ephemeral private key (64 hex chars). */
@@ -4009,15 +4039,30 @@ export interface components {
             amount?: string | null;
         };
         PaymentCheckClaimResponse: {
+            /**
+             * Format: uuid
+             * @description This claim as a request (`GET /wallet/v1/requests/{request_id}`).
+             */
+            request_id: string;
+            /**
+             * @description The check's status after this claim, or `processing`: the transfer was handed over and is not confirmed yet — follow `poll_url`. The request ends `completed` (its `result` carries `amount_claimed`, `remaining`, `claimed_at`) or `failed` with `never_executed: true` (nothing moved; the check can be claimed again).
+             * @enum {string}
+             */
+            status: "claimed" | "partially_claimed" | "processing";
             token: string;
             amount_claimed: string;
-            /** @description Amount still claimable on the check after this claim (minimal units). */
-            remaining: string;
+            /** @description Amount still claimable on the check after this claim (minimal units). Absent while `processing`. */
+            remaining?: string;
             memo?: string | null;
-            /** Format: date-time */
-            claimed_at: string;
+            /**
+             * Format: date-time
+             * @description Absent while `processing`.
+             */
+            claimed_at?: string;
             /** @description base58 solver-relay intent hash for the claim transfer, if returned. */
             intent_hash?: string | null;
+            /** @description Present with `status=processing`. */
+            poll_url?: string;
         };
         PaymentCheckReclaimRequest: {
             /**
@@ -4029,14 +4074,29 @@ export interface components {
             amount?: string | null;
         };
         PaymentCheckReclaimResponse: {
+            /**
+             * Format: uuid
+             * @description This reclaim as a request (`GET /wallet/v1/requests/{request_id}`).
+             */
+            request_id: string;
+            /**
+             * @description The check's status after this reclaim, or `processing` — follow `poll_url`, as for a claim.
+             * @enum {string}
+             */
+            status: "reclaimed" | "partially_reclaimed" | "processing";
             token: string;
             amount_reclaimed: string;
-            /** @description Amount still outstanding on the check after this reclaim (minimal units). */
-            remaining: string;
-            /** Format: date-time */
-            reclaimed_at: string;
+            /** @description Amount still outstanding on the check after this reclaim (minimal units). Absent while `processing`. */
+            remaining?: string;
+            /**
+             * Format: date-time
+             * @description Absent while `processing`.
+             */
+            reclaimed_at?: string;
             /** @description base58 solver-relay intent hash for the reclaim transfer, if returned. */
             intent_hash?: string | null;
+            /** @description Present with `status=processing`. */
+            poll_url?: string;
         };
         PaymentCheckStatusResponse: {
             /** Format: uuid */
@@ -4048,7 +4108,7 @@ export interface components {
             claimed_amount: string;
             /** @description Total reclaimed so far (minimal units). */
             reclaimed_amount: string;
-            /** @description Lifecycle state: `unclaimed`, `claiming`, `partially_claimed`, `claimed`, `reclaiming`, `partially_reclaimed`, `reclaimed`, or the virtual `expired` (unclaimed and past `expires_at`). */
+            /** @description Lifecycle state: `creating` (funding transfer not confirmed yet), `unclaimed`, `claiming`, `partially_claimed`, `claimed`, `reclaiming`, `partially_reclaimed`, `reclaimed`, `failed` (the funding transfer never executed; nothing moved), or the virtual `expired` (unclaimed and past `expires_at`). A read of a check with a transfer in flight settles it from the chain when the chain can already tell. */
             status: string;
             memo?: string | null;
             /** Format: date-time */
@@ -4674,7 +4734,7 @@ export interface components {
             /** Format: uuid */
             request_id: string;
             /**
-             * @description Normalized lifecycle status (1Click's UPPERCASE state machine mapped to lowercase): `pending_deposit` → `processing` → `success` / `failed` / `refunded`. `pending_approval` is returned instead when a multisig wallet must approve the op first. The raw upstream status is in the request row's `result.oneclick_status`.
+             * @description Normalized lifecycle status (1Click's UPPERCASE state machine mapped to lowercase): `pending_deposit` → `processing` → `success` / `failed` / `refunded`. `pending_approval` is returned instead when a multisig wallet must approve the op first. The raw upstream status is in the request row's `result.oneclick_status`. A call answers `processing` with a `poll_url` when the intent was submitted and the upstream's answer was lost: the intent may have been taken, so do not retry — the request settles on its own.
              * @enum {string}
              */
             status: "pending_deposit" | "processing" | "success" | "failed" | "refunded" | "pending_approval";
@@ -4693,6 +4753,8 @@ export interface components {
             approved?: number;
             /** @description Present only on `pending_approval` — sha256(canonical_json(op)); sign this to approve. */
             request_hash?: string;
+            /** @description Present with `status=processing` — `GET /wallet/v1/requests/{request_id}`. */
+            poll_url?: string;
         };
         /** @description A single confidential balance (response to `?token=`). */
         ConfidentialBalanceResponse: {
@@ -6609,13 +6671,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The order was created and funded, or is waiting for multisig approval. */
+            /** @description The order was created and funded, is waiting for multisig approval, or was created with its funding transfer handed over and unconfirmed (`processing`). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LimitOrderCreated"] | components["schemas"]["LimitOrderPendingApproval"];
+                    "application/json": components["schemas"]["LimitOrderCreated"] | components["schemas"]["LimitOrderPendingApproval"] | components["schemas"]["LimitOrderProcessing"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -6738,7 +6800,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Payment check created */
+            /** @description Payment check created: `status=unclaimed` once its funding settled, or `status=creating` with a `poll_url` while the funding transfer is unconfirmed. The `check_key` is returned either way — keep it. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6796,7 +6858,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Payment checks created */
+            /** @description Payment checks created (see `error` for a batch that stopped early) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6814,7 +6876,22 @@ export interface operations {
     claimPaymentCheck: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
+                 */
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -6829,7 +6906,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Claim settled */
+            /** @description Claim settled, or `processing` until its transfer is confirmed */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6846,7 +6923,22 @@ export interface operations {
     reclaimPaymentCheck: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
+                 *     is never compared. Resubmitting a write request with a key already seen
+                 *     does NOT re-execute it and does NOT return the stored result: it
+                 *     answers **HTTP `200`** with
+                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
+                 *     — a pointer to the original request, not an error for a retry. Read the
+                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
+                 *     is `200`, a client has to check `error` in the body. Use one key per
+                 *     logical operation; with no header the server mints a fresh key per
+                 *     call, so nothing is deduplicated. Recommended for clients that retry
+                 *     on network failure.
+                 */
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -6861,7 +6953,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Reclaim settled */
+            /** @description Reclaim settled, or `processing` until its transfer is confirmed */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6904,7 +6996,7 @@ export interface operations {
     listPaymentChecks: {
         parameters: {
             query?: {
-                /** @description Optional status filter. Accepts stored statuses (`unclaimed`, `claimed`, `partially_claimed`, `reclaimed`, `partially_reclaimed`) plus the virtual `expired` (unclaimed + past expiry). */
+                /** @description Optional status filter. Accepts stored statuses (`creating`, `unclaimed`, `claiming`, `claimed`, `partially_claimed`, `reclaiming`, `reclaimed`, `partially_reclaimed`, `failed`) plus the virtual `expired` (unclaimed + past expiry). */
                 status?: string;
                 /** @description Max rows to return (server caps at 100). Defaults to 50. */
                 limit?: number;

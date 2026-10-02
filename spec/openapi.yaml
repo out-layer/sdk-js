@@ -2314,13 +2314,17 @@ paths:
               price: '5'
       responses:
         '200':
-          description: The order was created and funded, or is waiting for multisig approval.
+          description: >-
+            The order was created and funded, is waiting for multisig approval, or
+            was created with its funding transfer handed over and unconfirmed
+            (`processing`).
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/LimitOrderCreated'
                   - $ref: '#/components/schemas/LimitOrderPendingApproval'
+                  - $ref: '#/components/schemas/LimitOrderProcessing'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -2521,7 +2525,10 @@ paths:
               expires_in: 86400
       responses:
         '200':
-          description: Payment check created
+          description: >-
+            Payment check created: `status=unclaimed` once its funding settled, or
+            `status=creating` with a `poll_url` while the funding transfer is
+            unconfirmed. The `check_key` is returned either way — keep it.
           content:
             application/json:
               schema:
@@ -2543,7 +2550,11 @@ paths:
       description: |
         Creates between 1 and 10 payment checks in a single request, each backed
         by its own ephemeral intents account. The wallet's intents balance must
-        cover the sum per token across the batch.
+        cover the sum per token across the batch; a batch it does not cover is
+        refused whole, before any check is funded. Each check answers as
+        `createPaymentCheck` does (`unclaimed`, or `creating` + `poll_url`). If
+        the batch stops part way, the checks already created are listed with
+        their keys and `error` says why the rest were not created.
 
         **Security model:** identical to `createPaymentCheck` — gated by the
         default-DENY `payment_check` capability and its per-transaction amount cap
@@ -2566,7 +2577,7 @@ paths:
                   amount: '2000000'
       responses:
         '200':
-          description: Payment checks created
+          description: Payment checks created (see `error` for a batch that stopped early)
           content:
             application/json:
               schema:
@@ -2590,7 +2601,15 @@ paths:
         intents balance. Signed by the ephemeral `check_key` (NEP-413), so the
         caller need only hold the key. Omit `amount` for a full claim, or pass a
         partial amount (minimal units) to claim part and leave the remainder
-        claimable. Expired or already-settled checks are rejected.
+        claimable. Expired or already-settled checks are rejected, and so is a
+        check with another claim or reclaim in flight, or one still `creating`.
+
+        When the transfer is not confirmed in time — or the call fails after
+        handing it over — the answer is `status=processing` with `request_id`
+        and `poll_url` (`GET /wallet/v1/requests/{request_id}`), never an error:
+        the transfer may land, and the request settles from the chain.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -2601,7 +2620,7 @@ paths:
               check_key: 9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a
       responses:
         '200':
-          description: Claim settled
+          description: Claim settled, or `processing` until its transfer is confirmed
           content:
             application/json:
               schema:
@@ -2624,7 +2643,10 @@ paths:
         was never claimed. Identified by `check_id` and scoped to the creating
         wallet. Signed by the ephemeral check key (re-derived inside the
         keystore), not the keystore's wallet key. Omit `amount` for a full
-        reclaim or pass a partial amount.
+        reclaim or pass a partial amount. Answers `processing` + `poll_url` as
+        `claimPaymentCheck` does.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -2635,7 +2657,7 @@ paths:
               check_id: 3a2b1c0d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
       responses:
         '200':
-          description: Reclaim settled
+          description: Reclaim settled, or `processing` until its transfer is confirmed
           content:
             application/json:
               schema:
@@ -2693,9 +2715,10 @@ paths:
           schema:
             type: string
           description: >-
-            Optional status filter. Accepts stored statuses (`unclaimed`,
-            `claimed`, `partially_claimed`, `reclaimed`, `partially_reclaimed`)
-            plus the virtual `expired` (unclaimed + past expiry).
+            Optional status filter. Accepts stored statuses (`creating`,
+            `unclaimed`, `claiming`, `claimed`, `partially_claimed`,
+            `reclaiming`, `reclaimed`, `partially_reclaimed`, `failed`) plus the
+            virtual `expired` (unclaimed + past expiry).
         - name: limit
           in: query
           required: false
@@ -7141,6 +7164,28 @@ components:
           type: string
           description: What approvers sign over — the order's terms.
 
+    LimitOrderProcessing:
+      type: object
+      required: [request_id, status, order_id, poll_url]
+      description: >-
+        The order exists and its funding transfer was handed to the relay, but
+        was not confirmed in time (or the call failed after handing it over).
+        Not an error, and not to be retried: the transfer may land. The request
+        settles from the chain — `success` once the transfer executed, or
+        `failed` with `never_executed: true` once its deadline passed unused,
+        and only then is the order cancelled.
+      properties:
+        request_id: { type: string }
+        status:
+          type: string
+          enum: [processing]
+        order_id:
+          type: string
+          description: The order being funded; follow it by `GET /wallet/v1/limit-orders/{order_id}`.
+        poll_url:
+          type: string
+          description: '`GET /wallet/v1/requests/{request_id}` — the funding, until it settles.'
+
     LimitOrderCancelAllResponse:
       type: object
       required: [known, cancelled, failed, remaining, complete]
@@ -7190,7 +7235,7 @@ components:
 
     PaymentCheckCreateResponse:
       type: object
-      required: [check_id, check_key, token, amount, created_at]
+      required: [check_id, check_key, status, token, amount, created_at]
       properties:
         check_id:
           type: string
@@ -7200,7 +7245,19 @@ components:
           type: string
           description: >-
             The ephemeral account's ed25519 private key (64 hex chars). Bearer
-            secret — whoever holds it can claim the funds. Returned ONCE.
+            secret — whoever holds it can claim the funds. Returned ONCE, whatever
+            `status` says.
+        status:
+          type: string
+          enum: [unclaimed, creating]
+          description: >-
+            `unclaimed`: funded. `creating`: the funding transfer was handed to
+            the relay and is not confirmed yet — follow `poll_url` until the
+            check reads `unclaimed` (or `failed`: the transfer never executed and
+            nothing moved).
+        poll_url:
+          type: string
+          description: Present with `status=creating` — the check's status endpoint.
         token:
           type: string
         amount:
@@ -7233,6 +7290,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PaymentCheckCreateResponse'
+        error:
+          type: string
+          description: >-
+            Present when the batch stopped before its last check: why, and which
+            checks were not created. Every check listed in `checks` was.
 
     PaymentCheckClaimRequest:
       type: object
@@ -7249,23 +7311,42 @@ components:
 
     PaymentCheckClaimResponse:
       type: object
-      required: [token, amount_claimed, remaining, claimed_at]
+      required: [request_id, status, token, amount_claimed]
       properties:
+        request_id:
+          type: string
+          format: uuid
+          description: This claim as a request (`GET /wallet/v1/requests/{request_id}`).
+        status:
+          type: string
+          enum: [claimed, partially_claimed, processing]
+          description: >-
+            The check's status after this claim, or `processing`: the transfer
+            was handed over and is not confirmed yet — follow `poll_url`. The
+            request ends `completed` (its `result` carries `amount_claimed`,
+            `remaining`, `claimed_at`) or `failed` with `never_executed: true`
+            (nothing moved; the check can be claimed again).
         token:
           type: string
         amount_claimed:
           type: string
         remaining:
           type: string
-          description: Amount still claimable on the check after this claim (minimal units).
+          description: >-
+            Amount still claimable on the check after this claim (minimal units).
+            Absent while `processing`.
         memo:
           type: [string, 'null']
         claimed_at:
           type: string
           format: date-time
+          description: Absent while `processing`.
         intent_hash:
           type: [string, 'null']
           description: base58 solver-relay intent hash for the claim transfer, if returned.
+        poll_url:
+          type: string
+          description: Present with `status=processing`.
 
     PaymentCheckReclaimRequest:
       type: object
@@ -7283,21 +7364,37 @@ components:
 
     PaymentCheckReclaimResponse:
       type: object
-      required: [token, amount_reclaimed, remaining, reclaimed_at]
+      required: [request_id, status, token, amount_reclaimed]
       properties:
+        request_id:
+          type: string
+          format: uuid
+          description: This reclaim as a request (`GET /wallet/v1/requests/{request_id}`).
+        status:
+          type: string
+          enum: [reclaimed, partially_reclaimed, processing]
+          description: >-
+            The check's status after this reclaim, or `processing` — follow
+            `poll_url`, as for a claim.
         token:
           type: string
         amount_reclaimed:
           type: string
         remaining:
           type: string
-          description: Amount still outstanding on the check after this reclaim (minimal units).
+          description: >-
+            Amount still outstanding on the check after this reclaim (minimal
+            units). Absent while `processing`.
         reclaimed_at:
           type: string
           format: date-time
+          description: Absent while `processing`.
         intent_hash:
           type: [string, 'null']
           description: base58 solver-relay intent hash for the reclaim transfer, if returned.
+        poll_url:
+          type: string
+          description: Present with `status=processing`.
 
     PaymentCheckStatusResponse:
       type: object
@@ -7327,9 +7424,13 @@ components:
         status:
           type: string
           description: >-
-            Lifecycle state: `unclaimed`, `claiming`, `partially_claimed`,
-            `claimed`, `reclaiming`, `partially_reclaimed`, `reclaimed`, or the
-            virtual `expired` (unclaimed and past `expires_at`).
+            Lifecycle state: `creating` (funding transfer not confirmed yet),
+            `unclaimed`, `claiming`, `partially_claimed`, `claimed`,
+            `reclaiming`, `partially_reclaimed`, `reclaimed`, `failed` (the
+            funding transfer never executed; nothing moved), or the virtual
+            `expired` (unclaimed and past `expires_at`). A read of a check with a
+            transfer in flight settles it from the chain when the chain can
+            already tell.
         memo:
           type: [string, 'null']
         created_at:
@@ -8464,7 +8565,10 @@ components:
             to lowercase): `pending_deposit` → `processing` → `success` /
             `failed` / `refunded`. `pending_approval` is returned instead when a
             multisig wallet must approve the op first. The raw upstream status is
-            in the request row's `result.oneclick_status`.
+            in the request row's `result.oneclick_status`. A call answers
+            `processing` with a `poll_url` when the intent was submitted and the
+            upstream's answer was lost: the intent may have been taken, so do not
+            retry — the request settles on its own.
           enum: [pending_deposit, processing, success, failed, refunded, pending_approval]
         intent_hash:
           type: [string, 'null']
@@ -8485,6 +8589,9 @@ components:
         request_hash:
           type: string
           description: Present only on `pending_approval` — sha256(canonical_json(op)); sign this to approve.
+        poll_url:
+          type: string
+          description: Present with `status=processing` — `GET /wallet/v1/requests/{request_id}`.
 
     ConfidentialBalanceResponse:
       type: object

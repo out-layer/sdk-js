@@ -812,12 +812,16 @@ describe('Payment checks: claim', () => {
     expect(r.remaining).toBe('600000');
   });
 
-  it('does NOT attach an X-Idempotency-Key (claim is ephemeral-key signed)', async () => {
+  it('attaches an X-Idempotency-Key, so a retried claim answers duplicate rather than claiming again', async () => {
     let receivedKey: string | null = null;
+    let receivedBody: unknown = null;
     server.use(
-      http.post(`${BASE}/wallet/v1/payment-check/claim`, ({ request }) => {
-        receivedKey = request.headers.get('idempotency-key');
+      http.post(`${BASE}/wallet/v1/payment-check/claim`, async ({ request }) => {
+        receivedKey = request.headers.get('X-Idempotency-Key');
+        receivedBody = await request.json();
         return HttpResponse.json({
+          request_id: 'req-claim',
+          status: 'claimed',
           token: 'nep141:wrap.near',
           amount_claimed: '1000000',
           remaining: '0',
@@ -826,8 +830,28 @@ describe('Payment checks: claim', () => {
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    await client.claimPaymentCheck({ check_key: 'aa' });
-    expect(receivedKey).toBeNull();
+    await client.claimPaymentCheck({ check_key: 'aa', idempotencyKey: 'claim-1' });
+    expect(receivedKey).toBe('claim-1');
+    expect(receivedBody).toEqual({ check_key: 'aa' });
+  });
+
+  it('returns processing with a poll_url as an answer, not an error', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/payment-check/claim`, () =>
+        HttpResponse.json({
+          request_id: 'req-claim',
+          status: 'processing',
+          token: 'nep141:wrap.near',
+          amount_claimed: '400000',
+          poll_url: '/wallet/v1/requests/req-claim',
+        }),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.claimPaymentCheck({ check_key: 'aa', amount: '400000' });
+    expect(r.status).toBe('processing');
+    expect(r.poll_url).toBe('/wallet/v1/requests/req-claim');
+    expect(r.remaining).toBeUndefined();
   });
 
   it('throws BadRequestError when the check is already claimed', async () => {

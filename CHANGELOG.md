@@ -15,6 +15,23 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
   attempt did execute (a lost response, a 5xx after the fact) could execute
   again. Every write method is affected; a key you pass yourself never was.
 
+### Changed
+
+- **Payment checks, limit orders and confidential ops can answer
+  `processing`.** The coordinator records every transfer before it leaves and
+  settles it after the call when its answer is late or lost; such a call answers
+  `processing` with a `poll_url` instead of an error a retry would turn into a
+  second payment.
+  - `createPaymentCheck` / `batchCreatePaymentChecks`: each check has `status`
+    (`unclaimed`, or `creating` + `poll_url`); the `check_key` is always
+    returned. A batch that stopped part way carries `error`.
+  - `claimPaymentCheck` / `reclaimPaymentCheck` return `request_id` and
+    `status` (`processing` + `poll_url`, or the check's new status); `remaining`
+    and the timestamp are absent while `processing`. Both take `idempotencyKey`.
+  - `createLimitOrder` can return `LimitOrderProcessing` (`status`,
+    `order_id`, `poll_url`).
+  - Confidential ops can return `status: 'processing'` with `poll_url`.
+
 ### Added
 
 - **`inbox`** — the owner's inbox from a server or a page: `newDevice`,

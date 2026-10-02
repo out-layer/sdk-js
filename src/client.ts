@@ -72,6 +72,7 @@ export type LimitOrderCreateRequest = Schemas['LimitOrderCreateRequest'];
 export type LimitOrder = Schemas['LimitOrder'];
 export type LimitOrderCreated = Schemas['LimitOrderCreated'];
 export type LimitOrderPendingApproval = Schemas['LimitOrderPendingApproval'];
+export type LimitOrderProcessing = Schemas['LimitOrderProcessing'];
 export type LimitOrderCancelAllResponse = Schemas['LimitOrderCancelAllResponse'];
 export type PaymentCheckCreateRequest = Schemas['PaymentCheckCreateRequest'];
 export type PaymentCheckCreateResponse = Schemas['PaymentCheckCreateResponse'];
@@ -723,11 +724,15 @@ export class OutlayerClient {
    * therefore gated like an exit: the default-DENY `limit_order` capability and
    * transaction type, the address rules on `recipient`, and the per-token
    * amount limit. On a multisig wallet the answer is a
-   * {@link LimitOrderPendingApproval} — tell the two apart by `order_id`.
+   * {@link LimitOrderPendingApproval}. When the funding transfer is not
+   * confirmed in time the answer is a {@link LimitOrderProcessing}
+   * (`status: 'processing'`, `order_id`, `poll_url`): not an error and not to
+   * be retried — the request settles on its own. Tell the three apart by
+   * `status` (absent on a created order).
    */
   createLimitOrder(
     opts: LimitOrderCreateRequest & Idempotent,
-  ): Promise<LimitOrderCreated | LimitOrderPendingApproval> {
+  ): Promise<LimitOrderCreated | LimitOrderPendingApproval | LimitOrderProcessing> {
     const { idempotencyKey, ...body } = opts;
     const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
@@ -824,6 +829,10 @@ export class OutlayerClient {
    * Gated by the default-DENY `payment_check` capability + per-tx amount cap
    * (NOT multisig). Fund the wallet's intents balance first via
    * {@link intentsDeposit}.
+   *
+   * `status` is `unclaimed` once the funding settled, or `creating` (with a
+   * `poll_url`) while it is unconfirmed — the `check_key` comes back either
+   * way, and it is the only copy.
    */
   createPaymentCheck(
     opts: PaymentCheckCreateRequest & Idempotent,
@@ -840,7 +849,12 @@ export class OutlayerClient {
     );
   }
 
-  /** Create 1-10 payment checks in one call. Same security model as {@link createPaymentCheck}. */
+  /**
+   * Create 1-10 payment checks in one call. Same security model as
+   * {@link createPaymentCheck}; each check answers as that does. A batch that
+   * stops part way lists the checks it created, and `error` says why the rest
+   * were not.
+   */
   batchCreatePaymentChecks(
     opts: PaymentCheckBatchCreateRequest & Idempotent,
   ): Promise<PaymentCheckBatchCreateResponse> {
@@ -860,10 +874,22 @@ export class OutlayerClient {
    * Claim a payment check into this wallet's intents balance using its
    * `check_key`. Signed by the ephemeral key (not the keystore). Omit `amount`
    * for a full claim or pass a partial amount in minimal units.
+   *
+   * `status: 'processing'` (with `request_id` and `poll_url`) means the
+   * transfer was handed over and is not confirmed yet: poll the request, do not
+   * claim again.
    */
-  claimPaymentCheck(opts: PaymentCheckClaimRequest): Promise<PaymentCheckClaimResponse> {
+  claimPaymentCheck(
+    opts: PaymentCheckClaimRequest & Idempotent,
+  ): Promise<PaymentCheckClaimResponse> {
+    const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
-      () => this.client.POST('/wallet/v1/payment-check/claim', { body: opts }),
+      () =>
+        this.client.POST('/wallet/v1/payment-check/claim', {
+          body: body as PaymentCheckClaimRequest,
+          headers,
+        }),
       this.retry,
     );
   }
@@ -871,11 +897,20 @@ export class OutlayerClient {
   /**
    * Reclaim a payment check this wallet created (by `check_id`) back to its own
    * intents balance — cancel an unclaimed check. Omit `amount` for a full
-   * reclaim or pass a partial amount.
+   * reclaim or pass a partial amount. Answers `processing` as
+   * {@link claimPaymentCheck} does.
    */
-  reclaimPaymentCheck(opts: PaymentCheckReclaimRequest): Promise<PaymentCheckReclaimResponse> {
+  reclaimPaymentCheck(
+    opts: PaymentCheckReclaimRequest & Idempotent,
+  ): Promise<PaymentCheckReclaimResponse> {
+    const { idempotencyKey, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey);
     return runWithRetry(
-      () => this.client.POST('/wallet/v1/payment-check/reclaim', { body: opts }),
+      () =>
+        this.client.POST('/wallet/v1/payment-check/reclaim', {
+          body: body as PaymentCheckReclaimRequest,
+          headers,
+        }),
       this.retry,
     );
   }

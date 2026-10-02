@@ -41,6 +41,7 @@ export type {
   LimitOrder,
   LimitOrderCreated,
   LimitOrderPendingApproval,
+  LimitOrderProcessing,
   LimitOrderCancelAllResponse,
   PaymentCheckCreateRequest,
   PaymentCheckCreateResponse,

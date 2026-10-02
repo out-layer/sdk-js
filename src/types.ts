@@ -604,6 +604,11 @@ export interface paths {
          *     Gated by the wallet policy exactly like withdraw (recipient whitelist +
          *     per-token amount limit). If the policy requires approval, returns
          *     `status=pending_approval` with an `approval_id`.
+         *
+         *     Answers once the transfer settles. When the solver relay outlasts the
+         *     call's wait it answers `status=processing` with a `poll_url`, and the
+         *     transfer settles on its own; it runs to its outcome even if the caller
+         *     disconnects.
          */
         post: operations["intentsTransfer"];
         delete?: never;
@@ -3558,6 +3563,14 @@ export interface components {
          *     `approval_id` / `required` / `approved` / `request_hash` fields are
          *     populated; approvers sign `request_hash` (see `Nep413Auth`). On the
          *     direct path these fields are omitted/null.
+         *
+         *     Also the response of `intentsTransfer`.
+         *
+         *     A synchronous call answers once the withdrawal settles. When settlement
+         *     outlasts its wait — the solver relay for a same-chain withdraw, the
+         *     bridge for a cross-chain one — it answers `status=processing` with a
+         *     `poll_url`, and the request settles on its own. The withdrawal runs to
+         *     its outcome even if the caller disconnects.
          */
         WithdrawResponse: {
             /** Format: uuid */
@@ -3569,7 +3582,7 @@ export interface components {
             approved?: number | null;
             /** @description Canonical request hash to sign when `status=pending_approval` (otherwise absent). */
             request_hash?: string | null;
-            /** @description Present when `async=true` (`status=processing`) — poll this path (`GET /wallet/v1/requests/{request_id}`) for the terminal status. */
+            /** @description Present when `status=processing` — after `async=true`, or a synchronous call whose settlement outlasted its wait. Poll this path (`GET /wallet/v1/requests/{request_id}`) for the terminal status. */
             poll_url?: string | null;
         };
         DryRunResponse: {
@@ -3609,6 +3622,10 @@ export interface components {
          *     (same shape as `WithdrawResponse`); the swap executes only after the
          *     approval threshold is met. On the direct path those fields are omitted and
          *     `amount_out` / `intent_hash` carry the settled result.
+         *
+         *     When settlement outlasts the call's wait it answers `status=processing`
+         *     with the quoted `amount_out` and a `poll_url`, and the request settles on
+         *     its own. The swap runs to its outcome even if the caller disconnects.
          */
         SwapResponse: {
             /** Format: uuid */
@@ -3622,6 +3639,8 @@ export interface components {
             approved?: number | null;
             /** @description Canonical request hash to sign when `status=pending_approval` (otherwise absent). */
             request_hash?: string | null;
+            /** @description Present when `status=processing` — poll this path (`GET /wallet/v1/requests/{request_id}`) for the terminal status. */
+            poll_url?: string | null;
         };
         SwapQuoteResponse: {
             /**
@@ -4506,6 +4525,11 @@ export interface components {
              *       webhook carries it. All other identifier fields
              *       (`transfer_intent_hash`, `intent_hash`) are NEAR-Intents
              *       hashes, NOT destination-chain transactions.
+             *     - Withdraws and swaps: `settled_late: true` marks a request whose
+             *       outcome was settled from the chain after its response came
+             *       back `processing`. A `failed` request carrying
+             *       `never_executed: true` or `never_submitted: true` moved no
+             *       funds and is safe to retry.
              *     - Other request types are not yet schema-documented; treat the
              *       object as opaque until added in a later spec release.
              *

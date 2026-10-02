@@ -21,7 +21,10 @@ export interface paths {
          *
          *     Optional fields enable advanced registration paths:
          *     - `account_id` + `pubkey` + `message` + `signature`: bind the wallet to
-         *       a NEAR account via NEP-413 proof-of-ownership.
+         *       a NEAR account via proof-of-ownership. `pubkey` must be a full-access
+         *       key of `account_id` (or the key of an implicit account not created
+         *       yet); a function-call key is refused. The same holds for every
+         *       `Bearer near:` request and for `PUT /wallet/v1/api-key`.
          *     - `vault_id`: bind to a customer-owned vault for sovereign custody (see
          *       vault docs).
          *
@@ -1937,10 +1940,12 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Approve a pending action (NEP-413 signed)
-         * @description Submits an approver's NEP-413 signature for a pending action. When the
-         *     approval threshold is reached, the action auto-executes. No API key
-         *     required — auth is established by the NEP-413 signature in the body.
+         * Approve a pending action
+         * @description Submits an approver's vote for a pending action: a NEP-413 signature by
+         *     one of the approver's full-access keys, or, for an approver without keys, an
+         *     authorization its wallet contract resolves (`ContractVoteAuth`). When
+         *     the approval threshold is reached, the action auto-executes. No API key
+         *     required — the vote itself proves who cast it.
          */
         post: operations["approveRequest"];
         delete?: never;
@@ -1958,7 +1963,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Reject a pending action (NEP-413 signed) */
+        /**
+         * Reject a pending action
+         * @description A NO vote, proven the same two ways as an approve vote. A reject from a
+         *     policy approver vetoes the action.
+         */
         post: operations["rejectRequest"];
         delete?: never;
         options?: never;
@@ -3572,7 +3581,8 @@ export interface components {
          * @description Response for `intentsWithdraw` (same-chain AND cross-chain). On a
          *     multisig wallet that requires approval, `status=pending_approval` and the
          *     `approval_id` / `required` / `approved` / `request_hash` fields are
-         *     populated; approvers sign `request_hash` (see `Nep413Auth`). On the
+         *     populated; approvers vote over `request_hash` (see `Nep413Auth`, or
+         *     `ContractVoteAuth` for an approver without keys). On the
          *     direct path these fields are omitted/null.
          *
          *     Also the response of `intentsTransfer`.
@@ -4248,8 +4258,8 @@ export interface components {
         Approver: {
             /** @description Approver's NEAR account id, e.g. `alice.near`. */
             id: string;
-            /** @description Approver's NEAR public key (`ed25519:<base58>`), pinned on-chain. The approver's NEP-413 vote signature is verified against this key. */
-            pubkey: string;
+            /** @description Optional. Pins the approver to this NEAR public key (`ed25519:<base58>`): only a NEP-413 vote signed by it counts, and a contract-wallet vote from this approver never does. Without it, a NEP-413 vote counts when signed by any full-access key of the account (checked on chain), and an approver without keys may vote through its wallet contract (`ContractVoteAuth`). */
+            pubkey?: string;
             /**
              * @description Optional. `admin` may also modify policy / freeze; `signer` may only approve transactions. Defaults to `signer` when omitted.
              * @enum {string}
@@ -4467,7 +4477,7 @@ export interface components {
             decoded_effects?: {
                 [key: string]: unknown;
             } | null;
-            /** @description Canonical request hash to SIGN — approvers sign `approve:{approval_id}:{wallet_pubkey}:{request_hash}` (see `Nep413Auth`). */
+            /** @description Canonical request hash to SIGN — approvers sign `approve:{approval_id}:{wallet_pubkey}:{request_hash}` (see `Nep413Auth`), or have their wallet contract resolve it (see `ContractVoteAuth`). */
             request_hash: string;
             /**
              * @description Always `requires_approval` for a pending row.
@@ -4475,6 +4485,7 @@ export interface components {
              */
             decision: "requires_approval";
             required: number;
+            /** @description Approve votes so far. Reject votes are not counted toward the threshold. */
             approved: number;
             /** Format: date-time */
             expires_at: string;
@@ -4482,7 +4493,7 @@ export interface components {
         PendingApprovalsResponse: {
             approvals: components["schemas"]["PendingApproval"][];
         };
-        /** @description Public, read-only detail for one pending approval (`getApprovalDetail`). Returns only non-sensitive metadata. `wallet_pubkey` + `request_hash` are what an approver binds into the NEP-413 vote (see `Nep413Auth`); the dashboard renders `op`. */
+        /** @description Public, read-only detail for one pending approval (`getApprovalDetail`). Returns only non-sensitive metadata. `wallet_pubkey` + `request_hash` are what an approver binds into its vote (see `Nep413Auth` and `ContractVoteAuth`); the dashboard renders `op`. */
         ApprovalDetail: {
             /** Format: uuid */
             id: string;
@@ -4512,8 +4523,15 @@ export interface components {
             /** @description Signatures collected so far. */
             approvers: {
                 approver_id: string;
+                /** @description `signer` for an approve vote, `reject` for a reject vote. */
                 approver_role: string;
-                signature: string;
+                /** @description The NEP-413 signature; null for a contract-wallet vote. */
+                signature: string | null;
+                /**
+                 * @description How the vote was proven — a key signature, or the approver's wallet contract.
+                 * @enum {string}
+                 */
+                proof_kind: "nep413" | "contract";
                 /** Format: date-time */
                 created_at: string;
             }[];
@@ -4533,14 +4551,43 @@ export interface components {
             account_id: string;
             nonce: string;
         };
-        RejectRequest: components["schemas"]["Nep413Auth"] & {
-            reason?: string;
+        /**
+         * @description A vote from an approver without access keys: a NEP-616 wallet contract
+         *     owned by an EVM key or a passkey. `authorization` is the blob the
+         *     approver's wallet resolves, sent verbatim; its payload must be the same
+         *     string a key holder signs, `approve:{approval_id}:{wallet_pubkey}:{request_hash}`
+         *     or `reject:{approval_id}:{wallet_pubkey}:{request_hash}`.
+         *
+         *     Accepted only from an account running a wallet build this deployment
+         *     lists. The coordinator calls `w_is_signature_allowed` and
+         *     `w_resolve_auth` on `account_id` at one block before storing the vote,
+         *     and the keystore does again before signing. EIP-712 wallets resolve
+         *     with `{purpose: "PROVE_OWNERSHIP", recipient, authorization}`, where
+         *     `recipient` is this deployment's contract id (`outlayer.near` on
+         *     mainnet, `outlayer.testnet` on testnet). Passkey (NEP-641) wallets
+         *     resolve with `{path: [], authorization}`; an authorization that leaves
+         *     sub-authorizations pending is refused. A passkey message timestamped in
+         *     the future is refused by the wallet itself; sign with a timestamp a
+         *     little in the past.
+         */
+        ContractVoteAuth: {
+            account_id: string;
+            authorization: string;
         };
+        /** @description Exactly one proof. Both, or neither, is a 400. */
+        ApproveRequest: components["schemas"]["Nep413Auth"] | components["schemas"]["ContractVoteAuth"];
+        /** @description Exactly one proof, and an optional reason. Both proofs, or neither, is a 400. */
+        RejectRequest: (components["schemas"]["Nep413Auth"] & {
+            reason?: string;
+        }) | (components["schemas"]["ContractVoteAuth"] & {
+            reason?: string;
+        });
         ApproveResponse: {
             /** Format: uuid */
             approval_id: string;
             /** @enum {string} */
             status: "pending" | "approved" | "rejected" | "expired";
+            /** @description Approve votes so far. Reject votes are not counted toward the threshold. */
             approved: number;
             required: number;
             /** Format: uuid */
@@ -7385,7 +7432,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Nep413Auth"];
+                "application/json": components["schemas"]["ApproveRequest"];
             };
         };
         responses: {
@@ -7398,9 +7445,66 @@ export interface operations {
                     "application/json": components["schemas"]["ApproveResponse"];
                 };
             };
-            403: components["responses"]["Forbidden"];
+            /**
+             * @description `bad_request`: both proofs or neither; or a contract vote from an
+             *     account that does not run a wallet build this deployment accepts.
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /**
+             * @description `invalid_signature`: the NEP-413 signature does not verify, or
+             *     `public_key` is not a full-access key of `account_id` on chain (a
+             *     vote is signed by the wallet of the account it names; a
+             *     function-call key, held by applications the owner logged into,
+             *     does not vote); or the approver's
+             *     wallet did not resolve the authorization to this vote's message —
+             *     the message names the wallet's own reason.
+             */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /**
+             * @description `not_approver`: the account is not an approver this wallet's
+             *     policy admits for this vote — not listed, or pinned to another key,
+             *     or pinned at all for a contract-wallet vote. Decided on the policy
+             *     as the chain holds it; nothing is stored.
+             */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["NotFound"];
+            /**
+             * @description `already_approved`: this account has already voted on this
+             *     approval, approve or reject. One vote per account.
+             *     `conflict`: the approval is no longer pending (approved, rejected
+             *     or expired); the message names its state. Stop; do not retry.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     rejectRequest: {
@@ -7427,9 +7531,66 @@ export interface operations {
                     "application/json": components["schemas"]["RejectResponse"];
                 };
             };
-            403: components["responses"]["Forbidden"];
+            /**
+             * @description `bad_request`: both proofs or neither; or a contract vote from an
+             *     account that does not run a wallet build this deployment accepts.
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /**
+             * @description `invalid_signature`: the NEP-413 signature does not verify, or
+             *     `public_key` is not a full-access key of `account_id` on chain (a
+             *     vote is signed by the wallet of the account it names; a
+             *     function-call key, held by applications the owner logged into,
+             *     does not vote); or the approver's
+             *     wallet did not resolve the authorization to this vote's message —
+             *     the message names the wallet's own reason.
+             */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /**
+             * @description `not_approver`: the account is not an approver this wallet's
+             *     policy admits for this vote — not listed, or pinned to another key,
+             *     or pinned at all for a contract-wallet vote. Decided on the policy
+             *     as the chain holds it; nothing is stored.
+             */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["NotFound"];
+            /**
+             * @description `already_approved`: this account has already voted on this
+             *     approval, approve or reject. One vote per account.
+             *     `conflict`: the approval is no longer pending (approved, rejected
+             *     or expired); the message names its state. Stop; do not retry.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listAuditEvents: {

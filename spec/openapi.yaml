@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: OutLayer API
-  version: 0.1.0-alpha.1
+  version: 0.1.0-alpha.3
   summary: HTTP API for OutLayer custody wallets and policy enforcement
   description: |
     OutLayer Agent Custody — multi-chain wallets for AI agents with TEE-enforced

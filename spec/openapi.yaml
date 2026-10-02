@@ -3290,7 +3290,11 @@ paths:
 
         The sentence is rebuilt here from the three fields, so what was signed
         is exactly it. The key that signed must be a full-access key of the
-        account on chain. One statement opens one session. An account has
+        account on chain; an implicit account (64 hex) that is not on chain
+        yet is signed for by its own key. A custody wallet signs with
+        `POST /wallet/v1/sign-message` (`recipient`: the OutLayer contract);
+        its `signature_base64`, `public_key` and `nonce` are the three fields
+        here. One statement opens one session. An account has
         five devices in force at most, each with a session of its own; one
         more retires the device signed in longest ago, which is answered 401
         `session_replaced` from then on.
@@ -3564,6 +3568,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InboxTaskMoved'
         '400':
+          description: "`invalid_request`: the reason is empty or over its bound, or the task is a notice — Got it closes it."
           $ref: '#/components/responses/InboxRefused'
         '401':
           $ref: '#/components/responses/InboxRefused'
@@ -3571,6 +3576,40 @@ paths:
           $ref: '#/components/responses/InboxRefused'
         '409':
           description: "`task_closed` with `state`: an `approved` task cannot be rejected — the owner said yes and a run may be acting."
+          $ref: '#/components/responses/InboxRefused'
+        '503':
+          $ref: '#/components/responses/InboxUnavailable'
+
+  /inbox/tasks/{id}/acknowledge:
+    post:
+      tags: [Inbox]
+      operationId: acknowledgeInboxTask
+      summary: Got it — close a notice as seen
+      description: |
+        The session alone: no wallet signature, no run. An open notice of the
+        owner's is `done`; what it showed is deleted, as with every close, and
+        its preparer reads it `done`. No event is sent for it. A task that is
+        not a notice is approved or rejected, not acknowledged: 400.
+      security:
+        - OwnerSession: []
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Seen
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxTaskMoved'
+        '400':
+          description: "`invalid_request`: the task is not a notice."
+          $ref: '#/components/responses/InboxRefused'
+        '401':
+          $ref: '#/components/responses/InboxRefused'
+        '404':
+          $ref: '#/components/responses/InboxRefused'
+        '409':
+          description: "`task_closed` with `state`: the notice is not `open` — seen, cancelled or expired already."
           $ref: '#/components/responses/InboxRefused'
         '503':
           $ref: '#/components/responses/InboxUnavailable'
@@ -3638,6 +3677,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InboxTaskMoved'
         '400':
+          description: "`invalid_request`: a hash that is not one, a supply that the task's kind does not take, or a notice, which takes no answer — judged before the signature is spent."
           $ref: '#/components/responses/InboxRefused'
         '401':
           $ref: '#/components/responses/InboxRefused'
@@ -3757,6 +3797,8 @@ paths:
         HMAC-SHA256 of the body in hex), with `X-Wallet-Id: owner:{account}`.
         The secret is in the answer to this call and nowhere else. A body says who asked whom, of what
         kind and when, and links to the inbox; nothing of what the task shows.
+        A notice is told as `task_created` with `kind: notice`; Got it sends
+        nothing.
         The URL is an HTTPS URL on a public host, without credentials in it;
         the sender follows no redirect. The URL stays in force when the
         session that named it ends, and says which session that was.
@@ -5156,8 +5198,8 @@ components:
       enum: [open, approved, answering, done, failed, rejected, cancelled, expired, void]
     TaskKind:
       type: string
-      description: "`confirm` — yes or no; `input` — the owner supplies something."
-      enum: [confirm, input]
+      description: "`confirm` — yes or no; `input` — the owner supplies something; `notice` — tells the owner something and asks nothing: no operation answers it, no reply key, no run follows it, and Got it closes it."
+      enum: [confirm, input, notice]
     InboxTask:
       type: object
       required: [id, project_id, project_uuid, preparer, profile, vault, kind, state, created_at, expires_at, reply_pubkey, content, device_copy, locked]
@@ -5179,7 +5221,7 @@ components:
         run: { type: string, description: "The call that acts, or acted, on the owner's approval: a run of the task's preparer, started by the platform." }
         failure_reason:
           $ref: '#/components/schemas/TaskFailureReason'
-        reply_pubkey: { type: string, description: "`p256:` and the uncompressed point in base64url: what the owner's answer, note and reason are encrypted to." }
+        reply_pubkey: { type: [string, 'null'], description: "`p256:` and the uncompressed point in base64url: what the owner's answer, note and reason are encrypted to. `null` for a notice, which takes none." }
         content:
           type: [string, 'null']
           contentEncoding: base64
@@ -5270,7 +5312,7 @@ components:
         device_pubkey: { type: string, description: "`p256:` and the uncompressed point of the device's public key, base64url without padding." }
         valid_until: { type: integer, description: "Unix seconds; in the future, 30 days at most." }
         public_key: { type: string, description: "The key that signed, `ed25519:<base58>`." }
-        signature: { type: string, description: "Base64, 64 bytes." }
+        signature: { type: string, description: "Base64, 64 bytes; `signature_base64` of `POST /wallet/v1/sign-message`, not its `ed25519:` form." }
         nonce: { type: string, description: "Base64, 32 bytes." }
     OwnerSession:
       type: object

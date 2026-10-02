@@ -14,6 +14,14 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ### Added
 
+- **`inbox`** — the owner's inbox from a server or a page: `newDevice`,
+  `exportDevice`/`importDevice` (a server keeps the device's key), `signIn` with
+  a `Signer` — `walletSigner(client)` for an OutLayer custody wallet — then
+  `listTasks`, `readTask` (the envelope, the hash of the bytes that opened,
+  confirm/input/notice), `openFile`, `acknowledge` (Got it on a notice),
+  `rejectTask`, `deleteTask`, `mute`, `nameWebhook` and `verifyWebhook`. It
+  approves nothing. WebCrypto only. `examples/07-inbox.ts`.
+
 - **Limit orders** — `createLimitOrder`, `getLimitOrder`, `listLimitOrders`,
   `cancelLimitOrder`, `cancelAllLimitOrders`. A swap rested on 1Click at your
   price, funded from the wallet's intents balance; `quantity` is in the base

@@ -1985,7 +1985,11 @@ export interface paths {
          *
          *     The sentence is rebuilt here from the three fields, so what was signed
          *     is exactly it. The key that signed must be a full-access key of the
-         *     account on chain. One statement opens one session. An account has
+         *     account on chain; an implicit account (64 hex) that is not on chain
+         *     yet is signed for by its own key. A custody wallet signs with
+         *     `POST /wallet/v1/sign-message` (`recipient`: the OutLayer contract);
+         *     its `signature_base64`, `public_key` and `nonce` are the three fields
+         *     here. One statement opens one session. An account has
          *     five devices in force at most, each with a session of its own; one
          *     more retires the device signed in longest ago, which is answered 401
          *     `session_replaced` from then on.
@@ -2111,6 +2115,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/inbox/tasks/{id}/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Got it — close a notice as seen
+         * @description The session alone: no wallet signature, no run. An open notice of the
+         *     owner's is `done`; what it showed is deleted, as with every close, and
+         *     its preparer reads it `done`. No event is sent for it. A task that is
+         *     not a notice is approved or rejected, not acknowledged: 400.
+         */
+        post: operations["acknowledgeInboxTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/inbox/tasks/{id}/approve": {
         parameters: {
             query?: never;
@@ -2191,6 +2218,8 @@ export interface paths {
          *     HMAC-SHA256 of the body in hex), with `X-Wallet-Id: owner:{account}`.
          *     The secret is in the answer to this call and nowhere else. A body says who asked whom, of what
          *     kind and when, and links to the inbox; nothing of what the task shows.
+         *     A notice is told as `task_created` with `kind: notice`; Got it sends
+         *     nothing.
          *     The URL is an HTTPS URL on a public host, without credentials in it;
          *     the sender follows no redirect. The URL stays in force when the
          *     session that named it ends, and says which session that was.
@@ -2776,10 +2805,10 @@ export interface components {
          */
         TaskState: "open" | "approved" | "answering" | "done" | "failed" | "rejected" | "cancelled" | "expired" | "void";
         /**
-         * @description `confirm` — yes or no; `input` — the owner supplies something.
+         * @description `confirm` — yes or no; `input` — the owner supplies something; `notice` — tells the owner something and asks nothing: no operation answers it, no reply key, no run follows it, and Got it closes it.
          * @enum {string}
          */
-        TaskKind: "confirm" | "input";
+        TaskKind: "confirm" | "input" | "notice";
         InboxTask: {
             id: string;
             /** @description The project whose run made the task, and whose operation answers it. */
@@ -2800,8 +2829,8 @@ export interface components {
             /** @description The call that acts, or acted, on the owner's approval: a run of the task's preparer, started by the platform. */
             run?: string;
             failure_reason?: components["schemas"]["TaskFailureReason"];
-            /** @description `p256:` and the uncompressed point in base64url: what the owner's answer, note and reason are encrypted to. */
-            reply_pubkey: string;
+            /** @description `p256:` and the uncompressed point in base64url: what the owner's answer, note and reason are encrypted to. `null` for a notice, which takes none. */
+            reply_pubkey: string | null;
             /** @description The task's envelope under its content key: `0x01 || nonce (12) || AES-256-GCM`, bound to the task's id. Present while the task is `open` or `approved`; `null` once it is closed or being acted on. */
             content: string | null;
             /** @description The content key encrypted to this session's device. `null` when the device has none. */
@@ -2848,7 +2877,7 @@ export interface components {
             valid_until: number;
             /** @description The key that signed, `ed25519:<base58>`. */
             public_key: string;
-            /** @description Base64, 64 bytes. */
+            /** @description Base64, 64 bytes; `signature_base64` of `POST /wallet/v1/sign-message`, not its `ed25519:` form. */
             signature: string;
             /** @description Base64, 32 bytes. */
             nonce: string;
@@ -7555,10 +7584,41 @@ export interface operations {
                     "application/json": components["schemas"]["InboxTaskMoved"];
                 };
             };
+            /** @description `invalid_request`: the reason is empty or over its bound, or the task is a notice — Got it closes it. */
             400: components["responses"]["InboxRefused"];
             401: components["responses"]["InboxRefused"];
             404: components["responses"]["InboxRefused"];
             /** @description `task_closed` with `state`: an `approved` task cannot be rejected — the owner said yes and a run may be acting. */
+            409: components["responses"]["InboxRefused"];
+            503: components["responses"]["InboxUnavailable"];
+        };
+    };
+    acknowledgeInboxTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A task's id — 1 to 80 of `a-z`, `0-9` and `-`. */
+                id: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Seen */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxTaskMoved"];
+                };
+            };
+            /** @description `invalid_request`: the task is not a notice. */
+            400: components["responses"]["InboxRefused"];
+            401: components["responses"]["InboxRefused"];
+            404: components["responses"]["InboxRefused"];
+            /** @description `task_closed` with `state`: the notice is not `open` — seen, cancelled or expired already. */
             409: components["responses"]["InboxRefused"];
             503: components["responses"]["InboxUnavailable"];
         };
@@ -7596,6 +7656,7 @@ export interface operations {
                     "application/json": components["schemas"]["InboxTaskMoved"];
                 };
             };
+            /** @description `invalid_request`: a hash that is not one, a supply that the task's kind does not take, or a notice, which takes no answer — judged before the signature is spent. */
             400: components["responses"]["InboxRefused"];
             401: components["responses"]["InboxRefused"];
             /** @description `confirmation_required`: the signature does not hold, is older than ten minutes, was signed by a key that is not a full-access key of the account, or was spent. */

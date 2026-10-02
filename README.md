@@ -178,6 +178,7 @@ Runnable scripts in [`examples/`](examples/):
 - `04-agent-loop.ts` — minimal autonomous agent that respects policy
 - `05-cross-chain-app.ts` — end-to-end DeFi flow: cross-chain login pattern, deposit instructions, swap USDT → NEAR, stake with a validator, gasless withdraw back to Ethereum. CLI with sub-commands (`addresses | balances | buy-near | stake | unstake | withdraw-eth | login-demo`).
 - `06-confidential-roundtrip.ts` — confidential shard round-trip: SHIELD → read balance → UNSHIELD, with `503 confidential_unavailable` handling.
+- `07-inbox.ts` — the owner's inbox from a server: sign a device in with the custody wallet, read the tasks the owner's agents left, close the notices with Got it.
 
 Run with:
 
@@ -186,6 +187,39 @@ npx tsx examples/01-register.ts                                            # no 
 OUTLAYER_API_KEY=wk_... npx tsx examples/02-withdraw.ts                    # needs API key
 OUTLAYER_API_KEY=wk_... npx tsx examples/05-cross-chain-app.ts addresses   # cross-chain identity
 ```
+
+## The owner's inbox
+
+`inbox` reads the tasks an agent left for its owner — confirmations, inputs and
+notices — on a device of the owner's, and closes the notices with Got it. Every
+task is encrypted to the owner's devices; a device is a P-256 key pair the
+owner's wallet signs in with one NEP-413 statement. The module holds no wallet
+key: each signature is asked of a `Signer`, which for an OutLayer custody
+wallet is its `sign-message` (`inbox.walletSigner(client)`). It does not
+approve tasks: a task that asks something is approved where it is shown first.
+
+```ts
+import { OutlayerClient, inbox } from '@outlayer/sdk';
+
+const signer = inbox.walletSigner(new OutlayerClient({ apiKey, network: 'testnet' }));
+const device = await inbox.newDevice();            // keep inbox.exportDevice(device) server-side
+const session = await inbox.signIn(
+  { baseUrl: 'https://testnet-api.outlayer.ai', recipient: 'outlayer.testnet' },
+  signer, accountId, device,                       // a day, by default; 30 days at most
+);
+for (const listed of (await inbox.listTasks(session)).tasks) {
+  const task = await inbox.readTask(device, listed, accountId);
+  if (task.envelope.kind === 'notice') await inbox.acknowledge(session, listed.id);
+}
+```
+
+To be told of new tasks at a URL instead of asking: `inbox.nameWebhook(session,
+url, signer)` answers the secret, once; check each delivery with
+`inbox.verifyWebhook(rawBody, request.headers.get('x-webhook-signature'),
+secret)`. One URL per owner — naming one replaces any other. A delivery says who
+asked whom, of what kind and when, and nothing of what the task shows: read the
+task to show it. A custody account never sent NEAR signs in too; a wallet whose
+policy lists the recipients of `sign_message` must list the OutLayer contract.
 
 ## Errors
 

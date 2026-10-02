@@ -6,6 +6,9 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ### Fixed
 
+- **Writes send `X-Idempotency-Key`, the header the coordinator reads.** They
+  sent `Idempotency-Key`, which the coordinator ignores, so a retried write ran
+  again instead of answering `duplicate_idempotency_key`.
 - **The auto-generated `Idempotency-Key` is now the same on every internal
   retry of one operation**, as the README says it is. It was minted inside the
   retried call, so each attempt carried a new key, and a write whose first

@@ -381,7 +381,7 @@ describe('Wallet writes: withdraw — errors', () => {
 });
 
 describe('Wallet writes: withdrawDryRun', () => {
-  it('does NOT attach Idempotency-Key (dry-run is read-only)', async () => {
+  it('does NOT attach X-Idempotency-Key (dry-run is read-only)', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.post(`${BASE}/wallet/v1/intents/withdraw/dry-run`, ({ request }) => {
@@ -507,7 +507,7 @@ describe('Wallet writes: swap + swapQuote', () => {
     expect(r.intent_hash).toBe('intent-abc');
   });
 
-  it('swapQuote does NOT attach Idempotency-Key', async () => {
+  it('swapQuote does NOT attach X-Idempotency-Key', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.post(`${BASE}/wallet/v1/intents/swap/quote`, ({ request }) => {
@@ -709,12 +709,12 @@ describe('Payment checks: create', () => {
     expect(r.check_key).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('auto-attaches an Idempotency-Key and strips idempotencyKey from body', async () => {
+  it('auto-attaches an X-Idempotency-Key and strips idempotencyKey from body', async () => {
     let receivedKey: string | null = null;
     let receivedBody: Record<string, unknown> = {};
     server.use(
       http.post(`${BASE}/wallet/v1/payment-check/create`, async ({ request }) => {
-        receivedKey = request.headers.get('Idempotency-Key');
+        receivedKey = request.headers.get('X-Idempotency-Key');
         receivedBody = (await request.json()) as Record<string, unknown>;
         return HttpResponse.json({
           check_id: 'c1',
@@ -812,7 +812,7 @@ describe('Payment checks: claim', () => {
     expect(r.remaining).toBe('600000');
   });
 
-  it('does NOT attach an Idempotency-Key (claim is ephemeral-key signed)', async () => {
+  it('does NOT attach an X-Idempotency-Key (claim is ephemeral-key signed)', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.post(`${BASE}/wallet/v1/payment-check/claim`, ({ request }) => {
@@ -1401,12 +1401,12 @@ describe('Retry behavior', () => {
 // Idempotency
 // ============================================================================
 
-describe('Idempotency-Key', () => {
-  it('attaches an Idempotency-Key header on writes', async () => {
+describe('X-Idempotency-Key', () => {
+  it('attaches an X-Idempotency-Key header on writes', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.post(`${BASE}/wallet/v1/intents/withdraw`, ({ request }) => {
-        receivedKey = request.headers.get('Idempotency-Key');
+        receivedKey = request.headers.get('X-Idempotency-Key');
         return HttpResponse.json({
           request_id: '33333333-3333-3333-3333-333333333333',
           status: 'processing',
@@ -1424,7 +1424,7 @@ describe('Idempotency-Key', () => {
     const keys: (string | null)[] = [];
     server.use(
       http.post(`${BASE}/wallet/v1/intents/withdraw`, ({ request }) => {
-        keys.push(request.headers.get('Idempotency-Key'));
+        keys.push(request.headers.get('X-Idempotency-Key'));
         if (keys.length === 1) {
           return HttpResponse.json({ error: 'internal_error' }, { status: 500 });
         }
@@ -1444,11 +1444,11 @@ describe('Idempotency-Key', () => {
     expect(keys[2]).not.toBe(keys[0]);
   });
 
-  it('respects a user-supplied Idempotency-Key', async () => {
+  it('respects a user-supplied X-Idempotency-Key', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.post(`${BASE}/wallet/v1/intents/withdraw`, ({ request }) => {
-        receivedKey = request.headers.get('Idempotency-Key');
+        receivedKey = request.headers.get('X-Idempotency-Key');
         return HttpResponse.json({
           request_id: '44444444-4444-4444-4444-444444444444',
           status: 'processing',
@@ -1465,7 +1465,7 @@ describe('Idempotency-Key', () => {
     expect(receivedKey).toBe('my-job-12345');
   });
 
-  it('does NOT attach Idempotency-Key on GET requests', async () => {
+  it('does NOT attach X-Idempotency-Key on GET requests', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.get(`${BASE}/wallet/v1/balance`, ({ request }) => {
@@ -1511,11 +1511,11 @@ describe('Confidential Intents: confidentialShield (SHIELD)', () => {
     expect(r.intent_hash).toBe('cintent-shield');
   });
 
-  it('auto-attaches an Idempotency-Key header', async () => {
+  it('auto-attaches an X-Idempotency-Key header', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.post(`${BASE}/wallet/v1/confidential/shield`, ({ request }) => {
-        receivedKey = request.headers.get('Idempotency-Key');
+        receivedKey = request.headers.get('X-Idempotency-Key');
         return HttpResponse.json({
           request_id: 'aaaaaaaa-0000-0000-0000-000000000002',
           status: 'pending_deposit',
@@ -1671,11 +1671,11 @@ describe('Confidential Intents: confidentialWithdraw', () => {
     expect(r.status).toBe('pending_deposit');
   });
 
-  it('respects a user-supplied Idempotency-Key', async () => {
+  it('respects a user-supplied X-Idempotency-Key', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.post(`${BASE}/wallet/v1/confidential/withdraw`, ({ request }) => {
-        receivedKey = request.headers.get('Idempotency-Key');
+        receivedKey = request.headers.get('X-Idempotency-Key');
         return HttpResponse.json({
           request_id: 'cccccccc-0000-0000-0000-000000000003',
           status: 'processing',
@@ -1715,7 +1715,7 @@ describe('Confidential Intents: confidentialWithdraw', () => {
 });
 
 describe('Confidential Intents: confidentialWithdrawDryRun', () => {
-  it('returns a quote and does NOT attach Idempotency-Key', async () => {
+  it('returns a quote and does NOT attach X-Idempotency-Key', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.post(`${BASE}/wallet/v1/confidential/withdraw/dry-run`, ({ request }) => {
@@ -1863,7 +1863,7 @@ describe('Confidential Intents: confidentialSwap + confidentialSwapQuote', () =>
     ).rejects.toBeInstanceOf(BadRequestError);
   });
 
-  it('confidentialSwapQuote returns a quote and does NOT attach Idempotency-Key', async () => {
+  it('confidentialSwapQuote returns a quote and does NOT attach X-Idempotency-Key', async () => {
     let receivedKey: string | null = null;
     server.use(
       http.post(`${BASE}/wallet/v1/confidential/swap/quote`, ({ request }) => {

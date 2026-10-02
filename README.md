@@ -247,7 +247,7 @@ See [errors.md](docs/errors.md) for the full list.
 
 Transient 5xx and network errors are retried automatically (3 attempts, exponential backoff 100ms → 1.6s). 4xx is not retried — those are deterministic.
 
-Write operations get an auto-generated `Idempotency-Key` per call; retries from the SDK's own retry layer reuse the same key, so repeated calls don't double-spend. To control idempotency yourself (e.g., for at-least-once delivery from a queue):
+Write operations get an auto-generated `X-Idempotency-Key` per call; retries from the SDK's own retry layer reuse the same key, so repeated calls don't double-spend. To control idempotency yourself (e.g., for at-least-once delivery from a queue):
 
 ```ts
 await client.withdraw({

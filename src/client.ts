@@ -134,7 +134,7 @@ type Idempotent = { idempotencyKey?: string };
  * that did execute would execute again.
  */
 function idempotencyHeader(key: string | undefined): Record<string, string> {
-  return { 'Idempotency-Key': key ?? newIdempotencyKey() };
+  return { 'X-Idempotency-Key': key ?? newIdempotencyKey() };
 }
 
 // ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ const res = await fetch('https://api.outlayer.ai/wallet/v1/intents/withdraw', {
   headers: {
     'Authorization': `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
-    'Idempotency-Key': idempotencyKey,
+    'X-Idempotency-Key': idempotencyKey,
   },
   body: JSON.stringify({
     chain: 'ethereum',
@@ -128,7 +128,7 @@ while (true) {
 ## What the SDK adds, even for trivial calls
 
 - **Type-safe request/response** — your IDE auto-completes fields.
-- **Automatic Idempotency-Key on writes** — safe to retry from your own code.
+- **Automatic X-Idempotency-Key on writes** — safe to retry from your own code.
 - **Internal retries on 5xx + network errors** — exponential backoff, configurable.
 - **Typed errors** — `instanceof PolicyDeniedError` instead of string matching `err.error === 'policy_denied'`.
 - **Browser + Node + Bun + Deno** — uses standard `fetch`, no Node-specific deps.

@@ -126,7 +126,7 @@ const client = new OutlayerClient({
 
 ## Idempotency under retry
 
-Write operations get an auto-generated `Idempotency-Key` that's **stable across the SDK's internal retries**. A retry with the same key never re-signs or re-broadcasts: the server short-circuits **before** signing and answers `200` with `{ error: 'duplicate_idempotency_key', message: 'Request already processed: <request_id>' }` — a *pointer* to the original request, not its stored result. Fetch the outcome with `getRequest(request_id)`. This also backstops clients that (incorrectly) retry a 422 `onchain_tx_failed`.
+Write operations get an auto-generated `X-Idempotency-Key` that's **stable across the SDK's internal retries**. A retry with the same key never re-signs or re-broadcasts: the server short-circuits **before** signing and answers `200` with `{ error: 'duplicate_idempotency_key', message: 'Request already processed: <request_id>' }` — a *pointer* to the original request, not its stored result. Fetch the outcome with `getRequest(request_id)`. This also backstops clients that (incorrectly) retry a 422 `onchain_tx_failed`.
 
 If you're the one handling retries (e.g., from a job queue), pass your own key to make at-least-once delivery safe:
 

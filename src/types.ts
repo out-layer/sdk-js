@@ -3568,9 +3568,11 @@ export interface components {
          *
          *     A synchronous call answers once the withdrawal settles. When settlement
          *     outlasts its wait — the solver relay for a same-chain withdraw, the
-         *     bridge for a cross-chain one — it answers `status=processing` with a
-         *     `poll_url`, and the request settles on its own. The withdrawal runs to
-         *     its outcome even if the caller disconnects.
+         *     bridge for a cross-chain one — or anything fails after the funds were
+         *     handed over, it answers `status=processing` with a `poll_url`, and the
+         *     request settles on its own. It never answers an error once funds may
+         *     have moved. The withdrawal runs to its outcome even if the caller
+         *     disconnects.
          */
         WithdrawResponse: {
             /** Format: uuid */
@@ -3623,9 +3625,11 @@ export interface components {
          *     approval threshold is met. On the direct path those fields are omitted and
          *     `amount_out` / `intent_hash` carry the settled result.
          *
-         *     When settlement outlasts the call's wait it answers `status=processing`
-         *     with the quoted `amount_out` and a `poll_url`, and the request settles on
-         *     its own. The swap runs to its outcome even if the caller disconnects.
+         *     When settlement outlasts the call's wait, or anything fails after the
+         *     transfer was handed over, it answers `status=processing` with a
+         *     `poll_url` (and the quoted `amount_out` when it has one), and the request
+         *     settles on its own. The swap runs to its outcome even if the caller
+         *     disconnects.
          */
         SwapResponse: {
             /** Format: uuid */
@@ -5324,7 +5328,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -5407,7 +5411,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -5458,7 +5462,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -5508,7 +5512,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -5557,7 +5561,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -5607,7 +5611,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -5677,7 +5681,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -5720,7 +5724,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -5938,7 +5942,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -5988,7 +5992,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -6038,7 +6042,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -6088,7 +6092,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -6169,7 +6173,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -6220,7 +6224,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -6585,7 +6589,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -6715,7 +6719,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -6766,7 +6770,7 @@ export interface operations {
                  *     call, so nothing is deduplicated. Recommended for clients that retry
                  *     on network failure.
                  */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;

@@ -109,6 +109,10 @@ export async function runWithRetry<T>(
     try {
       const { data, error, response } = await call();
       if (response.ok) {
+        // A seen idempotency key answers HTTP 200 with an error body naming the
+        // request it belongs to. It is not the operation's answer: thrown, with
+        // the request (`request_id`, `status`, `poll_url`) in `details`.
+        if (isDuplicateKeyAnswer(data)) throw await errorFromResponse(response, data);
         return data as T;
       }
       const err = await errorFromResponse(response, error);
@@ -141,6 +145,14 @@ function backoff(attempt: number, cfg: Required<RetryConfig>): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function isDuplicateKeyAnswer(data: unknown): boolean {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    (data as { error?: unknown }).error === 'duplicate_idempotency_key'
+  );
 }
 
 function isNetworkError(e: unknown): boolean {

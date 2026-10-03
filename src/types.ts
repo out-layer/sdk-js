@@ -4930,19 +4930,68 @@ export interface components {
         /** @description A task's id — 1 to 80 of `a-z`, `0-9` and `-`. */
         TaskId: string;
         /**
-         * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-         *     is never compared. Resubmitting a write request with a key already seen
-         *     does NOT re-execute it and does NOT return the stored result: it
-         *     answers **HTTP `200`** with
-         *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-         *     — a pointer to the original request, not an error for a retry. Read the
-         *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-         *     is `200`, a client has to check `error` in the body. Use one key per
-         *     logical operation; with no header the server mints a fresh key per
-         *     call, so nothing is deduplicated. Recommended for clients that retry
-         *     on network failure.
+         * @description One key per operation, scoped to `(wallet, key)`; the request body is
+         *     never compared. The key is written on the request row BEFORE any funds
+         *     move, so a key seen again names the request that reserved it, whatever
+         *     became of it, and nothing runs twice.
+         *
+         *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+         *     and the request it belongs to:
+         *     ```json
+         *     {"error": "duplicate_idempotency_key",
+         *      "message": "Request already processed: <request_id>",
+         *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+         *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+         *      "created_at": "...", "updated_at": "..."}
+         *     ```
+         *     `status` is the request's as recorded; `poll_url` is present while it is
+         *     not terminal (`success`/`completed`, `failed`, `refunded`,
+         *     `needs_review`); `result` and `updated_at` once the row has them.
+         *     Because the HTTP code is `200`, branch on `error` in the body.
+         *
+         *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+         *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+         *     key made, each with its key derived again for the API key that asks.
+         *     A caller that lost the create's answer gets its only copy back here.
+         *     `check_key` is `null` when the asking API key is not the one the check
+         *     was created with (a key of the same wallet under another vault derives
+         *     a different key): re-send with the key that created it. A batch lists
+         *     the checks reserved so far while its request is `processing`, and all
+         *     of them once it is `completed`.
+         *     If the re-derivation cannot be done (the keystore does not answer), the
+         *     re-send is refused like any keystore call and can be sent again.
+         *
+         *     A key is held by the request that reserved it, including one that ended
+         *     `failed` after the reserve. A refusal before the reserve — authentication,
+         *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+         *     holds nothing, and the same key may be sent again.
+         *
+         *     Recovery after a timeout or a dropped connection: re-send with the same
+         *     key and read `request_id` and `status` from whichever answer comes — the
+         *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+         *     (`null` while the request is being written: retry in a moment). With no
+         *     header the server mints a fresh key per call, so nothing is deduplicated.
          */
         IdempotencyKey: string;
+        /**
+         * @description How many seconds after the request arrives this call waits for the
+         *     operation to settle before it answers `status: processing` with
+         *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+         *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+         *     soon as the funds are handed over. Absent, the call waits its own
+         *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+         *     withdraw. The wait only shortens: the operation itself runs to its
+         *     outcome and settles the request whatever the client waited. Two things
+         *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+         *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+         *     the wait follows. A value outside the range is refused
+         *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+         *     few seconds below your client's timeout, so a slow settlement answers
+         *     with an id to poll instead of a dropped connection. The header is read
+         *     on every wallet route: it acts on the operations that wait (the ones
+         *     that list it), and is accepted and changes nothing elsewhere.
+         */
+        AnswerWithin: number;
     };
     requestBodies: never;
     headers: never;
@@ -5425,17 +5474,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -5508,17 +5587,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -5559,17 +5668,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -5609,17 +5748,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -5658,17 +5827,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -5708,19 +5907,68 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /**
+                 * @description How many seconds after the request arrives this call waits for the
+                 *     operation to settle before it answers `status: processing` with
+                 *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+                 *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+                 *     soon as the funds are handed over. Absent, the call waits its own
+                 *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+                 *     withdraw. The wait only shortens: the operation itself runs to its
+                 *     outcome and settles the request whatever the client waited. Two things
+                 *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+                 *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+                 *     the wait follows. A value outside the range is refused
+                 *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+                 *     few seconds below your client's timeout, so a slow settlement answers
+                 *     with an id to poll instead of a dropped connection. The header is read
+                 *     on every wallet route: it acts on the operations that wait (the ones
+                 *     that list it), and is accepted and changes nothing elsewhere.
+                 */
+                "X-Answer-Within"?: components["parameters"]["AnswerWithin"];
             };
             path?: never;
             cookie?: never;
@@ -5778,19 +6026,68 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /**
+                 * @description How many seconds after the request arrives this call waits for the
+                 *     operation to settle before it answers `status: processing` with
+                 *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+                 *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+                 *     soon as the funds are handed over. Absent, the call waits its own
+                 *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+                 *     withdraw. The wait only shortens: the operation itself runs to its
+                 *     outcome and settles the request whatever the client waited. Two things
+                 *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+                 *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+                 *     the wait follows. A value outside the range is refused
+                 *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+                 *     few seconds below your client's timeout, so a slow settlement answers
+                 *     with an id to poll instead of a dropped connection. The header is read
+                 *     on every wallet route: it acts on the operations that wait (the ones
+                 *     that list it), and is accepted and changes nothing elsewhere.
+                 */
+                "X-Answer-Within"?: components["parameters"]["AnswerWithin"];
             };
             path?: never;
             cookie?: never;
@@ -5821,19 +6118,68 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /**
+                 * @description How many seconds after the request arrives this call waits for the
+                 *     operation to settle before it answers `status: processing` with
+                 *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+                 *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+                 *     soon as the funds are handed over. Absent, the call waits its own
+                 *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+                 *     withdraw. The wait only shortens: the operation itself runs to its
+                 *     outcome and settles the request whatever the client waited. Two things
+                 *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+                 *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+                 *     the wait follows. A value outside the range is refused
+                 *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+                 *     few seconds below your client's timeout, so a slow settlement answers
+                 *     with an id to poll instead of a dropped connection. The header is read
+                 *     on every wallet route: it acts on the operations that wait (the ones
+                 *     that list it), and is accepted and changes nothing elsewhere.
+                 */
+                "X-Answer-Within"?: components["parameters"]["AnswerWithin"];
             };
             path?: never;
             cookie?: never;
@@ -6039,17 +6385,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -6089,17 +6465,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -6139,17 +6545,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -6189,17 +6625,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -6270,17 +6736,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -6321,17 +6817,47 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -6686,19 +7212,68 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /**
+                 * @description How many seconds after the request arrives this call waits for the
+                 *     operation to settle before it answers `status: processing` with
+                 *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+                 *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+                 *     soon as the funds are handed over. Absent, the call waits its own
+                 *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+                 *     withdraw. The wait only shortens: the operation itself runs to its
+                 *     outcome and settles the request whatever the client waited. Two things
+                 *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+                 *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+                 *     the wait follows. A value outside the range is refused
+                 *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+                 *     few seconds below your client's timeout, so a slow settlement answers
+                 *     with an id to poll instead of a dropped connection. The header is read
+                 *     on every wallet route: it acts on the operations that wait (the ones
+                 *     that list it), and is accepted and changes nothing elsewhere.
+                 */
+                "X-Answer-Within"?: components["parameters"]["AnswerWithin"];
             };
             path?: never;
             cookie?: never;
@@ -6816,19 +7391,68 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /**
+                 * @description How many seconds after the request arrives this call waits for the
+                 *     operation to settle before it answers `status: processing` with
+                 *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+                 *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+                 *     soon as the funds are handed over. Absent, the call waits its own
+                 *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+                 *     withdraw. The wait only shortens: the operation itself runs to its
+                 *     outcome and settles the request whatever the client waited. Two things
+                 *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+                 *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+                 *     the wait follows. A value outside the range is refused
+                 *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+                 *     few seconds below your client's timeout, so a slow settlement answers
+                 *     with an id to poll instead of a dropped connection. The header is read
+                 *     on every wallet route: it acts on the operations that wait (the ones
+                 *     that list it), and is accepted and changes nothing elsewhere.
+                 */
+                "X-Answer-Within"?: components["parameters"]["AnswerWithin"];
             };
             path?: never;
             cookie?: never;
@@ -6867,19 +7491,68 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /**
+                 * @description How many seconds after the request arrives this call waits for the
+                 *     operation to settle before it answers `status: processing` with
+                 *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+                 *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+                 *     soon as the funds are handed over. Absent, the call waits its own
+                 *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+                 *     withdraw. The wait only shortens: the operation itself runs to its
+                 *     outcome and settles the request whatever the client waited. Two things
+                 *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+                 *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+                 *     the wait follows. A value outside the range is refused
+                 *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+                 *     few seconds below your client's timeout, so a slow settlement answers
+                 *     with an id to poll instead of a dropped connection. The header is read
+                 *     on every wallet route: it acts on the operations that wait (the ones
+                 *     that list it), and is accepted and changes nothing elsewhere.
+                 */
+                "X-Answer-Within"?: components["parameters"]["AnswerWithin"];
             };
             path?: never;
             cookie?: never;
@@ -6925,19 +7598,68 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /**
+                 * @description How many seconds after the request arrives this call waits for the
+                 *     operation to settle before it answers `status: processing` with
+                 *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+                 *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+                 *     soon as the funds are handed over. Absent, the call waits its own
+                 *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+                 *     withdraw. The wait only shortens: the operation itself runs to its
+                 *     outcome and settles the request whatever the client waited. Two things
+                 *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+                 *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+                 *     the wait follows. A value outside the range is refused
+                 *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+                 *     few seconds below your client's timeout, so a slow settlement answers
+                 *     with an id to poll instead of a dropped connection. The header is read
+                 *     on every wallet route: it acts on the operations that wait (the ones
+                 *     that list it), and is accepted and changes nothing elsewhere.
+                 */
+                "X-Answer-Within"?: components["parameters"]["AnswerWithin"];
             };
             path?: never;
             cookie?: never;
@@ -6972,19 +7694,68 @@ export interface operations {
             query?: never;
             header?: {
                 /**
-                 * @description Optional idempotency token, scoped to `(wallet, key)`; the request body
-                 *     is never compared. Resubmitting a write request with a key already seen
-                 *     does NOT re-execute it and does NOT return the stored result: it
-                 *     answers **HTTP `200`** with
-                 *     `{"error":"duplicate_idempotency_key","message":"Request already processed: <request_id>"}`
-                 *     — a pointer to the original request, not an error for a retry. Read the
-                 *     outcome with `GET /wallet/v1/requests/{request_id}`. Because the status
-                 *     is `200`, a client has to check `error` in the body. Use one key per
-                 *     logical operation; with no header the server mints a fresh key per
-                 *     call, so nothing is deduplicated. Recommended for clients that retry
-                 *     on network failure.
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
                  */
                 "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /**
+                 * @description How many seconds after the request arrives this call waits for the
+                 *     operation to settle before it answers `status: processing` with
+                 *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+                 *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+                 *     soon as the funds are handed over. Absent, the call waits its own
+                 *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+                 *     withdraw. The wait only shortens: the operation itself runs to its
+                 *     outcome and settles the request whatever the client waited. Two things
+                 *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+                 *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+                 *     the wait follows. A value outside the range is refused
+                 *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+                 *     few seconds below your client's timeout, so a slow settlement answers
+                 *     with an id to poll instead of a dropped connection. The header is read
+                 *     on every wallet route: it acts on the operations that wait (the ones
+                 *     that list it), and is accepted and changes nothing elsewhere.
+                 */
+                "X-Answer-Within"?: components["parameters"]["AnswerWithin"];
             };
             path?: never;
             cookie?: never;

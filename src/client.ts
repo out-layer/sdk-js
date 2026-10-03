@@ -127,15 +127,28 @@ export type ConfidentialBalancesResponse = Schemas['ConfidentialBalancesResponse
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-type Idempotent = { idempotencyKey?: string };
+type Idempotent = {
+  idempotencyKey?: string;
+  /**
+   * How many seconds the call waits for the operation to settle before it
+   * answers `status: "processing"` with a `poll_url` (0–80; the server's full
+   * wait when absent). Set it below your own timeout.
+   */
+  answerWithinSeconds?: number;
+};
 
 /**
  * Called ONCE per operation, outside the closure `runWithRetry` re-runs: a key
  * minted inside it would be a new key on every attempt, and a retry of a write
  * that did execute would execute again.
  */
-function idempotencyHeader(key: string | undefined): Record<string, string> {
-  return { 'X-Idempotency-Key': key ?? newIdempotencyKey() };
+function idempotencyHeader(
+  key: string | undefined,
+  answerWithinSeconds?: number,
+): Record<string, string> {
+  const headers: Record<string, string> = { 'X-Idempotency-Key': key ?? newIdempotencyKey() };
+  if (answerWithinSeconds !== undefined) headers['X-Answer-Within'] = String(answerWithinSeconds);
+  return headers;
 }
 
 // ---------------------------------------------------------------------------
@@ -437,8 +450,8 @@ export class OutlayerClient {
   // ------- Wallet write -------
 
   call(opts: CallRequest & Idempotent): Promise<CallResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/call', {
@@ -450,8 +463,8 @@ export class OutlayerClient {
   }
 
   transfer(opts: TransferRequest & Idempotent): Promise<CallResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/transfer', {
@@ -471,8 +484,8 @@ export class OutlayerClient {
    * `approval_id` and `request_hash` for the approval flow.
    */
   delete(opts: DeleteRequest & Idempotent): Promise<DeleteResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/delete', {
@@ -491,8 +504,8 @@ export class OutlayerClient {
    * required.
    */
   storageDeposit(opts: StorageDepositRequest & Idempotent): Promise<StorageDepositResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/storage-deposit', {
@@ -504,8 +517,8 @@ export class OutlayerClient {
   }
 
   intentsDeposit(opts: IntentsDepositRequest & Idempotent): Promise<IntentsDepositResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/intents/deposit', {
@@ -517,8 +530,8 @@ export class OutlayerClient {
   }
 
   withdraw(opts: WithdrawRequest & Idempotent): Promise<WithdrawResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/intents/withdraw', {
@@ -531,8 +544,8 @@ export class OutlayerClient {
 
   /** Transfer inside NEAR Intents to another account's intents balance — gasless, stays inside the intents pool (not a withdrawal). */
   intentsTransfer(opts: IntentsTransferRequest & Idempotent): Promise<WithdrawResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/intents/transfer', {
@@ -551,8 +564,8 @@ export class OutlayerClient {
   }
 
   swap(opts: SwapRequest & Idempotent): Promise<SwapResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/intents/swap', {
@@ -733,8 +746,8 @@ export class OutlayerClient {
   createLimitOrder(
     opts: LimitOrderCreateRequest & Idempotent,
   ): Promise<LimitOrderCreated | LimitOrderPendingApproval | LimitOrderProcessing> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/limit-orders', {
@@ -837,8 +850,8 @@ export class OutlayerClient {
   createPaymentCheck(
     opts: PaymentCheckCreateRequest & Idempotent,
   ): Promise<PaymentCheckCreateResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/payment-check/create', {
@@ -858,8 +871,8 @@ export class OutlayerClient {
   batchCreatePaymentChecks(
     opts: PaymentCheckBatchCreateRequest & Idempotent,
   ): Promise<PaymentCheckBatchCreateResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/payment-check/batch-create', {
@@ -882,8 +895,8 @@ export class OutlayerClient {
   claimPaymentCheck(
     opts: PaymentCheckClaimRequest & Idempotent,
   ): Promise<PaymentCheckClaimResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/payment-check/claim', {
@@ -903,8 +916,8 @@ export class OutlayerClient {
   reclaimPaymentCheck(
     opts: PaymentCheckReclaimRequest & Idempotent,
   ): Promise<PaymentCheckReclaimResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/payment-check/reclaim', {
@@ -985,8 +998,8 @@ export class OutlayerClient {
   confidentialShield(
     opts: ConfidentialShieldRequest & Idempotent,
   ): Promise<ConfidentialOpResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/shield', {
@@ -1011,8 +1024,8 @@ export class OutlayerClient {
   confidentialUnshield(
     opts: ConfidentialUnshieldRequest & Idempotent,
   ): Promise<ConfidentialOpResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/unshield', {
@@ -1031,8 +1044,8 @@ export class OutlayerClient {
   confidentialWithdraw(
     opts: ConfidentialWithdrawRequest & Idempotent,
   ): Promise<ConfidentialOpResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/withdraw', {
@@ -1055,8 +1068,8 @@ export class OutlayerClient {
   confidentialTransfer(
     opts: ConfidentialTransferRequest & Idempotent,
   ): Promise<ConfidentialOpResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/transfer', {
@@ -1069,8 +1082,8 @@ export class OutlayerClient {
 
   /** Swap between two distinct assets inside the confidential shard. */
   confidentialSwap(opts: ConfidentialSwapRequest & Idempotent): Promise<ConfidentialOpResponse> {
-    const { idempotencyKey, ...body } = opts;
-    const headers = idempotencyHeader(idempotencyKey);
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
     return runWithRetry(
       () =>
         this.client.POST('/wallet/v1/confidential/swap', {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AgentConnectDeniedError,
   BadRequestError,
+  DuplicateRequestError,
   type Nep413Auth,
   NotFoundError,
   OutlayerClient,
@@ -2274,6 +2275,65 @@ describe('wallet_busy is the one 409 worth asking again', () => {
       expect(err.inFlightRequestId).toBe('req-42');
       return true;
     });
+  });
+
+  it('a 200 duplicate_idempotency_key is thrown with the request it names, not returned as the answer', async () => {
+    let attempts = 0;
+    server.use(
+      http.post(`${BASE}/wallet/v1/intents/withdraw`, () => {
+        attempts += 1;
+        return HttpResponse.json(
+          {
+            error: 'duplicate_idempotency_key',
+            message: 'Request already processed: req-first',
+            request_id: 'req-first',
+            type: 'withdraw',
+            status: 'processing',
+            poll_url: '/wallet/v1/requests/req-first',
+            created_at: '2026-10-03T10:00:00Z',
+            checks: [{ check_id: 'c-1', check_key: 'k-1', status: 'creating' }],
+          },
+          { status: 200 },
+        );
+      }),
+    );
+    const client = new OutlayerClient({
+      apiKey,
+      retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+    await expect(
+      client.withdraw({ chain: 'near', to: 'bob.near', amount: '1', idempotencyKey: 'k-1' }),
+    ).rejects.toSatisfy((e: unknown) => {
+      const err = e as DuplicateRequestError;
+      expect(err).toBeInstanceOf(DuplicateRequestError);
+      expect(err.code).toBe('duplicate_idempotency_key');
+      expect(err.status).toBe(200);
+      expect(err.requestId).toBe('req-first');
+      expect(err.requestType).toBe('withdraw');
+      expect(err.requestStatus).toBe('processing');
+      expect(err.pollUrl).toBe('/wallet/v1/requests/req-first');
+      expect(err.checks).toEqual([{ check_id: 'c-1', check_key: 'k-1', status: 'creating' }]);
+      return true;
+    });
+    expect(attempts).toBe(1);
+  });
+
+  it('sends X-Answer-Within when asked, and nothing when not', async () => {
+    const seen: Array<string | null> = [];
+    server.use(
+      http.post(`${BASE}/wallet/v1/intents/withdraw`, ({ request }) => {
+        seen.push(request.headers.get('X-Answer-Within'));
+        return HttpResponse.json({
+          request_id: 'r',
+          status: 'processing',
+          poll_url: '/wallet/v1/requests/r',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.withdraw({ chain: 'near', to: 'bob.near', amount: '1', answerWithinSeconds: 5 });
+    await client.withdraw({ chain: 'near', to: 'bob.near', amount: '1' });
+    expect(seen).toEqual(['5', null]);
   });
 
   it('does NOT retry a 409 that will never resolve itself', async () => {

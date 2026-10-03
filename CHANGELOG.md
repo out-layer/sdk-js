@@ -4,7 +4,18 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- `answerWithinSeconds` on every write that waits on a settlement: sends
+  `X-Answer-Within`, so the call answers `processing` with a `poll_url` within
+  that many seconds instead of outliving your timeout.
+
 ### Fixed
+
+- A `200` whose body is `duplicate_idempotency_key` is thrown as a
+  `DuplicateRequestError` (`requestId`, `requestType`, `requestStatus`,
+  `result`, `pollUrl`, `checks`) instead of being returned as if it were the
+  operation's answer.
 
 - **Writes send `X-Idempotency-Key`, the header the coordinator reads.** They
   sent `Idempotency-Key`, which the coordinator ignores, so a retried write ran

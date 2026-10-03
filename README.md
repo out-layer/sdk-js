@@ -247,7 +247,7 @@ See [errors.md](docs/errors.md) for the full list.
 
 Transient 5xx and network errors are retried automatically (3 attempts, exponential backoff 100ms → 1.6s). 4xx is not retried — those are deterministic.
 
-Write operations get an auto-generated `X-Idempotency-Key` per call; retries from the SDK's own retry layer reuse the same key, so repeated calls don't double-spend. To control idempotency yourself (e.g., for at-least-once delivery from a queue):
+Write operations get an auto-generated `X-Idempotency-Key` per call; retries from the SDK's own retry layer reuse the same key, so repeated calls don't double-spend. A key the server has seen answers `duplicate_idempotency_key`, thrown as a `DuplicateRequestError` carrying the request it belongs to (`requestId`, `requestStatus`, `pollUrl`; for a payment-check create, `checks` with each `check_key`, `null` when asked with another API key than the one that created it). This is what the SDK's own retry throws when the first attempt did run and the retry meets its key: catch it, take `requestId`, and poll `pollUrl` until the status is terminal — nothing ran twice. Pass `answerWithinSeconds` to be answered `processing` within that many seconds of the request's arrival instead of waiting the server's full wait (up to 80 s). To control idempotency yourself (e.g., for at-least-once delivery from a queue):
 
 ```ts
 await client.withdraw({

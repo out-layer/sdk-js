@@ -23,6 +23,18 @@ export type ErrorBody = {
   in_flight_request_id?: string | null;
   /** `wallet_busy` only: what the holder is doing, e.g. `cross_chain_withdraw`. */
   in_flight_operation?: string | null;
+  /** `duplicate_idempotency_key` only: the request the key belongs to. */
+  request_id?: string;
+  /** `duplicate_idempotency_key` only: its type, e.g. `withdraw`. */
+  type?: string;
+  /** `duplicate_idempotency_key` only: its status as recorded. */
+  status?: string;
+  /** `duplicate_idempotency_key` only: its result, once the row has one. */
+  result?: unknown;
+  /** `duplicate_idempotency_key` only: where to follow it while not terminal. */
+  poll_url?: string;
+  /** `duplicate_idempotency_key` of a payment-check create or batch: the checks it made, with their keys. */
+  checks?: Array<{ check_id: string; check_key: string | null; status: string }>;
 };
 
 export interface OutlayerErrorOptions {
@@ -175,6 +187,42 @@ export class WalletBusyError extends OutlayerError {
   }
 }
 
+/**
+ * An idempotency key the server has seen. Nothing ran again; this is the
+ * request the key belongs to — the one to read, and to follow on
+ * {@link pollUrl} while {@link requestStatus} is not terminal. Thrown on an
+ * HTTP 200, because the server refused nothing.
+ */
+export class DuplicateRequestError extends OutlayerError {
+  readonly requestId: string;
+  readonly requestType: string | null;
+  readonly requestStatus: string | null;
+  readonly result: unknown;
+  readonly pollUrl: string | null;
+  /** A payment-check create or batch: the checks that key made, each with its `check_key` — `null` when the asking API key is not the one that created it. */
+  readonly checks: Array<{ check_id: string; check_key: string | null; status: string }>;
+
+  constructor(
+    opts: OutlayerErrorOptions & {
+      requestId: string;
+      requestType?: string | undefined;
+      requestStatus?: string | undefined;
+      result?: unknown;
+      pollUrl?: string | undefined;
+      checks?: Array<{ check_id: string; check_key: string | null; status: string }> | undefined;
+    },
+  ) {
+    super(opts);
+    this.name = 'DuplicateRequestError';
+    this.requestId = opts.requestId;
+    this.requestType = opts.requestType ?? null;
+    this.requestStatus = opts.requestStatus ?? null;
+    this.result = opts.result;
+    this.pollUrl = opts.pollUrl ?? null;
+    this.checks = opts.checks ?? [];
+  }
+}
+
 const codeToCtor: Partial<Record<ErrorCode, new (opts: OutlayerErrorOptions) => OutlayerError>> = {
   policy_denied: PolicyDeniedError,
   wallet_frozen: WalletFrozenError,
@@ -221,6 +269,20 @@ export function makeError(body: ErrorBody, status: number): OutlayerError {
       ...opts,
       inFlightRequestId: body.in_flight_request_id,
       inFlightOperation: body.in_flight_operation,
+    });
+  }
+  // The request a seen key belongs to is at the top level of the body too.
+  // Without `request_id` it is the answer of a server before this field: the
+  // id is then only inside `message`, and the plain error carries that.
+  if (code === 'duplicate_idempotency_key' && body.request_id) {
+    return new DuplicateRequestError({
+      ...opts,
+      requestId: body.request_id,
+      requestType: body.type,
+      requestStatus: body.status,
+      result: body.result,
+      pollUrl: body.poll_url,
+      checks: body.checks,
     });
   }
   const Ctor = codeToCtor[code] ?? OutlayerError;

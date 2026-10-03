@@ -4169,6 +4169,9 @@ paths:
             The key may not make this call. By `reason`: `project_not_allowed`
             — its scope does not include this project; `no_deposit` — a key whose
             value was given (a trial, a grant) sent `X-Attached-Deposit`;
+            `policy_row_not_owner` — a trading connector was given a policy row
+            that is not the wallet owner's; `calls_suspended` — the wallet is
+            blocked on the trading connectors for a while;
             `tee_session_required`, `vault_not_verified`, `wallet_not_yours` —
             the wallet or vault named does not stand behind this caller.
           content:
@@ -4238,7 +4241,8 @@ paths:
             Three different refusals share this status, and a caller tells them
             apart by `reason` rather than by the code:
 
-            * `call_already_in_flight` — an ALLOWANCE runs one call at a time.
+            * `call_already_in_flight` — an ALLOWANCE runs one call at a time
+              (a sponsored key: as many as its code's `max_parallel`).
               **`terminal: false`**: it clears by itself when the call in flight
               finishes, so the move is to wait, or to fund the key (money is not
               limited this way, and a funded key answers both at once);
@@ -4536,8 +4540,13 @@ paths:
           `trial: { calls, calls_used, calls_left }`. There is no balance to
           read: a trial is not measured in money.
 
-        One per wallet.
-        **The key string is shown once and cannot be re-issued.**
+        One per wallet. Any wallet credential claims it: `Bearer wk_…` or
+        `Bearer near:…`.
+
+        **The key is derived, not drawn at random**, so the wallet reads it
+        again at any time with `GET /wallet/v1/payment-key` under the same
+        credential. A client that derives its wallets from a NEAR account and
+        a seed stores nothing.
       security:
         - BearerAuth: []
       responses:
@@ -4546,32 +4555,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [payment_key, owner, nonce, calls, expires_at, project_ids]
-                properties:
-                  payment_key:
-                    type: string
-                    description: The whole `X-Payment-Key` header value. Shown once.
-                  owner: { type: string }
-                  nonce: { type: integer }
-                  calls:
-                    type: integer
-                    description: How many connector calls this key makes. The whole of a trial's budget.
-                  expires_at:
-                    type: string
-                    format: date-time
-                    description: When the key stops working, used up or not — the wallet's creation plus the trial's days.
-                  project_ids:
-                    type: array
-                    items: { type: string }
-                    description: Anything else is refused as `project_not_allowed`.
-                  note: { type: string }
+                $ref: '#/components/schemas/TrialKeyResponse'
         '401':
-          description: "`unauthorized` — no `wk_`, or one that is unknown or revoked."
+          description: "No wallet credential, or one that is unknown, revoked or wrongly signed — the wallet API's own answer."
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TrialKeyRefusal'
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: "`trial_window_closed` — the wallet is past its first week. `trial_unavailable` — no trial is offered to this caller. Both terminal: the way forward is a funded payment key."
           content:
@@ -4585,13 +4575,139 @@ paths:
               schema:
                 $ref: '#/components/schemas/TrialKeyRefusal'
         '409':
-          description: "`trial_already_claimed` — this wallet has had its one. Terminal."
+          description: "`trial_already_claimed` — this wallet has had its one; read it again with `GET /wallet/v1/payment-key`. Terminal."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/TrialKeyRefusal'
         '503':
           description: "`internal_error` — the key could not be issued right now. `terminal: false`: the same request works later."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+
+  /wallet/v1/payment-key:
+    get:
+      tags: [Subscriptions]
+      operationId: getPaymentKey
+      summary: Read this wallet's nonce-0 key again
+      description: |
+        The key `POST /trial-key` or `POST /wallet/v1/sponsorship` issued, as
+        the same string, as many times as asked. The key is derived from the
+        wallet's master in the keystore and bound to the credential that
+        claimed it (`Bearer wk_…`, or `Bearer near:…`): only that credential
+        reads it, and the key works only while that `wk_` is live. A client that derives its
+        wallets from a NEAR account and a seed therefore stores no key at all
+        and re-reads it after a restart.
+
+        `subscription` is true once the key carries a subscription — an
+        operator's gift or a sponsor code's grant — rather than the bare trial;
+        `GET /subscription/status` with the key has the figures.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The key and its term.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentKeyResponse'
+        '401':
+          description: "No wallet credential, or one that is unknown, revoked or wrongly signed — the wallet API's own answer."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: "`payment_key_other_credential` — the key was claimed with another credential of this wallet; only that one reads it."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+        '404':
+          description: "`no_payment_key` — this wallet has no nonce-0 key yet: claim the trial or redeem a sponsor code."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+        '409':
+          description: "`payment_key_not_recoverable` — the key was issued at random before keys were derived; it was shown once. `payment_key_revoked` — the `wk_` it was claimed with is revoked, and the key with it. Create a payment key instead."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+        '503':
+          description: "`internal_error` — `terminal: false`: the same request works later."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+
+  /wallet/v1/sponsorship:
+    post:
+      tags: [Subscriptions]
+      operationId: redeemSponsorCode
+      summary: Redeem a sponsor code — a subscription on this wallet's nonce-0 key, paid by the sponsor
+      description: |
+        A sponsor code, `spn_…`, is a secret somebody gave you: a friend's
+        one-time link, a voucher posted in public, or the backend that runs you.
+        Redeeming it puts the code's allowance on your wallet's nonce-0 key for
+        the code's term — the trial's key if you claimed one, a new key if not —
+        and converts the trial: no call count from then on. The key then pays
+        for connector calls exactly as a bought subscription does.
+
+        Any wallet credential: `Bearer wk_…` or `Bearer near:…`. The trial's
+        claim window does not apply; the code is the gate. A key carries one
+        sponsor while its grant is live: the same code again, or another code
+        before the grant ends, changes nothing and answers what the key holds.
+        After the grant ends, another code is taken; the same code never is
+        again.
+
+        A code that cannot be redeemed answers `404 sponsor_code_invalid`,
+        whatever the reason. Ask the person who gave it to you. The key string
+        comes back only to the credential the key is bound to; another
+        credential of the wallet redeems the grant without seeing the key.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  description: The code as given, `spn_…`.
+      responses:
+        '200':
+          description: The key, now carrying the sponsor's subscription — or, when the key already carries a live sponsor, as it already was.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SponsorshipResponse'
+        '401':
+          description: "No wallet credential, or one that is unknown, revoked or wrongly signed — the wallet API's own answer."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: "`sponsor_code_invalid` — the code cannot be redeemed by this wallet now. Terminal; nothing more is said."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+        '409':
+          description: "`sponsor_cannot_top_up` — the key can already spend more than this code gives; a sponsorship tops up and never takes away. `payment_key_deleted` — the wallet's nonce-0 key was deleted and the slot cannot be used again. `payment_key_revoked` — the `wk_` the key was claimed with is revoked, and the key with it."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialKeyRefusal'
+        '503':
+          description: "`internal_error` — `terminal: false`: the same request works later."
           content:
             application/json:
               schema:
@@ -4976,7 +5092,9 @@ components:
       bearerFormat: wk_<32-hex-chars>
       description: |
         API key returned by `POST /register`. Format `wk_<hex>`. Pass as
-        `Authorization: Bearer wk_...`.
+        `Authorization: Bearer wk_...`. Every route that takes it also takes a
+        deterministic wallet's `Bearer near:<base64url>` token (see
+        `POST /register` and `authSign`).
     OwnerSession:
       type: http
       scheme: bearer
@@ -4996,8 +5114,10 @@ components:
       name: X-Payment-Key
       description: |
         A payment key, `{owner}:{nonce}:{secret}`. Created by
-        `POST /wallet/v1/create-payment-key` and funded on chain, or claimed as a
-        trial with `POST /trial-key`. A wallet's `Authorization: Bearer wk_...`
+        `POST /wallet/v1/create-payment-key` and funded on chain, claimed as a
+        trial with `POST /trial-key`, or granted by a sponsor code with
+        `POST /wallet/v1/sponsorship`; the nonce-0 key is read again with
+        `GET /wallet/v1/payment-key`. A wallet's `Authorization: Bearer wk_...`
         does not stand in for it: on `/call` it is refused as `wk_is_not_a_payer`.
 
   parameters:
@@ -5318,6 +5438,12 @@ components:
             row's on-chain access condition admits the paying key's owner. On a
             connector project a body reference is used as it is; without one,
             `X-Use-Owner-Secret` names the wallet's own row.
+            On a trading connector (`hyperliquid`, `polymarket`) of a wallet
+            that has an owner, the policy is the OWNER's: with no reference the
+            owner's row `{owner, <connector>}` is attached, a row of the owner's
+            is kept, and any other account's is refused with
+            `403 policy_row_not_owner`; doing that repeatedly answers
+            `403 calls_suspended` to the wallet's calls for a while.
             Refused with `invalid_secrets_ref` (400) when `account_id` is not a
             NEAR account id or `profile` is not 1–64 bytes or holds an ASCII
             character other than a letter, digit, `-` or `_`: the contract
@@ -5537,16 +5663,79 @@ components:
         this: { type: boolean, description: The device this session is on. }
     TrialKeyRefusal:
       type: object
-      description: Every refusal from `POST /trial-key`. Branch on `reason`.
+      description: >
+        Every refusal of the nonce-0 key routes — `POST /trial-key`,
+        `GET /wallet/v1/payment-key`, `POST /wallet/v1/sponsorship` — except a
+        refused credential, which answers in the wallet API's own shape
+        (`ErrorResponse`). Branch on `reason`.
       properties:
         error: { type: string, description: The human sentence. }
         reason:
           type: string
-          enum: [unauthorized, trial_disabled, trial_window_closed, trial_already_claimed, trial_unavailable, internal_error]
+          enum: [unauthorized, trial_disabled, trial_window_closed, trial_already_claimed, trial_unavailable, no_payment_key, payment_key_not_recoverable, payment_key_revoked, payment_key_other_credential, sponsor_code_invalid, sponsor_cannot_top_up, payment_key_deleted, internal_error]
         terminal:
           type: boolean
-          description: "`false` only for `internal_error`: the same request works later. Every other refusal is final, and the way forward is a funded payment key."
+          description: "`false` only for `internal_error`: the same request works later. Every other refusal is final."
       required: [error, reason, terminal]
+    TrialKeyResponse:
+      type: object
+      required: [payment_key, owner, nonce, calls, expires_at, project_ids]
+      properties:
+        payment_key:
+          type: string
+          description: The whole `X-Payment-Key` header value. Read again with `GET /wallet/v1/payment-key`.
+        owner: { type: string }
+        nonce: { type: integer }
+        calls:
+          type: integer
+          description: How many connector calls this key makes. The whole of a trial's budget.
+        expires_at:
+          type: string
+          format: date-time
+          description: When the key stops working, used up or not — the wallet's creation plus the trial's days.
+        project_ids:
+          type: array
+          items: { type: string }
+          description: Anything else is refused as `project_not_allowed`.
+        note: { type: string }
+    PaymentKeyResponse:
+      type: object
+      required: [payment_key, owner, nonce, subscription]
+      properties:
+        payment_key:
+          type: string
+          description: The whole `X-Payment-Key` header value.
+        owner: { type: string }
+        nonce: { type: integer, enum: [0] }
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+        subscription:
+          type: boolean
+          description: The key carries a live subscription — an operator's gift or a sponsor code's grant that has not ended — rather than the bare trial or an ended grant.
+    SponsorshipResponse:
+      type: object
+      required: [owner, nonce, allowance_usd, sponsor, project_ids]
+      properties:
+        payment_key:
+          type: string
+          description: The whole `X-Payment-Key` header value. Absent when this credential is not the one the key is bound to, or for a key drawn at random rather than derived.
+        owner: { type: string }
+        nonce: { type: integer, enum: [0] }
+        allowance_usd:
+          type: string
+          description: The allowance the key carries, minimal units.
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+        sponsor:
+          type: string
+          description: The name of the code the key carries, as its creator set it.
+        project_ids:
+          type: array
+          items: { type: string }
+          description: What this key may call — the connectors. Anything else is refused as `project_not_allowed`.
+        note: { type: string }
     CallRefusal:
       type: object
       description: >
@@ -5576,7 +5765,7 @@ components:
         reason:
           type: string
           description: Machine-readable name of the refusal.
-          enum: [allowance_no_deposit, bad_key_format, call_not_found, compute_limit_too_low, expires_too_soon, insufficient_allowance, insufficient_balance, internal_error, invalid_key, invalid_secrets_ref, invalid_version_key, keystore_error, max_per_call_exceeded, missing_payment_key, no_bound_identity, no_deposit, operation_limit_reached, out_of_funds, project_not_allowed, project_not_found, rate_limit_exceeded, upstream_unavailable, tee_session_required, timeout, call_already_in_flight, trial_exhausted, trial_expired, trial_key_not_purchasable, invalid_request, unknown_operation, vault_not_verified, vault_unlocked, wallet_not_yours, wk_is_not_a_payer]
+          enum: [allowance_no_deposit, bad_key_format, call_not_found, compute_limit_too_low, expires_too_soon, insufficient_allowance, insufficient_balance, internal_error, invalid_key, invalid_secrets_ref, invalid_version_key, keystore_error, max_per_call_exceeded, missing_payment_key, no_bound_identity, no_deposit, operation_limit_reached, policy_row_not_owner, calls_suspended, out_of_funds, project_not_allowed, project_not_found, rate_limit_exceeded, upstream_unavailable, tee_session_required, timeout, call_already_in_flight, trial_exhausted, trial_expired, trial_key_not_purchasable, invalid_request, unknown_operation, vault_not_verified, vault_unlocked, wallet_not_yours, wk_is_not_a_payer]
         expires_at:
           type: string
           format: date-time
@@ -8559,7 +8748,11 @@ components:
               outcome was settled from the chain after its response came
               back `processing`. A `failed` request carrying
               `never_executed: true` or `never_submitted: true` moved no
-              funds and is safe to retry.
+              funds and is safe to retry under a new idempotency key. A
+              `failed` one without them may have moved funds — a bridge
+              that failed or refunded (`result.reason`), or a NEAR
+              transaction that failed on chain after its gas was spent —
+              so reconcile the balance before acting again.
             - Other request types are not yet schema-documented; treat the
               object as opaque until added in a later spec release.
 

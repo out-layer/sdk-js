@@ -79,6 +79,9 @@ That's the whole flow. The wallet has no policy yet, so withdraws are unrestrict
 | `client.evmSignTypedData({...})` | Sign EIP-712 v4 typed data with the EVM key — e.g. a Polymarket CLOB order |
 | `client.evmSignMessage({...})` | Sign an EIP-191 `personal_sign` message with the EVM key |
 | `client.evmSignTransaction({...})` | Sign a raw unsigned EVM tx (you assemble + broadcast; gated by `evm_sign.raw_tx`) |
+| `client.claimTrialKey()` | The wallet's trial: a nonce-0 payment key for connector calls in its first week |
+| `client.redeemSponsorCode(code)` | Redeem a sponsor code (`spn_…`): a subscription on the nonce-0 key, paid by the sponsor |
+| `client.getPaymentKey()` | The nonce-0 key derived again — send it as `X-Payment-Key`; nothing to store |
 | `client.getRequest(id)` | Status of an async operation |
 | `client.listRequests({...})` | List recent operations |
 | `client.policy.*` | Policy lifecycle (encrypt → sign → store) |

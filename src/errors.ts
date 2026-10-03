@@ -1,10 +1,15 @@
 import type { components } from './types.js';
 
 export type ApiErrorCode = components['schemas']['ErrorCode'];
-export type ErrorCode = ApiErrorCode | 'network_error' | 'parse_error';
+/** `reason` of a nonce-0 key refusal (`/trial-key`, `/wallet/v1/payment-key`, `/wallet/v1/sponsorship`). */
+export type KeyRefusalReason = components['schemas']['TrialKeyRefusal']['reason'];
+export type ErrorCode = ApiErrorCode | KeyRefusalReason | 'network_error' | 'parse_error';
 
 export type ErrorBody = {
-  error?: ApiErrorCode;
+  /** The code — or, on a body that carries `reason`, the human sentence. */
+  error?: string;
+  /** Present on the `{error, reason, terminal}` refusals: the code to branch on. */
+  reason?: KeyRefusalReason;
   message?: string;
   details?: unknown;
   /** `onchain_tx_failed` only: hash of the broadcast (and reverted) tx. */
@@ -238,11 +243,15 @@ const codeToCtor: Partial<Record<ErrorCode, new (opts: OutlayerErrorOptions) => 
   unsupported_chain: BadRequestError,
   unsupported_token: BadRequestError,
   binding_not_found: NotFoundError,
+  no_payment_key: NotFoundError,
+  sponsor_code_invalid: NotFoundError,
 };
 
 export function makeError(body: ErrorBody, status: number): OutlayerError {
-  const code: ErrorCode = body.error ?? 'parse_error';
-  const message = body.message ?? `HTTP ${status}`;
+  // Two body shapes: the wallet API's `{error: <code>, message}`, and the
+  // refusals that carry `{error: <sentence>, reason: <code>, terminal}`.
+  const code: ErrorCode = body.reason ?? (body.error as ApiErrorCode | undefined) ?? 'parse_error';
+  const message = (body.reason ? body.error : body.message) ?? `HTTP ${status}`;
   const opts: OutlayerErrorOptions =
     body.details !== undefined
       ? { code, message, status, details: body.details }

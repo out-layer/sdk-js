@@ -301,6 +301,69 @@ describe('Wallet reads: getRequest', () => {
   });
 });
 
+describe('The nonce-0 key: trial, payment-key, sponsorship', () => {
+  it('redeems a code with the bearer and answers the key', async () => {
+    let auth = '';
+    let sent: unknown = null;
+    server.use(
+      http.post(`${BASE}/wallet/v1/sponsorship`, async ({ request }) => {
+        auth = request.headers.get('authorization') ?? '';
+        sent = await request.json();
+        return HttpResponse.json({
+          payment_key: `a1:0:${'0'.repeat(64)}`,
+          owner: 'a1',
+          nonce: 0,
+          allowance_usd: '100000',
+          expires_at: '2027-10-03T00:00:00Z',
+          sponsor: 'friend',
+          project_ids: ['connectors.outlayer.near/*'],
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.redeemSponsorCode('spn_abc');
+    expect(auth).toBe(`Bearer ${apiKey}`);
+    expect(sent).toEqual({ code: 'spn_abc' });
+    expect(r.sponsor).toBe('friend');
+  });
+
+  it('reads `reason` as the code of a {error, reason, terminal} refusal', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/sponsorship`, () =>
+        HttpResponse.json(
+          {
+            error: 'This sponsor code is not valid.',
+            reason: 'sponsor_code_invalid',
+            terminal: true,
+          },
+          { status: 404 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const err = await client.redeemSponsorCode('spn_nope').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect((err as OutlayerError).code).toBe('sponsor_code_invalid');
+    expect((err as OutlayerError).message).toBe('This sponsor code is not valid.');
+  });
+
+  it('reads the key again from GET /wallet/v1/payment-key', async () => {
+    server.use(
+      http.get(`${BASE}/wallet/v1/payment-key`, () =>
+        HttpResponse.json({
+          payment_key: 'a1:0:k',
+          owner: 'a1',
+          nonce: 0,
+          expires_at: null,
+          subscription: false,
+        }),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    expect((await client.getPaymentKey()).payment_key).toBe('a1:0:k');
+  });
+});
+
 describe('Wallet reads: listRequests', () => {
   it('forwards filter query params', async () => {
     let receivedQuery = '';

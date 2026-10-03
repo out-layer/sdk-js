@@ -87,6 +87,10 @@ export type PaymentCheckListResponse = Schemas['PaymentCheckListResponse'];
 export type PaymentCheckPeekRequest = Schemas['PaymentCheckPeekRequest'];
 export type PaymentCheckPeekResponse = Schemas['PaymentCheckPeekResponse'];
 
+export type TrialKeyResponse = Schemas['TrialKeyResponse'];
+export type PaymentKeyResponse = Schemas['PaymentKeyResponse'];
+export type SponsorshipResponse = Schemas['SponsorshipResponse'];
+
 export type RequestStatusResponse = Schemas['RequestStatusResponse'];
 export type RequestListResponse = Schemas['RequestListResponse'];
 
@@ -961,6 +965,42 @@ export class OutlayerClient {
   peekPaymentCheck(opts: PaymentCheckPeekRequest): Promise<PaymentCheckPeekResponse> {
     return runWithRetry(
       () => this.client.POST('/wallet/v1/payment-check/peek', { body: opts }),
+      this.retry,
+    );
+  }
+
+  // ------- The nonce-0 key: trial, sponsor code -------
+
+  /**
+   * Claim the wallet's trial: a payment key (nonce 0) good for a number of
+   * connector calls in the wallet's first week. The key is derived from the
+   * wallet's master, so {@link getPaymentKey} reads it again — nothing needs
+   * storing. A `trial_already_claimed` refusal means the wallet already has it
+   * (also after a retry whose first attempt landed): read it with
+   * {@link getPaymentKey}.
+   */
+  claimTrialKey(): Promise<TrialKeyResponse> {
+    return runWithRetry(() => this.client.POST('/trial-key'), this.retry);
+  }
+
+  /**
+   * The wallet's nonce-0 key — the trial's, or a sponsor code's — derived
+   * again, as many times as asked. Send `payment_key` as `X-Payment-Key`.
+   */
+  getPaymentKey(): Promise<PaymentKeyResponse> {
+    return runWithRetry(() => this.client.GET('/wallet/v1/payment-key'), this.retry);
+  }
+
+  /**
+   * Redeem a sponsor code (`spn_…`): the sponsor's subscription lands on the
+   * wallet's nonce-0 key, created if absent, converting the trial. A second
+   * redeem of a code the key already carries changes nothing and answers the
+   * state the key has, so a retry is safe. A code that cannot be redeemed is
+   * `sponsor_code_invalid`, whatever the reason.
+   */
+  redeemSponsorCode(code: string): Promise<SponsorshipResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/sponsorship', { body: { code } }),
       this.retry,
     );
   }

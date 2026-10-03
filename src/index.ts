@@ -55,6 +55,9 @@ export type {
   PaymentCheckListResponse,
   PaymentCheckPeekRequest,
   PaymentCheckPeekResponse,
+  TrialKeyResponse,
+  PaymentKeyResponse,
+  SponsorshipResponse,
   RequestStatusResponse,
   RequestListResponse,
   PolicyResponse,
@@ -98,7 +101,7 @@ export {
   DuplicateRequestError,
 } from './errors.js';
 
-export type { ApiErrorCode, ErrorCode } from './errors.js';
+export type { ApiErrorCode, ErrorCode, KeyRefusalReason } from './errors.js';
 
 export type { ClientOptions, Network, RetryConfig, UnauthenticatedOptions } from './http.js';
 

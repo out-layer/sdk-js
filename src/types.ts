@@ -2583,9 +2583,10 @@ export interface paths {
          *     again.
          *
          *     A code that cannot be redeemed answers `404 sponsor_code_invalid`,
-         *     whatever the reason. Ask the person who gave it to you. The key string
-         *     comes back only to the credential the key is bound to; another
-         *     credential of the wallet redeems the grant without seeing the key.
+         *     whatever the reason. Ask the person who gave it to you. Only the
+         *     credential that reads the wallet's nonce-0 key redeems onto it — the
+         *     same rule as `GET /wallet/v1/payment-key` — and a refused redeem takes
+         *     no use of the code.
          */
         post: operations["redeemSponsorCode"];
         delete?: never;
@@ -3065,8 +3066,8 @@ export interface components {
             subscription: boolean;
         };
         SponsorshipResponse: {
-            /** @description The whole `X-Payment-Key` header value. Absent when this credential is not the one the key is bound to, or for a key drawn at random rather than derived. */
-            payment_key?: string;
+            /** @description The whole `X-Payment-Key` header value. */
+            payment_key: string;
             owner: string;
             /** @enum {integer} */
             nonce: 0;
@@ -9696,6 +9697,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description `payment_key_other_credential` — the wallet's nonce-0 key was claimed with another of its credentials; redeem with that one. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrialKeyRefusal"];
+                };
+            };
             /** @description `sponsor_code_invalid` — the code cannot be redeemed by this wallet now. Terminal; nothing more is said. */
             404: {
                 headers: {
@@ -9705,7 +9715,7 @@ export interface operations {
                     "application/json": components["schemas"]["TrialKeyRefusal"];
                 };
             };
-            /** @description `sponsor_cannot_top_up` — the key can already spend more than this code gives; a sponsorship tops up and never takes away. `payment_key_deleted` — the wallet's nonce-0 key was deleted and the slot cannot be used again. `payment_key_revoked` — the `wk_` the key was claimed with is revoked, and the key with it. */
+            /** @description `sponsor_cannot_top_up` — the key can already spend more than this code gives; a sponsorship tops up and never takes away. `payment_key_deleted` — the wallet's nonce-0 key was deleted and the slot cannot be used again. `payment_key_revoked` — the `wk_` the key was claimed with is revoked, and the key with it. `payment_key_not_recoverable` — the wallet's nonce-0 key was drawn at random and cannot be read again. */
             409: {
                 headers: {
                     [name: string]: unknown;

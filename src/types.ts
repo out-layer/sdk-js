@@ -1868,7 +1868,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List pending multisig approvals */
+        /**
+         * List pending multisig approvals
+         * @description The pending approvals of the wallet the `wk_` key (`Authorization:
+         *     Bearer`) belongs to — the agent's own view of what waits on it. Answers
+         *     `{"approvals": [...]}` with only the approvals still `pending` and not
+         *     expired (an approval lives 24 hours). A key lists its own wallet only;
+         *     the owner sees one wallet's queue, by its key, inside an owner's
+         *     session (`GET /wallet/v1/pending_approvals_by_pubkey`).
+         */
         get: operations["listPendingApprovals"];
         put?: never;
         post?: never;
@@ -1914,8 +1922,9 @@ export interface paths {
          * @description One approval, for the page and the program an approver votes with.
          *     Told to whoever holds the approval's id, which is random and is handed
          *     to an approver by the wallet's owner or by the webhook; rate-limited
-         *     by IP. What waits on a wallet is listed only to its owner
-         *     (`GET /wallet/v1/pending_approvals_by_pubkey`). The
+         *     by IP. The approvals waiting on a wallet are listed to the wallet's
+         *     own key (`GET /wallet/v1/pending_approvals`) and to its owner inside
+         *     an owner's session (`GET /wallet/v1/pending_approvals_by_pubkey`). The
          *     `wallet_pubkey` and `request_hash` are the values an approver binds
          *     into the NEP-413 vote message
          *     (`approve:{id}:{wallet_pubkey}:{request_hash}` /
@@ -2579,14 +2588,24 @@ export interface paths {
          *     claim window does not apply; the code is the gate. A key carries one
          *     sponsor while its grant is live: the same code again, or another code
          *     before the grant ends, changes nothing and answers what the key holds.
-         *     After the grant ends, another code is taken; the same code never is
-         *     again.
+         *     After the grant ends, another code is taken. A code this wallet
+         *     redeemed once is never taken again, and a code that is one per address
+         *     is never taken again from an address it was redeemed from, whatever
+         *     the key carried in between.
          *
          *     A code that cannot be redeemed answers `404 sponsor_code_invalid`,
          *     whatever the reason. Ask the person who gave it to you. Only the
          *     credential that reads the wallet's nonce-0 key redeems onto it — the
-         *     same rule as `GET /wallet/v1/payment-key` — and a refused redeem takes
-         *     no use of the code.
+         *     same rule as `GET /wallet/v1/payment-key` — with one exception: a key
+         *     issued at random, before keys were derived, is bound to the caller
+         *     first when the request sends that key as `X-Payment-Key`. Holding it
+         *     is the proof; the slot moves to the derived key, which the answer
+         *     carries and `GET /wallet/v1/payment-key` reads from then on. A refused
+         *     redeem takes no use of the code and changes no binding.
+         *
+         *     A sponsor code's subscription pays for connector calls. It leaves the
+         *     wallet under the free tier's custody limits unless the sponsor set
+         *     the code up to lift them.
          */
         post: operations["redeemSponsorCode"];
         delete?: never;
@@ -2861,7 +2880,14 @@ export interface components {
              *     owner's row `{owner, <connector>}` is attached, a row of the owner's
              *     is kept, and any other account's is refused with
              *     `403 policy_row_not_owner`; doing that repeatedly answers
-             *     `403 calls_suspended` to the wallet's calls for a while.
+             *     `403 calls_suspended` to the wallet's calls for a while
+             *     (`terminal: false` — the same call succeeds once it ends). A row
+             *     the call names under a profile other than the connector's own that
+             *     is not stored is refused in the run's result (`policy_row_missing`),
+             *     never run with no policy. A profile per wallet caps that wallet only
+             *     while `{owner, <connector>}` exists too: a call that names no row
+             *     runs that one, and with none stored, the connector's built-in
+             *     default.
              *     Refused with `invalid_secrets_ref` (400) when `account_id` is not a
              *     NEAR account id or `profile` is not 1–64 bytes or holds an ASCII
              *     character other than a letter, digit, `-` or `_`: the contract
@@ -2898,7 +2924,7 @@ export interface components {
              * @description `confirmation_required` (403): the action takes the owner's signature, and the request carries none that holds.
              * @enum {string}
              */
-            reason: "session_required" | "session_replaced" | "invalid_statement" | "task_not_found" | "task_closed" | "invalid_request" | "confirmation_required" | "upstream_unavailable" | "internal_error";
+            reason: "session_required" | "session_replaced" | "invalid_statement" | "task_not_found" | "task_closed" | "task_ending" | "invalid_request" | "confirmation_required" | "upstream_unavailable" | "internal_error";
             /** @description `true`: the same request can never succeed. `false` on `session_required` and `session_replaced` (sign in) and `upstream_unavailable` (come back). */
             terminal: boolean;
             state?: components["schemas"]["TaskState"];
@@ -2942,7 +2968,7 @@ export interface components {
             /** @description An open task this device has no copy of. It opens after one call of the project's `tasks_unlock` by the owner. */
             locked: boolean;
         };
-        /** @description Why a task is `failed` before its run acted. `preparer_key_unavailable`: the payment key that prepared the task could not pay for the run (deleted, out of funds, spent, expiring, or no longer reaching the project). `operation_priced`: the answering operation has a price and must be free. `operation_unknown`: the connector sells no such operation. `operation_limit_reached`: a limit on the operation is reached. `wallet_unresolved`: the key's wallet or its bound identity is not the preparing run's. `queue_unavailable`: the platform could not start the run. `run_not_started`: the run did not take the task in time. `run_refused:<reason>`: the run was refused the task by the host with `<reason>` (`hash-mismatch`, `not-the-preparer`, `approval-invalid`, `expired`, `unavailable`, …) or ended without reporting (`unreported`). Absent when the run acted and ended any way. The agent prepares again on any of them. */
+        /** @description Why a task is `failed`. Before its run acted: `preparer_key_unavailable`: the payment key that prepared the task could not pay for the run (deleted, out of funds, spent, expiring, or no longer reaching the project). `operation_priced`: the answering operation has a price and must be free. `operation_unknown`: the connector sells no such operation. `operation_limit_reached`: a limit on the operation is reached. `wallet_unresolved`: the key's wallet or its bound identity is not the preparing run's. `build_changed`: the connector published a new build since the task was made; decided at the approval, before the owner's signature is spent, and nothing was charged. `queue_unavailable`: the platform could not start the run. `run_not_started`: the run did not take the task in time. `run_refused:<reason>`: the run was refused the task by the host with `<reason>` (`hash-mismatch`, `not-the-preparer`, `approval-invalid`, `expired`, `unavailable`, …) or ended without reporting (`unreported`); the agent prepares again on any of these — nothing was done. After the run took the task: `run_failed`: the project said it did not carry the task out, and `result` holds why; `run_trapped`: the project reported the task carried out and then the run failed, and `result` holds what it reported — the action most likely happened; `run_unreported`: the run ended without a word on the task, and it may have acted; `run_unfinished`: no word of the run's end in time, and it may have acted. On the last three the agent checks the service before it prepares again. Absent in every other state. */
         TaskFailureReason: string;
         InboxTaskMoved: {
             id: string;
@@ -3230,11 +3256,8 @@ export interface components {
          * @enum {string}
          */
         NearOnlyChain: "near";
-        /**
-         * @description A chain funds can be withdrawn to: `near` directly, the rest through the 1Click bridge. Neither a subset nor a superset of `Chain` — `hyperevm` is signable but not bridged, and `hypercore` (Hyperliquid's L1, whose accounts are EVM addresses) is bridged but not signable: `to` is a HyperCore account, and 1Click credits the USDC to its perps balance.
-         * @enum {string}
-         */
-        WithdrawChain: "near" | "solana" | "ethereum" | "base" | "arbitrum" | "bitcoin" | "bsc" | "polygon" | "optimism" | "avalanche" | "hood" | "hypercore";
+        /** @description A chain funds can be withdrawn to: `near` directly, every other chain the 1Click token catalog lists (`GET /wallet/v1/tokens`, the `chains` of its entries) through the 1Click bridge — 37 chains on 2026-10-14, read from the catalog every hour, so a chain 1Click adds is served with no release. Spelled as 1Click's id (`eth`, `sol`, `ton`, `xrp`) or, for the chains that have one, the long name (`ethereum`, `solana`, `zcash`); case does not matter. A chain the catalog does not list answers `400 unsupported_chain`, naming what it does list. Neither a subset nor a superset of `Chain` — `hyperevm` is signable but not bridged, and `hypercore` (Hyperliquid's L1, whose accounts are EVM addresses) is bridged but not signable: `to` is a HyperCore account, and 1Click credits the USDC to its perps balance. `to` is checked for shape on the chains the wallet derives addresses on (EVM, Solana, NEAR, Bitcoin); on any other chain 1Click judges the address at the quote, before anything moves, and a refusal comes back as `upstream_rejected` in its words. */
+        WithdrawChain: string;
         /**
          * @description Tracked async request / policy transaction type. `withdraw` is a
          *     same-chain intents withdrawal; `cross_chain_withdraw` is a separate type
@@ -3254,7 +3277,7 @@ export interface components {
          */
         RequestStatus: "pending_deposit" | "processing" | "success" | "completed" | "partially_failed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "cancelled" | "needs_review";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "no_liquidity" | "upstream_rejected" | "operation_limit_reached" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "route_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -3366,6 +3389,22 @@ export interface components {
              * @enum {string}
              */
             account: "asset" | "executor";
+        };
+        /** @description A `429` meaning the wallet's counted ceiling on this custody operation is reached. `message` reads "limit reached: 100 per day for custody:*"; the fields carry the same facts for a program. `terminal` is false: this clears by waiting (`retry_after_seconds`, also sent as `Retry-After`, null when the counter's remaining life could not be read) or by a subscription on the wallet's own key. */
+        OperationLimitReachedResponse: {
+            /** @enum {string} */
+            error: "operation_limit_reached";
+            message: string;
+            /** @description The ceiling that was reached. */
+            limit: number;
+            /** @description The period the ceiling is counted over, e.g. `day`. */
+            window: string;
+            /** @description The operation the ceiling is on, e.g. `custody:*`. */
+            operation: string;
+            /** @enum {boolean} */
+            terminal: false;
+            /** @description Seconds until the counter that refused this clears; null when unknown. */
+            retry_after_seconds?: number | null;
         };
         /**
          * @description A `409` meaning another money-moving operation is using this wallet.
@@ -3683,7 +3722,7 @@ export interface components {
             /** @description Destination address on the target chain. */
             to?: string;
             amount: string;
-            /** @description Token ID, e.g. `nep141:usdt.tether-token.near`. For `chain=near`, omit (or use `near`/`native`) to deliver **native NEAR** (unwraps the wallet's wNEAR); use `nep141:wrap.near` to deliver wNEAR instead. For other chains, this is the source Intents asset bridged via 1Click. */
+            /** @description Token ID, e.g. `nep141:usdt.tether-token.near`. For `chain=near`, omit (or use `near`/`native`) to deliver **native NEAR** (unwraps the wallet's wNEAR); use `nep141:wrap.near` to deliver wNEAR instead. For other chains, this is the source Intents asset bridged via 1Click. The asset's NEAR-side 1Click id `1cs_v1:near:nep141:<contract>` names the same balance and is accepted everywhere `nep141:<contract>` is; a `1cs_v1:` id on another chain is not a source (`unsupported_token`). */
             token?: string;
             /**
              * @description When `true`, the call returns immediately with `status=processing` and a `poll_url`; the withdrawal settles in the background and the caller polls `GET /wallet/v1/requests/{request_id}` for the terminal status. **Recommended for cross-chain withdrawals**, whose bridge can take longer than the synchronous response window. When `false` (default) the call blocks until the withdrawal settles. Auth, policy and validation errors are returned synchronously in both modes; in async mode only an execution failure surfaces as the request's `failed` status.
@@ -3732,7 +3771,7 @@ export interface components {
         };
         DryRunResponse: {
             would_succeed?: boolean;
-            /** @description Present when `would_succeed` is false. One of: `wallet_frozen`, `policy_denied`, `storage_not_registered` (wNEAR/NEP-141 recipient has no token storage), `recipient_not_found` (native NEAR to a non-existent named account — would burn the wNEAR), `insufficient_balance` (intents balance below the requested amount), `invalid_request` (body the real withdraw would reject with a 400), `bridge_rejected` (1Click refused the cross-chain quote — below the bridge minimum, unsupported route or no liquidity; `message` carries 1Click's own text, e.g. "Amount is too low for bridge, try at least 303064"). */
+            /** @description Present when `would_succeed` is false, and the same name the real withdraw would answer in `error`. One of: `wallet_frozen`, `policy_denied`, `storage_not_registered` (wNEAR/NEP-141 recipient has no token storage), `recipient_not_found` (native NEAR to a non-existent named account — would burn the wNEAR), `insufficient_balance` (intents balance below the requested amount), `invalid_request` (body the real withdraw would reject with a 400), `no_liquidity` (1Click found no route with liquidity for this amount), `upstream_rejected` (1Click refused the cross-chain quote on grounds of its own — below the bridge minimum, for one; `message` is 1Click's text, e.g. "Amount is too low for bridge, try at least 303064"), `unsupported_token` (the destination chain lists no asset of that symbol, or 1Click does not know the asset). What was never assessed is not a reason: a 1Click or a catalog that did not answer is `503 route_unavailable` / `chain_unavailable`, a reached custody ceiling `429 operation_limit_reached`, an unknown chain `400 unsupported_chain`. */
             reason?: string;
             message?: string;
             estimated_fee?: string;
@@ -3755,7 +3794,9 @@ export interface components {
             address_allowed?: boolean | null;
         };
         SwapRequest: {
+            /** @description The asset sold, by its id on intents.near as `GET /wallet/v1/tokens` lists it: `nep141:…`, `nep245:…` (HOT-bridged), or its NEAR-side 1Click id `1cs_v1:near:nep141:…`, which is the same asset. A `1cs_v1:` id on another chain names a delivery, not a balance, and is refused as `unsupported_token`. */
             token_in: string;
+            /** @description The asset bought: `nep141:…`, `nep245:…`, or any `1cs_v1:` id the catalog lists, sent to 1Click as given. For a `1cs_v1:<chain>:…` destination 1Click decides which id lands on intents.near (ZEC bought as `1cs_v1:sol:spl:…` arrives as `nep141:zec.omft.near`); the response echoes `destination_asset` as sent. */
             token_out: string;
             amount_in: string;
             min_amount_out?: string;
@@ -5022,6 +5063,27 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description The wallet's counted ceiling on this custody operation is reached (`operation_limit_reached`): the free tier allows 100 `custody:*` operations per wallet per day, dry-runs included, swap quotes not. The body says the ceiling, its window and when the counter clears; `Retry-After` carries the same seconds when they are known. Wait it out, or lift the ceiling with a subscription on the wallet's own key. */
+        OperationLimitReached: {
+            headers: {
+                /** @description Seconds until the counter that refused this clears. Absent when unknown. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["OperationLimitReachedResponse"];
+            };
+        };
+        /** @description Nothing is known about the route: 1Click did not answer (`route_unavailable` — a 5xx, a timeout, "Failed to get quote"), the chain or its token catalog could not be read (`chain_unavailable`), or the keystore was unreachable (`keystore_error`). Transient — retry after `Retry-After`. On a testnet deployment NEAR Intents routes answer `service_unavailable` instead, which does not clear. */
+        RouteUnavailable: {
+            headers: {
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description Server error */
         InternalError: {
             headers: {
@@ -5031,7 +5093,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Unavailable — either permanently on this deployment or transiently, and the code says which. `service_unavailable`: feature not enabled/configured (e.g. the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off, the binding-event endpoints without a webhook secret, or NEAR Intents on a network with no solvers) — do not retry; no interval is sent because none would be true. `chain_unavailable`: the chain, or a node in front of it, could not answer this second — a balance that could not be read, a code hash that could not be fetched, a binding that could not be verified, a transaction that expired against a block the node has forgotten. Nothing happened and nothing was charged — transient, retry after the `Retry-After` header. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request — transient, retry after `Retry-After`. `upstream_unavailable`: this deployment's database could not serve the request right now — transient, retry after `Retry-After`; the same code `/call` answers the condition with. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed — transient, retry after `Retry-After`. (Transient upstream failures use 503 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, hiding the JSON body from clients.) */
+        /** @description Unavailable — either permanently on this deployment or transiently, and the code says which. `service_unavailable`: feature not enabled/configured (e.g. the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off, the binding-event endpoints without a webhook secret, or NEAR Intents on a network with no solvers) — do not retry; no interval is sent because none would be true. `chain_unavailable`: the chain, or a node in front of it, could not answer this second — a balance that could not be read, a code hash that could not be fetched, a binding that could not be verified, a transaction that expired against a block the node has forgotten. Nothing happened and nothing was charged — transient, retry after the `Retry-After` header. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request — transient, retry after `Retry-After`. `upstream_unavailable`: this deployment's database could not serve the request right now — transient, retry after `Retry-After`; the same code `/call` answers the condition with. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed — transient, retry after `Retry-After`. `route_unavailable`: 1Click did not answer for the route (a 5xx, a timeout, "Failed to get quote") — transient, retry after `Retry-After`; nothing is known about the route. (Transient upstream failures use 503 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, hiding the JSON body from clients.) */
         ServiceUnavailable: {
             headers: {
                 /** @description Present on transient failures (`chain_unavailable`, `keystore_error`, `upstream_unavailable`, `confidential_jwt_expired`) — seconds to wait before retrying. Absent on `service_unavailable`, which is not transient: there is no interval after which an unset environment variable becomes set. */
@@ -5695,7 +5757,15 @@ export interface operations {
                 };
             };
             422: components["responses"]["OnChainTxFailed"];
-            429: components["responses"]["RateLimited"];
+            /** @description Too many requests from this client (`rate_limited`), or the wallet's custody ceiling (`operation_limit_reached`, with the ceiling and `Retry-After` — see OperationLimitReachedResponse). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["OperationLimitReachedResponse"];
+                };
+            };
             500: components["responses"]["InternalError"];
             /** @description The chain could not be reached to verify a binding. Transient — retry. */
             503: {
@@ -5786,6 +5856,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["OnChainTxFailed"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -5866,6 +5937,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["OnChainTxFailed"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -5945,6 +6017,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["OnChainTxFailed"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -6025,6 +6098,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["OnChainTxFailed"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -6117,7 +6191,9 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
+            503: components["responses"]["RouteUnavailable"];
         };
     };
     intentsWithdrawDryRun: {
@@ -6144,7 +6220,9 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
+            503: components["responses"]["RouteUnavailable"];
         };
     };
     intentsTransfer: {
@@ -6236,6 +6314,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -6336,7 +6415,9 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
+            503: components["responses"]["RouteUnavailable"];
         };
     };
     intentsSwapQuote: {
@@ -6364,6 +6445,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
+            503: components["responses"]["RouteUnavailable"];
         };
     };
     evmSignTypedData: {
@@ -6582,6 +6664,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -6662,6 +6745,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -6742,6 +6826,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -6824,6 +6909,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -6853,6 +6939,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -6934,6 +7021,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -7015,6 +7103,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -7078,6 +7167,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -7113,6 +7203,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -7168,6 +7259,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -7195,6 +7287,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -7431,6 +7524,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -8840,7 +8934,7 @@ export interface operations {
             /** @description `confirmation_required`: the signature does not hold, is older than ten minutes, was signed by a key that is not a full-access key of the account, or was spent. */
             403: components["responses"]["InboxRefused"];
             404: components["responses"]["InboxRefused"];
-            /** @description `task_closed` with `state`: the task is not `open`. */
+            /** @description `task_closed` with `state`: the task is not `open`. `task_ending`: the task ends in under five minutes, too soon for its run to take it — refused before the signature is spent; ask the agent to prepare it again. */
             409: components["responses"]["InboxRefused"];
             503: components["responses"]["InboxUnavailable"];
         };
@@ -9643,7 +9737,7 @@ export interface operations {
                     "application/json": components["schemas"]["TrialKeyRefusal"];
                 };
             };
-            /** @description `payment_key_not_recoverable` — the key was issued at random before keys were derived; it was shown once. `payment_key_revoked` — the `wk_` it was claimed with is revoked, and the key with it. Create a payment key instead. */
+            /** @description `payment_key_not_recoverable` — the key was issued at random before keys were derived; it was shown once. A sponsor code redeem that sends it as `X-Payment-Key` moves the slot to a derived key this route reads. `payment_key_revoked` — the `wk_` it was claimed with is revoked, and the key with it. Otherwise create a payment key. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9666,7 +9760,10 @@ export interface operations {
     redeemSponsorCode: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The wallet's nonce-0 key, `{owner}:0:{key}`, when it was issued at random and cannot be read again — the proof that binds it to this credential. Not needed otherwise. */
+                "X-Payment-Key"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9715,7 +9812,7 @@ export interface operations {
                     "application/json": components["schemas"]["TrialKeyRefusal"];
                 };
             };
-            /** @description `sponsor_cannot_top_up` — the key can already spend more than this code gives; a sponsorship tops up and never takes away. `payment_key_deleted` — the wallet's nonce-0 key was deleted and the slot cannot be used again. `payment_key_revoked` — the `wk_` the key was claimed with is revoked, and the key with it. `payment_key_not_recoverable` — the wallet's nonce-0 key was drawn at random and cannot be read again. */
+            /** @description `sponsor_cannot_top_up` — the key can already spend more than this code gives; a sponsorship tops up and never takes away. `payment_key_deleted` — the wallet's nonce-0 key was deleted and the slot cannot be used again. `payment_key_not_recoverable` — the wallet's nonce-0 key was drawn at random and the request did not send it as `X-Payment-Key`. `payment_key_revoked` — the `wk_` the key was claimed with is revoked, and the key with it. */
             409: {
                 headers: {
                     [name: string]: unknown;

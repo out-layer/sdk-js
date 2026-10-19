@@ -2911,7 +2911,7 @@ export interface components {
             compute_cost?: string | null;
             instructions?: number | null;
             time_ms?: number | null;
-            /** @description Present when the call was accepted for polling. */
+            /** @description Present while the call is `pending`: an `async` call, or a synchronous one the API restarted during. `GET` it until `status` is `completed` or `failed`. */
             poll_url?: string | null;
             /** @description The TEE quote for this execution. */
             attestation_url?: string | null;
@@ -9190,7 +9190,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The run finished, or was accepted for polling when `async`. */
+            /**
+             * @description The run finished, or was accepted for polling when `async`. A synchronous call
+             *     the API restarted during answers `pending` with `poll_url`: it was not resent and
+             *     is still running — read it there, do not send it again (it would run and be
+             *     charged twice).
+             */
             200: {
                 headers: {
                     [name: string]: unknown;

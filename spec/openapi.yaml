@@ -4189,7 +4189,11 @@ paths:
               $ref: '#/components/schemas/ProjectCallRequest'
       responses:
         '200':
-          description: The run finished, or was accepted for polling when `async`.
+          description: |
+            The run finished, or was accepted for polling when `async`. A synchronous call
+            the API restarted during answers `pending` with `poll_url`: it was not resent and
+            is still running — read it there, do not send it again (it would run and be
+            charged twice).
           content:
             application/json:
               schema:
@@ -5609,7 +5613,9 @@ components:
         time_ms: { type: [integer, 'null'] }
         poll_url:
           type: [string, 'null']
-          description: Present when the call was accepted for polling.
+          description: >
+            Present while the call is `pending`: an `async` call, or a synchronous one the
+            API restarted during. `GET` it until `status` is `completed` or `failed`.
         attestation_url:
           type: [string, 'null']
           description: The TEE quote for this execution.

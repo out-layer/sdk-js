@@ -1494,12 +1494,26 @@ export interface paths {
          *     `reclaimPaymentCheck` them back. Fund the wallet's intents balance first
          *     via `intentsDeposit`.
          *
-         *     **Security model:** this is NOT gated by multisig. The keystore signs the
-         *     transfer-to-ephemeral only when the wallet policy grants the default-DENY
-         *     `payment_check` capability and the per-transaction amount is within the
-         *     capability's per-token amount cap. `claimPaymentCheck` / `reclaimPaymentCheck`
-         *     are signed by the ephemeral `check_key` itself (NEP-413), never by the
-         *     keystore.
+         *     **Policy.** The keystore signs the transfer-to-ephemeral only when the
+         *     wallet policy grants the default-DENY `payment_check` capability and the
+         *     amount is within the capability's per-token cap. On a wallet with an
+         *     approval threshold the check is held for the approvers like every other
+         *     operation that moves money: the answer is `status=pending_approval` with
+         *     `approval_id`, `required`, `approved` and `request_hash`; the `check_key`
+         *     is returned at once (the account is fixed by the check's counter and
+         *     holds nothing until the threshold); once the threshold is met the
+         *     coordinator funds the check, and `poll_url` reads `unclaimed`. A veto,
+         *     an approval that expires unmet (24 h), or the check's own `expires_at`
+         *     passing while it waits, ends it `failed`. Naming
+         *     `payment_check` in `approval.excluded_types` keeps the capability gate
+         *     without the threshold; `capabilities.payment_check.requires_approval`
+         *     demands it on its own. `claimPaymentCheck` / `reclaimPaymentCheck` are
+         *     signed by the ephemeral `check_key` itself (NEP-413), never by the
+         *     keystore, and need no approval.
+         *
+         *     Counted as one `custody:payment_check` operation against the wallet's
+         *     ceiling (429 `operation_limit_reached`, nothing reserved); a claim or a
+         *     reclaim is not counted.
          */
         post: operations["createPaymentCheck"];
         delete?: never;
@@ -1527,10 +1541,14 @@ export interface paths {
          *     the batch stops part way, the checks already created are listed with
          *     their keys and `error` says why the rest were not created.
          *
-         *     **Security model:** identical to `createPaymentCheck` — gated by the
-         *     default-DENY `payment_check` capability and its per-transaction amount cap
-         *     (NOT multisig); each check's claim/reclaim is signed by that check's
-         *     ephemeral key, not the keystore.
+         *     **Policy.** As `createPaymentCheck`: the `payment_check` capability and
+         *     its per-transaction cap, decided — and counted as one
+         *     `custody:payment_check` operation — per check, all before anything is
+         *     reserved. A wallet whose policy requires approval gets no batch:
+         *     `403 policy_denied` ("this wallet's policy requires approval for payment
+         *     checks; create them one at a time") and nothing is created — use
+         *     `createPaymentCheck`, one check per approval. Each check's claim/reclaim
+         *     is signed by that check's ephemeral key, not the keystore.
          */
         post: operations["batchCreatePaymentChecks"];
         delete?: never;
@@ -1555,7 +1573,9 @@ export interface paths {
          *     caller need only hold the key. Omit `amount` for a full claim, or pass a
          *     partial amount (minimal units) to claim part and leave the remainder
          *     claimable. Expired or already-settled checks are rejected, and so is a
-         *     check with another claim or reclaim in flight, or one still `creating`.
+         *     check with another claim or reclaim in flight, one still `creating`,
+         *     and one still `pending_approval` (`400 bad_request`: "Check is awaiting
+         *     the owner's approval" — nothing is in its account yet).
          *
          *     When the transfer is not confirmed in time — or the call fails after
          *     handing it over — the answer is `status=processing` with `request_id`
@@ -1586,7 +1606,8 @@ export interface paths {
          *     wallet. Signed by the ephemeral check key (re-derived inside the
          *     keystore), not the keystore's wallet key. Omit `amount` for a full
          *     reclaim or pass a partial amount. Answers `processing` + `poll_url` as
-         *     `claimPaymentCheck` does.
+         *     `claimPaymentCheck` does, and refuses a check still `pending_approval`
+         *     as it does.
          */
         post: operations["reclaimPaymentCheck"];
         delete?: never;
@@ -3390,7 +3411,7 @@ export interface components {
              */
             account: "asset" | "executor";
         };
-        /** @description A `429` meaning the wallet's counted ceiling on this custody operation is reached. `message` reads "limit reached: 100 per day for custody:*"; the fields carry the same facts for a program. `terminal` is false: this clears by waiting (`retry_after_seconds`, also sent as `Retry-After`, null when the counter's remaining life could not be read) or by a subscription on the wallet's own key. */
+        /** @description A `429` meaning the wallet's counted ceiling on this custody operation is reached. `message` reads "limit reached: 1000 per day for custody:*"; the fields carry the same facts for a program. `terminal` is false: this clears by waiting (`retry_after_seconds`, also sent as `Retry-After`, null when the counter's remaining life could not be read) or by a subscription on the wallet's own key. */
         OperationLimitReachedResponse: {
             /** @enum {string} */
             error: "operation_limit_reached";
@@ -4183,12 +4204,20 @@ export interface components {
             /** @description The ephemeral account's ed25519 private key (64 hex chars). Bearer secret — whoever holds it can claim the funds. Returned ONCE, whatever `status` says. */
             check_key: string;
             /**
-             * @description `unclaimed`: funded. `creating`: the funding transfer was handed to the relay and is not confirmed yet — follow `poll_url` until the check reads `unclaimed` (or `failed`: the transfer never executed and nothing moved).
+             * @description `unclaimed`: funded. `creating`: the funding transfer was handed to the relay and is not confirmed yet — follow `poll_url` until the check reads `unclaimed` (or `failed`: the transfer never executed and nothing moved). `pending_approval`: the wallet's policy requires the approvers' votes; the account holds nothing until the threshold is met — follow `poll_url` until the check reads `unclaimed` (or `failed`: vetoed, the approval expired unmet, or the check's own `expires_at` passed while it waited).
              * @enum {string}
              */
-            status: "unclaimed" | "creating";
-            /** @description Present with `status=creating` — the check's status endpoint. */
+            status: "unclaimed" | "creating" | "pending_approval";
+            /** @description Present with `status=creating` or `pending_approval` — the check's status endpoint. */
             poll_url?: string;
+            /** @description Present only on `pending_approval` — the approval to vote on. */
+            approval_id?: string;
+            /** @description Present only on `pending_approval` — approvals needed. */
+            required?: number;
+            /** @description Present only on `pending_approval` — approvals collected so far (0 at creation). */
+            approved?: number;
+            /** @description Present only on `pending_approval` — sha256(canonical_json(op)) over the check's token and amount; what the approvers sign. */
+            request_hash?: string;
             token: string;
             amount: string;
             memo?: string | null;
@@ -4281,7 +4310,7 @@ export interface components {
             claimed_amount: string;
             /** @description Total reclaimed so far (minimal units). */
             reclaimed_amount: string;
-            /** @description Lifecycle state: `creating` (funding transfer not confirmed yet), `unclaimed`, `claiming`, `partially_claimed`, `claimed`, `reclaiming`, `partially_reclaimed`, `reclaimed`, `failed` (the funding transfer never executed; nothing moved), or the virtual `expired` (unclaimed and past `expires_at`). A read of a check with a transfer in flight settles it from the chain when the chain can already tell. */
+            /** @description Lifecycle state: `pending_approval` (the wallet's approvers have not met the threshold yet; nothing is in the account), `creating` (funding transfer not confirmed yet), `unclaimed`, `claiming`, `partially_claimed`, `claimed`, `reclaiming`, `partially_reclaimed`, `reclaimed`, `failed` (the funding never executed, was vetoed, or its approval expired unmet; nothing moved), or the virtual `expired` (unclaimed and past `expires_at`). A read of a check with a transfer in flight settles it from the chain when the chain can already tell; a read of a check whose approval expired or was rejected marks it `failed`. */
             status: string;
             memo?: string | null;
             /** Format: date-time */
@@ -4405,9 +4434,9 @@ export interface components {
         /**
          * @description Multisig approval configuration. When set, an op that trips the approval
          *     trigger returns `pending_approval` and executes only after `threshold`
-         *     approvers sign. Applies to fund ops including the Trusted kinds (swap,
-         *     confidential, cross_chain_withdraw); `payment_check` is excluded from the
-         *     generic trigger (cap-gated instead).
+         *     approvers sign. Applies to every op that moves funds, the Trusted kinds
+         *     included (swap, confidential, cross_chain_withdraw, limit_order,
+         *     payment_check); `excluded_types` names the types that skip it.
          */
         ApprovalConfig: {
             /** @description Number of approvals required — either a bare integer (e.g. `2`) or an object `{ "required": N }`. */
@@ -5063,7 +5092,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The wallet's counted ceiling on this custody operation is reached (`operation_limit_reached`): the free tier allows 100 `custody:*` operations per wallet per day, dry-runs included, swap quotes not. The body says the ceiling, its window and when the counter clears; `Retry-After` carries the same seconds when they are known. Wait it out, or lift the ceiling with a subscription on the wallet's own key. */
+        /** @description The wallet's counted ceiling on this custody operation is reached (`operation_limit_reached`): the free tier allows 1000 `custody:*` operations per wallet per rolling 24 h, dry-runs, swap quotes and NEP-413/EVM/Solana signing included; reads are not counted. The body says the ceiling, its window and when the counter clears; `Retry-After` carries the same seconds when they are known. Wait it out, or lift the ceiling with a subscription on the wallet's own key. */
         OperationLimitReached: {
             headers: {
                 /** @description Seconds until the counter that refused this clears. Absent when unknown. */
@@ -6444,6 +6473,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["RouteUnavailable"];
         };
@@ -6473,6 +6503,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -6501,6 +6532,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -6529,6 +6561,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -6557,6 +6590,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -6585,6 +6619,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -7132,6 +7167,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -7691,7 +7727,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Payment check created: `status=unclaimed` once its funding settled, or `status=creating` with a `poll_url` while the funding transfer is unconfirmed. The `check_key` is returned either way — keep it. */
+            /** @description Payment check created: `status=unclaimed` once its funding settled, `status=creating` with a `poll_url` while the funding transfer is unconfirmed, or `status=pending_approval` with `approval_id` and `poll_url` while the wallet's approvers decide. The `check_key` is returned in every case — keep it. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7703,6 +7739,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -7810,6 +7847,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -8034,7 +8072,7 @@ export interface operations {
     listPaymentChecks: {
         parameters: {
             query?: {
-                /** @description Optional status filter. Accepts stored statuses (`creating`, `unclaimed`, `claiming`, `claimed`, `partially_claimed`, `reclaiming`, `reclaimed`, `partially_reclaimed`, `failed`) plus the virtual `expired` (unclaimed + past expiry). */
+                /** @description Optional status filter. Accepts stored statuses (`pending_approval`, `creating`, `unclaimed`, `claiming`, `claimed`, `partially_claimed`, `reclaiming`, `reclaimed`, `partially_reclaimed`, `failed`) plus the virtual `expired` (unclaimed + past expiry). */
                 status?: string;
                 /** @description Max rows to return (server caps at 100). Defaults to 50. */
                 limit?: number;
@@ -8124,6 +8162,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
         };
     };

@@ -67,6 +67,8 @@ export type {
   EncryptPolicyRequest,
   EncryptPolicyResponse,
   SignPolicyResponse,
+  SignedPolicy,
+  PolicyUpdatePending,
   PendingApproval,
   PendingApprovalsResponse,
   ApprovalDetail,

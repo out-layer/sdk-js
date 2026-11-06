@@ -101,6 +101,8 @@ export type Capabilities = Schemas['Capabilities'];
 export type EncryptPolicyRequest = Schemas['EncryptPolicyRequest'];
 export type EncryptPolicyResponse = Schemas['EncryptPolicyResponse'];
 export type SignPolicyResponse = Schemas['SignPolicyResponse'];
+export type SignedPolicy = Schemas['SignedPolicy'];
+export type PolicyUpdatePending = Schemas['PolicyUpdatePending'];
 
 export type PendingApproval = Schemas['PendingApproval'];
 export type PendingApprovalsResponse = Schemas['PendingApprovalsResponse'];
@@ -180,6 +182,13 @@ export class PolicyAPI {
    * is part of what gets signed — the answer works for that account and no
    * other. Sending the result from anywhere else is refused on chain, which is
    * what stops a signature read off the chain being filed again by a stranger.
+   *
+   * The answer is either a `SignedPolicy` — pass its `version` and `locked`
+   * to `store_wallet_policy` exactly as answered, both are inside the
+   * signature — or, when the policy on chain is locked (`approval.locked`),
+   * a `PolicyUpdatePending` (`status: 'pending_approval'`): the current
+   * policy's approvers vote on `approval_id`, and once the threshold is met
+   * the signature is on `requests.get(request_id)` (`result_data`).
    */
   sign(encryptedData: string, caller: string): Promise<SignPolicyResponse> {
     return runWithRetry(

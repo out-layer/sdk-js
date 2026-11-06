@@ -1813,6 +1813,11 @@ export interface paths {
          *     `approval`, `capabilities` and `authorized_key_hashes` fields are the
          *     policy as written. A response without `policy` could not read the
          *     chain; it says nothing about the policy rather than guessing.
+         *
+         *     `version` and `locked` are the policy's state on chain: the version
+         *     the next `store_wallet_policy` must exceed by one, and whether that
+         *     write (and a delete) needs the approvers' quorum. Both absent when the
+         *     chain could not be read.
          */
         get: operations["getPolicy"];
         put?: never;
@@ -1836,7 +1841,14 @@ export interface paths {
          * Encrypt a policy for on-chain storage
          * @description Sends a policy JSON to the keystore TEE for encryption. The returned
          *     `encrypted_base64` is what gets stored in NEAR via
-         *     `store_wallet_policy(...)` after the keystore signs it.
+         *     `store_wallet_policy(...)` after the keystore signs it; `policy_hash`
+         *     is the sha256 of the canonical plaintext that was encrypted — what a
+         *     locked policy's approvers vote on.
+         *
+         *     `approval.locked: true` is accepted only with a reachable quorum —
+         *     `threshold` of at least 1 and at least that many approvers with an
+         *     `id` — and is otherwise `400 invalid_request`: a lock nobody could
+         *     lift is never stored.
          */
         post: operations["encryptPolicy"];
         delete?: never;
@@ -1857,13 +1869,32 @@ export interface paths {
         /**
          * Sign an encrypted policy (for on-chain submission)
          * @description The keystore signs the message the contract rebuilds —
-         *     `store_wallet_policy:v1:{wallet_pubkey}:{len}:{encrypted_data}:{caller}` —
-         *     with the wallet's key. The signature + encrypted data + public key form
-         *     the payload for the on-chain `store_wallet_policy(...)` call.
+         *     `store_wallet_policy:v2:{wallet_pubkey}:{version}:{locked}:{valid_until}:{len}:{encrypted_data}:{caller}` —
+         *     with the wallet's key. The signature, the encrypted data, the public
+         *     key, and the `version`, `locked` and `valid_until` the answer carries
+         *     form the payload for the on-chain `store_wallet_policy(...)` call:
+         *     pass all three exactly as answered, they are inside the signature.
+         *     `valid_until` is seven days from signing; the contract refuses the
+         *     signature after it.
          *
          *     `caller` is the account that will SEND that call, and it is signed: the
          *     answer works for that account and no other. Sending the prepared payload
-         *     from anywhere else is refused on chain.
+         *     from anywhere else is refused on chain. `version` is the chain's plus
+         *     one, so the answer is good for exactly one write.
+         *
+         *     **A locked policy.** When the policy on chain carries
+         *     `approval.locked`, the keystore signs only with that policy's
+         *     approvers' quorum. This call then answers `status: pending_approval`
+         *     with the `approval_id` the approvers vote on (`approve` /
+         *     `reject`, as for any pending operation; `request_data.policy` is the
+         *     new policy they are approving) and a `request_id`. Once the threshold
+         *     is met the signature is on `GET /wallet/v1/requests/{request_id}`
+         *     (`status: success`, `result_data.wallet_signature`, `version`,
+         *     `locked`, `valid_until`, `encrypted_data`); the owner sends
+         *     `store_wallet_policy` with it, within `valid_until`. A vote the keystore does not count, or a policy that moved
+         *     on under the approval, fails the request with the keystore's words.
+         *     The first policy of a wallet, and any write over an unlocked policy,
+         *     is signed at once.
          */
         post: operations["signPolicy"];
         delete?: never;
@@ -3301,10 +3332,12 @@ export interface components {
          *     (`intents/deposit`, `storage-deposit`, cross-chain deposit) all gate as
          *     `call`. `limit_order` is a rested 1Click order and, like
          *     `cross_chain_withdraw`, its own type: permitting swaps or cross-chain
-         *     exits does not permit it.
+         *     exits does not permit it. `policy_update` is a write to a locked
+         *     policy awaiting the approvers' quorum (`signPolicy`); it is never
+         *     subject to `excluded_types` — the lock is its own check.
          * @enum {string}
          */
-        RequestType: "call" | "transfer" | "withdraw" | "cross_chain_withdraw" | "limit_order" | "deposit" | "swap" | "confidential";
+        RequestType: "call" | "transfer" | "withdraw" | "cross_chain_withdraw" | "limit_order" | "deposit" | "swap" | "confidential" | "policy_update";
         /**
          * @description `partially_failed` occurs only for `w_execute_extension` (Agent Connect's extension door) and is a NORMAL outcome, not an error: the wallet detaches its promises, they execute concurrently and independently, and one failing neither reverts the others nor undoes the value they moved. Read `result.promises[]` for which did what.
          * @enum {string}
@@ -3460,7 +3493,7 @@ export interface components {
              * @description What the holder is doing. Present even when `in_flight_request_id` is `null`, and worth branching on: a transfer clears in seconds while a cross-chain withdraw can run for many minutes, and that is the difference between retrying at once and backing off. `repair` is the odd one — a read of a request left unresolved settles it under the same lock, and that finishes quickly.
              * @enum {string|null}
              */
-            in_flight_operation?: null | "transfer" | "call" | "swap" | "delete" | "withdraw" | "cross_chain_withdraw" | "cross_chain_deposit" | "limit_order" | "storage_deposit" | "intents_transfer" | "intents_deposit" | "confidential" | "confidential_deposit" | "repair";
+            in_flight_operation?: null | "transfer" | "call" | "swap" | "delete" | "withdraw" | "cross_chain_withdraw" | "cross_chain_deposit" | "limit_order" | "storage_deposit" | "intents_transfer" | "intents_deposit" | "confidential" | "confidential_deposit" | "repair" | "policy_update";
         };
         /**
          * @description A `403` from the Agent Connect pre-flight: the request was refused BEFORE it was signed, so no gas was spent, and the refusal names the rule the wallet contract would have panicked on.
@@ -4466,6 +4499,17 @@ export interface components {
             approvers?: components["schemas"]["Approver"][];
             /** @description Op types exempt from the generic approval trigger. */
             excluded_types?: components["schemas"]["RequestType"][];
+            /**
+             * @description The policy is changed only with these approvers' quorum: every
+             *     later `store_wallet_policy` — including the one that clears this
+             *     flag — and every `delete_wallet_policy` waits for `threshold`
+             *     votes (`signPolicy` answers `pending_approval`). The owner alone
+             *     can set it, as a tightening, and cannot clear it. Freezing and
+             *     unfreezing are not policy writes and stay the owner's. Accepted
+             *     only with a reachable quorum: `threshold` ≥ 1 and at least that
+             *     many approvers with an `id`.
+             */
+            locked?: boolean;
         };
         Approver: {
             /** @description Approver's NEAR account id, e.g. `alice.near`. */
@@ -4477,10 +4521,6 @@ export interface components {
              * @enum {string}
              */
             role?: "admin" | "signer";
-        };
-        AdminQuorum: {
-            required: number;
-            admins: string[];
         };
         /** @description A single non-Built primitive toggle. All capabilities default to DENY except `sign_message`. `requires_approval` opts that primitive into multisig specifically. */
         Capability: {
@@ -4589,6 +4629,13 @@ export interface components {
             controller: string;
             frozen: boolean;
             /**
+             * Format: int64
+             * @description The policy's version on chain; the next `store_wallet_policy` carries this plus one. `0` for a policy stored before versions. Absent when the chain could not be read.
+             */
+            version?: number;
+            /** @description Whether the next policy write and the delete need the approvers' quorum (`approval.locked` of the stored policy, as the contract holds it). Absent when the chain could not be read. */
+            locked?: boolean;
+            /**
              * @description Whether the wallet has a policy at all. `none`: no policy is
              *     stored — every operation is allowed (the engine's own rules,
              *     which no policy relaxes, still hold: account-control operations
@@ -4623,7 +4670,6 @@ export interface components {
             rules: components["schemas"]["PolicyRules"];
             approval?: components["schemas"]["ApprovalConfig"];
             capabilities?: components["schemas"]["Capabilities"];
-            admin_quorum?: components["schemas"]["AdminQuorum"];
             /** Format: uri */
             webhook_url?: string;
             authorized_key_hashes?: string[];
@@ -4652,6 +4698,8 @@ export interface components {
         EncryptPolicyResponse: {
             encrypted_base64: string;
             wallet_pubkey: string;
+            /** @description sha256 (hex) of the canonical plaintext that was encrypted — every object's keys sorted, compact — which a locked policy's approvers vote on inside the `policy_update` operation. */
+            policy_hash: string;
         };
         SignPolicyRequest: {
             encrypted_data: string;
@@ -4661,9 +4709,45 @@ export interface components {
              */
             caller: string;
         };
-        SignPolicyResponse: {
+        /** @description The signature, or — when the policy on chain is locked — the approval the write waits on. Told apart by `status`: a signature has none. */
+        SignPolicyResponse: components["schemas"]["SignedPolicy"] | components["schemas"]["PolicyUpdatePending"];
+        SignedPolicy: {
             signature_hex: string;
             public_key_hex: string;
+            /**
+             * Format: int64
+             * @description What `store_wallet_policy` must be called with: the chain's version plus one. Inside the signature.
+             */
+            version: number;
+            /** @description The new policy's `approval.locked`, as the keystore read it from the plaintext. `store_wallet_policy` must be called with exactly this; it is inside the signature. */
+            locked: boolean;
+            /**
+             * Format: int64
+             * @description Unix seconds after which the contract refuses this signature — seven days from signing. `store_wallet_policy` must be called with exactly this; it is inside the signature.
+             */
+            valid_until: number;
+            /** @description sha256 (hex) of the new policy's canonical plaintext. */
+            policy_hash: string;
+            /** @description The `policy_update` hash the approvers' votes were verified over. Present only when the policy on chain was locked. */
+            request_hash?: string;
+        };
+        PolicyUpdatePending: {
+            /** @enum {string} */
+            status: "pending_approval";
+            /** Format: uuid */
+            approval_id: string;
+            /**
+             * Format: uuid
+             * @description Where the signature appears once the threshold is met: `GET /wallet/v1/requests/{request_id}` → `status: success`, `result_data` = `{wallet_signature, public_key_hex, wallet_pubkey, version, locked, valid_until, policy_hash, request_hash, encrypted_data, caller}`. `status: failed` with `result_data.error` when the keystore refused the votes or the policy moved on.
+             */
+            request_id: string;
+            /** @description The `policy_update` operation hash the approvers sign (see `Nep413Auth`): `{wallet_pubkey, policy_hash, version, locked, caller}`, canonical. */
+            request_hash: string;
+            required_approvals: number;
+            /** @description What the approvers are approving: `policy` (the new policy's plaintext, as it will be stored), `policy_hash`, `version`, `locked`, `caller`, `wallet_pubkey`, `encrypted_data`. */
+            request_data: {
+                [key: string]: unknown;
+            };
         };
         InvalidateCacheRequest: {
             wallet_id: string;
@@ -8329,7 +8413,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Signature */
+            /** @description The signature, or the approval the write waits on. */
             200: {
                 headers: {
                     [name: string]: unknown;

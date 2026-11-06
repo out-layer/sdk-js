@@ -1318,12 +1318,24 @@ export interface paths {
         put?: never;
         /**
          * Rest a limit order at a price you set
-         * @description Rests a swap on 1Click at `price` or better, funded from the wallet's
-         *     intents balance. The order waits until it fills (partially or fully),
-         *     is cancelled, or reaches its `deadline` (7 days unless you set one).
-         *     Filled output goes to `recipient` — this wallet's own intents balance
-         *     when omitted; the unfilled remainder always comes back to this wallet.
-         *     MAINNET only.
+         * @description Rests a swap on 1Click at `price` or better, funded from one of the
+         *     wallet's own balances: its public intents balance (`deposit_type:
+         *     intents`, the default) or its confidential balance (`deposit_type:
+         *     confidential_intents`). The order waits until it fills (partially or
+         *     fully), is cancelled, or reaches its `deadline` (7 days unless you set
+         *     one). Filled output goes to `recipient` — this wallet's own account
+         *     when omitted; the unfilled remainder always comes back to this wallet,
+         *     on the balance the order was funded from. MAINNET only.
+         *
+         *     **Funding from the confidential balance** is one mode, taken whole: the
+         *     order is funded from the confidential balance, pays out to the
+         *     confidential balance (`recipient_type` is `confidential_intents` or
+         *     omitted; `intents` or `destination_chain` with it is `400
+         *     bad_request` — mixed routing is not offered) and refunds there. Such
+         *     an order needs the `confidential` capability as well as `limit_order`,
+         *     and the deployment's confidential upstream (`503` otherwise). It is
+         *     funded through 1Click's own funding intent, which this service holds
+         *     to the authorised transfer before the wallet signs it.
          *
          *     This endpoint is a thin door onto 1Click's `/v0/orders`. The request
          *     carries 1Click's own order parameters and the answer is 1Click's own
@@ -1371,13 +1383,14 @@ export interface paths {
          *     **Fees.** 1Click applies its own app fee to the input (reported back as
          *     `app_fees`, in basis points). It is not set by this service.
          *
-         *     **Balance.** The wallet's intents balance of the asset it sends is
-         *     checked before anything is created at 1Click: short of the order's
-         *     input, the call answers `insufficient_balance` with both figures.
+         *     **Balance.** The wallet's balance of the asset it sends — the one
+         *     `deposit_type` names — is checked before anything is created at
+         *     1Click: short of the order's input, the call answers
+         *     `insufficient_balance` with both figures.
          *
          *     **The answer** is the order as 1Click described it when it was created
          *     — `fill_status: awaiting_deposit`, `deposited_amount: "0"` — together
-         *     with `transfer_intent_hash`, the transfer that funds it. 1Click picks
+         *     with `transfer_intent_hash`, the intent that funds it. 1Click picks
          *     the deposit up within seconds; read the order to see it `open`.
          *
          *     **Idempotency** is the rest of this API's: a key seen before is not
@@ -4047,7 +4060,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
-        /** @description 1Click's own order parameters, less the ones that are not the caller's to choose: the order is always funded from, and refunded to, this wallet's intents balance. */
+        /** @description 1Click's own order parameters, less the ones that are not the caller's to choose: the order is funded from one of this wallet's own balances (`deposit_type`) and refunded to that same balance. */
         LimitOrderCreateRequest: {
             /** @description Defuse asset id of the asset `quantity` is denominated in. */
             base_asset: string;
@@ -4065,11 +4078,17 @@ export interface components {
             /** @description Where the filled output goes. Omitted → this wallet's own intents balance. Subject to the policy's address rules either way. */
             recipient?: string;
             /**
-             * @description 1Click's `recipientType`, lower-cased. `intents` — `recipient` is a NEAR account credited inside NEAR Intents. `confidential_intents` — the same, on the confidential shard, and the policy must then permit the `confidential` capability as well as `limit_order`. `destination_chain` — `recipient` is an address on the output asset's own chain, and is then required. Part of the terms approvers sign.
+             * @description 1Click's `recipientType`, lower-cased. `intents` — `recipient` is a NEAR account credited inside NEAR Intents. `confidential_intents` — the same, on the confidential shard, and the policy must then permit the `confidential` capability as well as `limit_order`. `destination_chain` — `recipient` is an address on the output asset's own chain, and is then required. Part of the terms approvers sign. With `deposit_type: confidential_intents` only `confidential_intents` (or omitting it) is accepted.
              * @default intents
              * @enum {string}
              */
             recipient_type: "intents" | "confidential_intents" | "destination_chain";
+            /**
+             * @description Which of this wallet's balances funds the order — and is refunded the unfilled remainder. `intents`: the public intents balance. `confidential_intents`: the confidential balance; the order then pays out to the confidential balance too (`recipient_type` must be `confidential_intents` or omitted — anything else is `400`, mixed routing is not offered), needs the `confidential` capability as well as `limit_order`, and is reachable only where confidential intents are configured (`503` otherwise).
+             * @default intents
+             * @enum {string}
+             */
+            deposit_type: "intents" | "confidential_intents";
             /**
              * Format: date-time
              * @description When the order expires. Omitted → 7 days.
@@ -4085,7 +4104,7 @@ export interface components {
             deposit_address: string;
             /** @description Always `simple` — orders here are never created in memo mode. */
             deposit_mode?: string;
-            /** @description Always `intents` — orders here are funded from the intents balance. */
+            /** @description Which of the wallet's balances funded the order: `intents` (the public intents balance) or `confidential_intents` (the confidential balance). */
             deposit_type?: string;
             /** @description Matching state: `awaiting_deposit`, `open`, `partially_filled`, `filled`, `pending_cancel`, `canceled`, `expired`, `untriggered`. NOT a terminal signal — see `is_payout_status_final`. */
             fill_status: string;
@@ -4130,8 +4149,9 @@ export interface components {
             recipient: string;
             /** @description `intents`, `confidential_intents` or `destination_chain`. */
             recipient_type: string;
-            /** @description Always this wallet's own intents account. */
+            /** @description Always this wallet's own account. */
             refund_to: string;
+            /** @description Always the balance the order was funded from — the same value as `deposit_type`: the unfilled remainder comes back where the input came from. */
             refund_type: string;
             estimated_withdraw_fee?: string;
             estimated_withdraw_fee_formatted?: string;
@@ -4160,7 +4180,7 @@ export interface components {
             /** @description What approvers sign over — the order's terms. */
             request_hash: string;
         };
-        /** @description The order exists and its funding transfer was handed to the relay, but was not confirmed in time (or the call failed after handing it over). Not an error, and not to be retried: the transfer may land. The request settles from the chain — `success` once the transfer executed, or `failed` with `never_executed: true` once its deadline passed unused, and only then is the order cancelled. */
+        /** @description The order exists and its funding was handed over, but was not confirmed in time (or the call failed after handing it over). Not an error, and not to be retried: the funding may land. The request settles on its own — from the chain for an order funded from the public intents balance, from the order itself (the deposit 1Click reports) for one funded from the confidential balance: `success` once the funding executed, or `failed` with `never_executed: true` once its deadline passed unused, and only then is the order cancelled. */
         LimitOrderProcessing: {
             request_id: string;
             /** @enum {string} */

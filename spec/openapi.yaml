@@ -819,6 +819,13 @@ paths:
         call exceeds limits, the response carries `status=pending_approval`
         and an `approval_id` for the multisig flow.
 
+        `call` gives the agent what the wallet's own NEAR account can do:
+        an `ft_transfer` moves that token whatever the per-token limits say
+        (they see the 1 yoctoNEAR deposit). A call to the NEAR Intents contract
+        (`intents.near`) is refused (`403 policy_denied`) unless the policy sets
+        `capabilities.intents_call` — see `Capabilities`; use the
+        `/wallet/v1/intents/*` endpoints instead.
+
 
         Agent Connect: a `w_execute_extension` call aimed at the wallet's own
         bound account is additionally checked against the LIVE chain — binding
@@ -1198,6 +1205,88 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/RouteUnavailable'
+
+  /wallet/v1/intents/storage-deposit:
+    post:
+      tags: [Wallet]
+      operationId: intentsStorageDeposit
+      summary: Register storage on a NEP-141 token, paid from the intents wNEAR balance
+      description: |
+        Registers `account_id` (defaults to the wallet's own NEAR account) on the
+        NEP-141 contract `token`, paid with the wallet's **wNEAR inside
+        `intents.near`** — the defuse `storage_deposit` intent, gasless via the
+        solver relay. The wallet needs no native NEAR. `POST
+        /wallet/v1/storage-deposit` does the same paid in native NEAR from the
+        wallet's on-chain account.
+
+        The usual use: before `POST /wallet/v1/intents/withdraw` of a NEP-141 to
+        an account with no storage on the token (the withdraw answers
+        `storage_not_registered`), register that account here and retry.
+
+        The amount is the token contract's `storage_balance_bounds().min`, read
+        at the call, and at most 0.00125 NEAR (`1250000000000000000000`
+        yoctoNEAR, the minimum of a standard NEP-141): a token asking more is
+        `400`, register it through `POST /wallet/v1/call`. `intents.near` never
+        refunds the wNEAR it spends on a storage deposit, so nothing is signed
+        for an account that is already registered: the answer is `success` with
+        `already_registered: true`, before the policy and any approval. A
+        registration that cannot be read is a `503`, never treated as absent.
+        While a deposit for the same token and account is `processing` or
+        `pending_approval` on this wallet, another is `409 conflict` naming
+        that request.
+
+        `success` means the account IS registered: the deposit runs after the
+        intent in a separate receipt, and the call answers `processing` with a
+        `poll_url` until `storage_balance_of` shows it. A request whose intent
+        executed and left the account unregistered ends `failed` with
+        `result.wnear_spent: true`.
+
+        Gated by the policy as its own type, `intents_storage_deposit`: it
+        spends the intents balance, so neither `call` nor `storage_deposit`
+        permits it. The token contract is the destination for an address list,
+        the wNEAR (`nep141:wrap.near`) the token for limits. On a wallet that requires approval it answers
+        `pending_approval`. A wNEAR balance below the deposit is `400
+        insufficient_balance`. NEAR Intents is mainnet-only: `503` on testnet.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/AnswerWithin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntentsStorageDepositRequest'
+            examples:
+              receiver:
+                summary: Register a withdraw receiver on USDC
+                value:
+                  token: 17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1
+                  account_id: 4f2d8a1c9b3e7f60a5d4c3b2a1908f7e6d5c4b3a29180f7e6d5c4b3a29180f7e
+      responses:
+        '200':
+          description: Registered, already registered, processing, or queued for approval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntentsStorageDepositResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: A deposit for the same token and account is already under way; the message names its request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/OperationLimitReached'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /wallet/v1/intents/transfer:
     post:
@@ -6219,7 +6308,9 @@ components:
         (`intents/deposit`, `storage-deposit`, cross-chain deposit) all gate as
         `call`. `limit_order` is a rested 1Click order and, like
         `cross_chain_withdraw`, its own type: permitting swaps or cross-chain
-        exits does not permit it. `policy_update` is a write to a locked
+        exits does not permit it. `intents_storage_deposit` pays a token
+        registration from the intents wNEAR balance and is its own type:
+        `call` does not permit it. `policy_update` is a write to a locked
         policy awaiting the approvers' quorum (`signPolicy`); it is never
         subject to `excluded_types` — the lock is its own check.
       enum:
@@ -6231,6 +6322,7 @@ components:
         - deposit
         - swap
         - confidential
+        - intents_storage_deposit
         - policy_update
 
     RequestStatus:
@@ -6277,7 +6369,8 @@ components:
         - insufficient_balance
         # 400, same-chain withdraw pre-conditions, each the name the dry-run
         # answers in `reason`: a NEP-141 recipient with no storage on the
-        # token contract (`POST /wallet/v1/storage-deposit`, or another
+        # token contract (`POST /wallet/v1/intents/storage-deposit` paid in
+        # intents wNEAR, `POST /wallet/v1/storage-deposit` paid in NEAR, or another
         # `to`), and a native NEAR withdraw to a named account that does not
         # exist (`native_withdraw` would burn the wNEAR). Terminal for the
         # request as sent; nothing moved.
@@ -6631,6 +6724,7 @@ components:
             - storage_deposit
             - intents_transfer
             - intents_deposit
+            - intents_storage_deposit
             - confidential
             - confidential_deposit
             - repair
@@ -7080,6 +7174,63 @@ components:
         account_id:
           type: [string, 'null']
           description: Account to register. Defaults to the wallet's own NEAR address.
+
+    IntentsStorageDepositRequest:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: NEP-141 token contract, bare (`usdc.near`) or as its intents id (`nep141:usdc.near`).
+        account_id:
+          type: [string, 'null']
+          description: Account to register. Defaults to the wallet's own NEAR account.
+
+    IntentsStorageDepositResponse:
+      type: object
+      required: [request_id, status, token, account_id, already_registered]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        token:
+          type: string
+          description: The token contract, bare.
+        account_id:
+          type: string
+        amount:
+          type: [string, 'null']
+          description: >-
+            wNEAR paid, in yoctoNEAR: the contract's storage minimum. Absent
+            when nothing was paid (`already_registered`).
+        already_registered:
+          type: boolean
+          description: True when the account already had storage; nothing was signed or paid.
+        intent_hash:
+          type: [string, 'null']
+        approval_id:
+          type: [string, 'null']
+          format: uuid
+          description: Present only on `pending_approval` — the approval to vote on.
+        required:
+          type: [integer, 'null']
+          description: Present only on `pending_approval` — approvals needed.
+        approved:
+          type: [integer, 'null']
+          description: Present only on `pending_approval` — approvals collected so far.
+        request_hash:
+          type: [string, 'null']
+          description: >-
+            Present on `pending_approval` — sha256(canonical_json(op)); sign to
+            approve.
+        poll_url:
+          type: [string, 'null']
+          description: >-
+            Present on `processing`: the intent was handed over and the
+            registration is not visible yet. `GET` it for the outcome.
 
     StorageDepositResponse:
       type: object
@@ -8465,8 +8616,10 @@ components:
       type: object
       description: >-
         `raw_sign` — sign arbitrary raw bytes. `chains` is an optional allowlist;
-        when absent, ALL chains (including `near`, which can sign a NEAR tx/intent
-        outside the structured policy — enable with care).
+        when absent, every chain **except `near`**. `near` is signed only when
+        listed, with or without a policy: a raw signature by the NEAR key is any
+        NEAR transaction, outside the structured policy — including a call to
+        `intents.near` that hands the wallet's intents account to another key.
       properties:
         allowed:
           type: boolean
@@ -8541,7 +8694,8 @@ components:
         Default-DENY opt-ins for the non-Built primitives, stored alongside
         `rules` / `approval` in the encrypted policy. Every capability defaults to
         DENY under a policy **except** `sign_message` (default-allow). A wallet
-        with no policy at all is unrestricted.
+        with no policy at all is unrestricted, **except `intents_call`**, which
+        stays denied without a policy too.
       properties:
         raw_sign:
           $ref: '#/components/schemas/RawSignCapability'
@@ -8561,6 +8715,24 @@ components:
           $ref: '#/components/schemas/EvmSignCapability'
         solana_sign:
           $ref: '#/components/schemas/SolanaSignCapability'
+        intents_call:
+          allOf:
+            - $ref: '#/components/schemas/Capability'
+          description: >-
+            A `call` whose receiver is the NEAR Intents contract
+            (`intents.near`, `intents.far`) — directly, or as a
+            `w_execute_extension` promise of the bound account (then the bound
+            account's own intents account is at stake). **Default-DENY with or
+            without a policy.** The contract treats a transaction from an
+            account as the owner of that account's intents account, for 1
+            yoctoNEAR: such a call
+            can `add_public_key` — a key outside the TEE that signs for the
+            intents account permanently, past any later policy, freeze or lock —
+            or move any intents balance past the transaction types, the address
+            list and the per-token limits (`ft_withdraw`, `mt_transfer`). Every
+            intents operation has its own endpoint (`/wallet/v1/intents/*`);
+            set `allowed: true` only to hand the agent the intents account
+            itself. `call` must be permitted as well.
 
     EvmSignTypedDataRequest:
       type: object

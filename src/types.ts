@@ -382,6 +382,13 @@ export interface paths {
          *     call exceeds limits, the response carries `status=pending_approval`
          *     and an `approval_id` for the multisig flow.
          *
+         *     `call` gives the agent what the wallet's own NEAR account can do:
+         *     an `ft_transfer` moves that token whatever the per-token limits say
+         *     (they see the 1 yoctoNEAR deposit). A call to the NEAR Intents contract
+         *     (`intents.near`) is refused (`403 policy_denied`) unless the policy sets
+         *     `capabilities.intents_call` — see `Capabilities`; use the
+         *     `/wallet/v1/intents/*` endpoints instead.
+         *
          *
          *     Agent Connect: a `w_execute_extension` call aimed at the wallet's own
          *     bound account is additionally checked against the LIVE chain — binding
@@ -573,6 +580,60 @@ export interface paths {
          *     the quote line in `message` is the cost estimate.
          */
         post: operations["intentsWithdrawDryRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/intents/storage-deposit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register storage on a NEP-141 token, paid from the intents wNEAR balance
+         * @description Registers `account_id` (defaults to the wallet's own NEAR account) on the
+         *     NEP-141 contract `token`, paid with the wallet's **wNEAR inside
+         *     `intents.near`** — the defuse `storage_deposit` intent, gasless via the
+         *     solver relay. The wallet needs no native NEAR. `POST
+         *     /wallet/v1/storage-deposit` does the same paid in native NEAR from the
+         *     wallet's on-chain account.
+         *
+         *     The usual use: before `POST /wallet/v1/intents/withdraw` of a NEP-141 to
+         *     an account with no storage on the token (the withdraw answers
+         *     `storage_not_registered`), register that account here and retry.
+         *
+         *     The amount is the token contract's `storage_balance_bounds().min`, read
+         *     at the call, and at most 0.00125 NEAR (`1250000000000000000000`
+         *     yoctoNEAR, the minimum of a standard NEP-141): a token asking more is
+         *     `400`, register it through `POST /wallet/v1/call`. `intents.near` never
+         *     refunds the wNEAR it spends on a storage deposit, so nothing is signed
+         *     for an account that is already registered: the answer is `success` with
+         *     `already_registered: true`, before the policy and any approval. A
+         *     registration that cannot be read is a `503`, never treated as absent.
+         *     While a deposit for the same token and account is `processing` or
+         *     `pending_approval` on this wallet, another is `409 conflict` naming
+         *     that request.
+         *
+         *     `success` means the account IS registered: the deposit runs after the
+         *     intent in a separate receipt, and the call answers `processing` with a
+         *     `poll_url` until `storage_balance_of` shows it. A request whose intent
+         *     executed and left the account unregistered ends `failed` with
+         *     `result.wnear_spent: true`.
+         *
+         *     Gated by the policy as its own type, `intents_storage_deposit`: it
+         *     spends the intents balance, so neither `call` nor `storage_deposit`
+         *     permits it. The token contract is the destination for an address list,
+         *     the wNEAR (`nep141:wrap.near`) the token for limits. On a wallet that requires approval it answers
+         *     `pending_approval`. A wNEAR balance below the deposit is `400
+         *     insufficient_balance`. NEAR Intents is mainnet-only: `503` on testnet.
+         */
+        post: operations["intentsStorageDeposit"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3332,12 +3393,14 @@ export interface components {
          *     (`intents/deposit`, `storage-deposit`, cross-chain deposit) all gate as
          *     `call`. `limit_order` is a rested 1Click order and, like
          *     `cross_chain_withdraw`, its own type: permitting swaps or cross-chain
-         *     exits does not permit it. `policy_update` is a write to a locked
+         *     exits does not permit it. `intents_storage_deposit` pays a token
+         *     registration from the intents wNEAR balance and is its own type:
+         *     `call` does not permit it. `policy_update` is a write to a locked
          *     policy awaiting the approvers' quorum (`signPolicy`); it is never
          *     subject to `excluded_types` — the lock is its own check.
          * @enum {string}
          */
-        RequestType: "call" | "transfer" | "withdraw" | "cross_chain_withdraw" | "limit_order" | "deposit" | "swap" | "confidential" | "policy_update";
+        RequestType: "call" | "transfer" | "withdraw" | "cross_chain_withdraw" | "limit_order" | "deposit" | "swap" | "confidential" | "intents_storage_deposit" | "policy_update";
         /**
          * @description `partially_failed` occurs only for `w_execute_extension` (Agent Connect's extension door) and is a NORMAL outcome, not an error: the wallet detaches its promises, they execute concurrently and independently, and one failing neither reverts the others nor undoes the value they moved. Read `result.promises[]` for which did what.
          * @enum {string}
@@ -3493,7 +3556,7 @@ export interface components {
              * @description What the holder is doing. Present even when `in_flight_request_id` is `null`, and worth branching on: a transfer clears in seconds while a cross-chain withdraw can run for many minutes, and that is the difference between retrying at once and backing off. `repair` is the odd one — a read of a request left unresolved settles it under the same lock, and that finishes quickly.
              * @enum {string|null}
              */
-            in_flight_operation?: null | "transfer" | "call" | "swap" | "delete" | "withdraw" | "cross_chain_withdraw" | "cross_chain_deposit" | "limit_order" | "storage_deposit" | "intents_transfer" | "intents_deposit" | "confidential" | "confidential_deposit" | "repair" | "policy_update";
+            in_flight_operation?: null | "transfer" | "call" | "swap" | "delete" | "withdraw" | "cross_chain_withdraw" | "cross_chain_deposit" | "limit_order" | "storage_deposit" | "intents_transfer" | "intents_deposit" | "intents_storage_deposit" | "confidential" | "confidential_deposit" | "repair" | "policy_update";
         };
         /**
          * @description A `403` from the Agent Connect pre-flight: the request was refused BEFORE it was signed, so no gas was spent, and the refusal names the rule the wallet contract would have panicked on.
@@ -3743,6 +3806,38 @@ export interface components {
             token: string;
             /** @description Account to register. Defaults to the wallet's own NEAR address. */
             account_id?: string | null;
+        };
+        IntentsStorageDepositRequest: {
+            /** @description NEP-141 token contract, bare (`usdc.near`) or as its intents id (`nep141:usdc.near`). */
+            token: string;
+            /** @description Account to register. Defaults to the wallet's own NEAR account. */
+            account_id?: string | null;
+        };
+        IntentsStorageDepositResponse: {
+            /** Format: uuid */
+            request_id: string;
+            status: components["schemas"]["RequestStatus"];
+            /** @description The token contract, bare. */
+            token: string;
+            account_id: string;
+            /** @description wNEAR paid, in yoctoNEAR: the contract's storage minimum. Absent when nothing was paid (`already_registered`). */
+            amount?: string | null;
+            /** @description True when the account already had storage; nothing was signed or paid. */
+            already_registered: boolean;
+            intent_hash?: string | null;
+            /**
+             * Format: uuid
+             * @description Present only on `pending_approval` — the approval to vote on.
+             */
+            approval_id?: string | null;
+            /** @description Present only on `pending_approval` — approvals needed. */
+            required?: number | null;
+            /** @description Present only on `pending_approval` — approvals collected so far. */
+            approved?: number | null;
+            /** @description Present on `pending_approval` — sha256(canonical_json(op)); sign to approve. */
+            request_hash?: string | null;
+            /** @description Present on `processing`: the intent was handed over and the registration is not visible yet. `GET` it for the outcome. */
+            poll_url?: string | null;
         };
         /**
          * @description Response for `storageDeposit`. `storage_deposit` is multisig-capable: on
@@ -4527,7 +4622,7 @@ export interface components {
             allowed?: boolean;
             requires_approval?: boolean;
         };
-        /** @description `raw_sign` — sign arbitrary raw bytes. `chains` is an optional allowlist; when absent, ALL chains (including `near`, which can sign a NEAR tx/intent outside the structured policy — enable with care). */
+        /** @description `raw_sign` — sign arbitrary raw bytes. `chains` is an optional allowlist; when absent, every chain **except `near`**. `near` is signed only when listed, with or without a policy: a raw signature by the NEAR key is any NEAR transaction, outside the structured policy — including a call to `intents.near` that hands the wallet's intents account to another key. */
         RawSignCapability: {
             allowed?: boolean;
             requires_approval?: boolean;
@@ -4557,7 +4652,8 @@ export interface components {
          * @description Default-DENY opt-ins for the non-Built primitives, stored alongside
          *     `rules` / `approval` in the encrypted policy. Every capability defaults to
          *     DENY under a policy **except** `sign_message` (default-allow). A wallet
-         *     with no policy at all is unrestricted.
+         *     with no policy at all is unrestricted, **except `intents_call`**, which
+         *     stays denied without a policy too.
          */
         Capabilities: {
             raw_sign?: components["schemas"]["RawSignCapability"];
@@ -4569,6 +4665,8 @@ export interface components {
             sign_message?: components["schemas"]["SignMessageCapability"];
             evm_sign?: components["schemas"]["EvmSignCapability"];
             solana_sign?: components["schemas"]["SolanaSignCapability"];
+            /** @description A `call` whose receiver is the NEAR Intents contract (`intents.near`, `intents.far`) — directly, or as a `w_execute_extension` promise of the bound account (then the bound account's own intents account is at stake). **Default-DENY with or without a policy.** The contract treats a transaction from an account as the owner of that account's intents account, for 1 yoctoNEAR: such a call can `add_public_key` — a key outside the TEE that signs for the intents account permanently, past any later policy, freeze or lock — or move any intents balance past the transaction types, the address list and the per-token limits (`ft_withdraw`, `mt_transfer`). Every intents operation has its own endpoint (`/wallet/v1/intents/*`); set `allowed: true` only to hand the agent the intents account itself. `call` must be permitted as well. */
+            intents_call?: components["schemas"]["Capability"];
         };
         EvmSignTypedDataRequest: {
             chain: components["schemas"]["Chain"];
@@ -6356,6 +6454,109 @@ export interface operations {
             429: components["responses"]["OperationLimitReached"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["RouteUnavailable"];
+        };
+    };
+    intentsStorageDeposit: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description One key per operation, scoped to `(wallet, key)`; the request body is
+                 *     never compared. The key is written on the request row BEFORE any funds
+                 *     move, so a key seen again names the request that reserved it, whatever
+                 *     became of it, and nothing runs twice.
+                 *
+                 *     A seen key answers **HTTP `200`** with `error: duplicate_idempotency_key`
+                 *     and the request it belongs to:
+                 *     ```json
+                 *     {"error": "duplicate_idempotency_key",
+                 *      "message": "Request already processed: <request_id>",
+                 *      "request_id": "<request_id>", "type": "withdraw", "status": "processing",
+                 *      "result": {...}, "poll_url": "/wallet/v1/requests/<request_id>",
+                 *      "created_at": "...", "updated_at": "..."}
+                 *     ```
+                 *     `status` is the request's as recorded; `poll_url` is present while it is
+                 *     not terminal (`success`/`completed`, `failed`, `refunded`,
+                 *     `needs_review`); `result` and `updated_at` once the row has them.
+                 *     Because the HTTP code is `200`, branch on `error` in the body.
+                 *
+                 *     For `createPaymentCheck` and `batchCreatePaymentChecks` the body also
+                 *     carries `checks`: `[{check_id, check_key, status}]` — the checks that
+                 *     key made, each with its key derived again for the API key that asks.
+                 *     A caller that lost the create's answer gets its only copy back here.
+                 *     `check_key` is `null` when the asking API key is not the one the check
+                 *     was created with (a key of the same wallet under another vault derives
+                 *     a different key): re-send with the key that created it. A batch lists
+                 *     the checks reserved so far while its request is `processing`, and all
+                 *     of them once it is `completed`.
+                 *     If the re-derivation cannot be done (the keystore does not answer), the
+                 *     re-send is refused like any keystore call and can be sent again.
+                 *
+                 *     A key is held by the request that reserved it, including one that ended
+                 *     `failed` after the reserve. A refusal before the reserve — authentication,
+                 *     a malformed body, the policy, `wallet_busy`, a bad `X-Answer-Within` —
+                 *     holds nothing, and the same key may be sent again.
+                 *
+                 *     Recovery after a timeout or a dropped connection: re-send with the same
+                 *     key and read `request_id` and `status` from whichever answer comes — the
+                 *     plain one, this duplicate, or `409 wallet_busy` with `in_flight_request_id`
+                 *     (`null` while the request is being written: retry in a moment). With no
+                 *     header the server mints a fresh key per call, so nothing is deduplicated.
+                 */
+                "X-Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                /**
+                 * @description How many seconds after the request arrives this call waits for the
+                 *     operation to settle before it answers `status: processing` with
+                 *     `request_id` and `poll_url` (`createPaymentCheck`: `status: creating`
+                 *     with the check's `poll_url`). Whole seconds, `0` to `80`; `0` answers as
+                 *     soon as the funds are handed over. Absent, the call waits its own
+                 *     budget: up to 80 s, and the relay's 60 s on a same-chain transfer or
+                 *     withdraw. The wait only shortens: the operation itself runs to its
+                 *     outcome and settles the request whatever the client waited. Two things
+                 *     it does not cut: the hand-over itself (one relay publish, up to 30 s),
+                 *     and in `batchCreatePaymentChecks` the hand-over of every check, which
+                 *     the wait follows. A value outside the range is refused
+                 *     `400 bad_request` before anything runs, and reserves nothing. Set it a
+                 *     few seconds below your client's timeout, so a slow settlement answers
+                 *     with an id to poll instead of a dropped connection. The header is read
+                 *     on every wallet route: it acts on the operations that wait (the ones
+                 *     that list it), and is accepted and changes nothing elsewhere.
+                 */
+                "X-Answer-Within"?: components["parameters"]["AnswerWithin"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntentsStorageDepositRequest"];
+            };
+        };
+        responses: {
+            /** @description Registered, already registered, processing, or queued for approval */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntentsStorageDepositResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description A deposit for the same token and account is already under way; the message names its request. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["OperationLimitReached"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     intentsTransfer: {

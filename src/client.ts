@@ -47,6 +47,8 @@ export type IntentsDepositResponse = Schemas['IntentsDepositResponse'];
 export type WithdrawRequest = Schemas['WithdrawRequest'];
 export type WithdrawResponse = Schemas['WithdrawResponse'];
 export type IntentsTransferRequest = Schemas['IntentsTransferRequest'];
+export type IntentsStorageDepositRequest = Schemas['IntentsStorageDepositRequest'];
+export type IntentsStorageDepositResponse = Schemas['IntentsStorageDepositResponse'];
 export type DryRunResponse = Schemas['DryRunResponse'];
 
 export type SwapRequest = Schemas['SwapRequest'];
@@ -563,6 +565,29 @@ export class OutlayerClient {
       () =>
         this.client.POST('/wallet/v1/intents/transfer', {
           body: body as IntentsTransferRequest,
+          headers,
+        }),
+      this.retry,
+    );
+  }
+
+  /**
+   * Register storage on a NEP-141 token contract for `account_id` (defaults to
+   * the wallet's own NEAR account), paid from the wallet's wNEAR inside NEAR
+   * Intents — gasless, no native NEAR needed. The amount is the token's
+   * storage minimum. `already_registered: true` means nothing was paid;
+   * `success` means the account is registered; `processing` carries a
+   * `poll_url` until it is.
+   */
+  intentsStorageDeposit(
+    opts: IntentsStorageDepositRequest & Idempotent,
+  ): Promise<IntentsStorageDepositResponse> {
+    const { idempotencyKey, answerWithinSeconds, ...body } = opts;
+    const headers = idempotencyHeader(idempotencyKey, answerWithinSeconds);
+    return runWithRetry(
+      () =>
+        this.client.POST('/wallet/v1/intents/storage-deposit', {
+          body: body as IntentsStorageDepositRequest,
           headers,
         }),
       this.retry,

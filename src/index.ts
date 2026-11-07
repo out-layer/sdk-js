@@ -26,6 +26,8 @@ export type {
   WithdrawRequest,
   WithdrawResponse,
   IntentsTransferRequest,
+  IntentsStorageDepositRequest,
+  IntentsStorageDepositResponse,
   DryRunResponse,
   SwapRequest,
   SwapResponse,

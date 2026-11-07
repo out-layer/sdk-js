@@ -3175,7 +3175,7 @@ paths:
         `reject`, as for any pending operation; `request_data.policy` is the
         new policy they are approving) and a `request_id`. Once the threshold
         is met the signature is on `GET /wallet/v1/requests/{request_id}`
-        (`status: success`, `result_data.wallet_signature`, `version`,
+        (`status: success`, `result.wallet_signature`, `version`,
         `locked`, `valid_until`, `encrypted_data`); the owner sends
         `store_wallet_policy` with it, within `valid_until`. A vote the keystore does not count, or a policy that moved
         on under the approval, fails the request with the keystore's words.
@@ -6275,6 +6275,14 @@ components:
         - policy_denied
         - not_approver
         - insufficient_balance
+        # 400, same-chain withdraw pre-conditions, each the name the dry-run
+        # answers in `reason`: a NEP-141 recipient with no storage on the
+        # token contract (`POST /wallet/v1/storage-deposit`, or another
+        # `to`), and a native NEAR withdraw to a named account that does not
+        # exist (`native_withdraw` would burn the wNEAR). Terminal for the
+        # request as sent; nothing moved.
+        - storage_not_registered
+        - recipient_not_found
         # 402, and about the SIGNER rather than the request: the account that
         # would send the transaction cannot pay for it. `wallet_underfunded`
         # names the wallet's own NEAR account and what the call costs;
@@ -8869,9 +8877,9 @@ components:
           description: >-
             Where the signature appears once the threshold is met:
             `GET /wallet/v1/requests/{request_id}` → `status: success`,
-            `result_data` = `{wallet_signature, public_key_hex, wallet_pubkey,
+            `result` = `{wallet_signature, public_key_hex, wallet_pubkey,
             version, locked, valid_until, policy_hash, request_hash,
-            encrypted_data, caller}`. `status: failed` with `result_data.error` when the
+            encrypted_data, caller}`. `status: failed` with `result.error` when the
             keystore refused the votes or the policy moved on.
         request_hash:
           type: string

@@ -188,7 +188,7 @@ export class PolicyAPI {
    * signature — or, when the policy on chain is locked (`approval.locked`),
    * a `PolicyUpdatePending` (`status: 'pending_approval'`): the current
    * policy's approvers vote on `approval_id`, and once the threshold is met
-   * the signature is on `requests.get(request_id)` (`result_data`).
+   * the signature is on `requests.get(request_id)` (`result`).
    */
   sign(encryptedData: string, caller: string): Promise<SignPolicyResponse> {
     return runWithRetry(

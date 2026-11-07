@@ -1889,7 +1889,7 @@ export interface paths {
          *     `reject`, as for any pending operation; `request_data.policy` is the
          *     new policy they are approving) and a `request_id`. Once the threshold
          *     is met the signature is on `GET /wallet/v1/requests/{request_id}`
-         *     (`status: success`, `result_data.wallet_signature`, `version`,
+         *     (`status: success`, `result.wallet_signature`, `version`,
          *     `locked`, `valid_until`, `encrypted_data`); the owner sends
          *     `store_wallet_policy` with it, within `valid_until`. A vote the keystore does not count, or a policy that moved
          *     on under the approval, fails the request with the keystore's words.
@@ -3344,7 +3344,7 @@ export interface components {
          */
         RequestStatus: "pending_deposit" | "processing" | "success" | "completed" | "partially_failed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "cancelled" | "needs_review";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "no_liquidity" | "upstream_rejected" | "operation_limit_reached" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "route_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "storage_not_registered" | "recipient_not_found" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "no_liquidity" | "upstream_rejected" | "operation_limit_reached" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "route_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -4738,7 +4738,7 @@ export interface components {
             approval_id: string;
             /**
              * Format: uuid
-             * @description Where the signature appears once the threshold is met: `GET /wallet/v1/requests/{request_id}` → `status: success`, `result_data` = `{wallet_signature, public_key_hex, wallet_pubkey, version, locked, valid_until, policy_hash, request_hash, encrypted_data, caller}`. `status: failed` with `result_data.error` when the keystore refused the votes or the policy moved on.
+             * @description Where the signature appears once the threshold is met: `GET /wallet/v1/requests/{request_id}` → `status: success`, `result` = `{wallet_signature, public_key_hex, wallet_pubkey, version, locked, valid_until, policy_hash, request_hash, encrypted_data, caller}`. `status: failed` with `result.error` when the keystore refused the votes or the policy moved on.
              */
             request_id: string;
             /** @description The `policy_update` operation hash the approvers sign (see `Nep413Auth`): `{wallet_pubkey, policy_hash, version, locked, caller}`, canonical. */

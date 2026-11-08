@@ -91,9 +91,12 @@ tags:
       public RPC, so you cannot read it externally, but it is an auditable smart
       contract. Only SHIELD/UNSHIELD touch the public chain. Requires
       `ENABLE_CONFIDENTIAL_INTENTS` + the confidential partner agreement on the
-      deployment, else every route returns 503. See the agent integration
-      guide referenced under `externalDocs` for the full mental model, privacy
-      recipes, and curl walkthroughs.
+      deployment, else every route returns 503. Every operation signs 1Click's
+      own intent only as the transfer its quote is (this wallet, the quote's
+      deposit address, the quoted asset and amount, nothing else); any other
+      message is refused `400 bad_request` before anything is signed. See the
+      agent integration guide referenced under `externalDocs` for the full
+      mental model, privacy recipes, and curl walkthroughs.
     externalDocs:
       description: >-
         Confidential intents — agent integration guide (mental model, privacy

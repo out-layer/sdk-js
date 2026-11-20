@@ -955,24 +955,24 @@ export interface paths {
          *     never appears on chain — only the destination-chain receiver does, on the
          *     destination chain.
          *
-         *     `chain` is the token's **home chain** (e.g. `chain=zcash` for
-         *     `nep141:zec.omft.near`, delivering the native asset to a
-         *     destination-chain address), `"near"`, or any other supported chain:
-         *     there the SAME symbol on that chain's 1Click listing is delivered,
-         *     swapped on the way — NEAR USDC withdrawn with `chain=hypercore`
-         *     arrives as HyperCore's HIP-1 USDC, with `chain=polygon` as Polygon
-         *     USDC. A token with no listing of its symbol on that chain is refused.
+         *     `chain` is the token's **home chain** — the chain the 1Click catalog
+         *     lists it on (`GET /wallet/v1/tokens`), not a word in its id:
+         *     `nep141:bnb-….omdep.near` lives on `bsc` — where the token itself is
+         *     delivered (e.g. `chain=zcash` for `nep141:zec.omft.near`), or any other
+         *     supported chain, `"near"` included: there the SAME symbol on that
+         *     chain's 1Click listing is delivered, swapped on the way — NEAR USDC
+         *     withdrawn with `chain=hypercore` arrives as HyperCore's HIP-1 USDC,
+         *     Polygon USDC with `chain=near` as NEAR USDC, ZEC with `chain=near` as
+         *     `1cs_v1:near:nep141:zec.omft.near`. A token with no listing of its
+         *     symbol on that chain, or one the catalog does not list at all, is
+         *     refused (`400 unsupported_token`).
          *
          *     `chain="near"` delivers to the named NEAR account. For NEAR-native
          *     tokens (`nep141:wrap.near` → **native NEAR** via a `native_withdraw`
          *     intent on `intents.near`, verified live: settlement
-         *     `FVzan8XRMwHYPe2hgX4GffwG3bdndxETWb2FKVFzFdur`). For omft bridge
-         *     assets (e.g. `nep141:zec.omft.near`) the NEP-141 representation is
-         *     delivered **on NEAR** (`1cs_v1:near:<asset>` destination) — the funds
-         *     stay bridged instead of being withdrawn to the token's home chain. To
-         *     send funds back to your **own** public intents balance use
-         *     `confidentialUnshield` (different semantics — self vs. external
-         *     recipient).
+         *     `FVzan8XRMwHYPe2hgX4GffwG3bdndxETWb2FKVFzFdur`). To send funds back to
+         *     your **own** public intents balance use `confidentialUnshield`
+         *     (different semantics — self vs. external recipient).
          *
          *     `token` is **required** — the source confidential asset to deliver on the
          *     destination chain. The same per-chain whitelist / spending-limit policy
@@ -1879,6 +1879,17 @@ export interface paths {
          *     the next `store_wallet_policy` must exceed by one, and whether that
          *     write (and a delete) needs the approvers' quorum. Both absent when the
          *     chain could not be read.
+         *
+         *     A response that carries `version` describes ONE record of the chain,
+         *     read at the newest block when the call is made: `rules`, `approval`,
+         *     `capabilities`, `authorized_key_hashes`, `refund_addresses` and
+         *     `frozen` are that record's, so a policy stored a moment ago reads back
+         *     as stored, with nothing to invalidate first. An RPC node a block behind
+         *     can still answer the previous record for a moment: compare what you
+         *     wrote and retry on a mismatch. A response without `version` could not
+         *     read the chain and answers the coordinator's last copy. A record the
+         *     keystore could not decrypt is an error (`503` when the keystore is
+         *     unavailable), never a version without its rules.
          */
         get: operations["getPolicy"];
         put?: never;
@@ -1978,7 +1989,8 @@ export interface paths {
          * @description Forces the coordinator to drop its cached `no_policy` flag for a wallet.
          *     Call this after submitting `store_wallet_policy(...)` on-chain so that
          *     subsequent operations pick up the new policy without waiting for the
-         *     5-minute TTL to expire.
+         *     5-minute TTL to expire. `GET /wallet/v1/policy` does not depend on it:
+         *     that read follows the chain on its own.
          */
         post: operations["invalidatePolicyCache"];
         delete?: never;
@@ -2102,6 +2114,13 @@ export interface paths {
          * Reject a pending action
          * @description A NO vote, proven the same two ways as an approve vote. A reject from a
          *     policy approver vetoes the action.
+         *
+         *     The request is cancelled once a final block holds the policy the
+         *     approver was admitted under: a NO vote cast within a block or two of a
+         *     policy change answers `reject_vote_recorded` and leaves the request
+         *     pending. The same account's NO vote sent again is proven and judged as a
+         *     first one, asks for the cancel again, and answers as a first vote
+         *     does; it is not stored twice.
          */
         post: operations["rejectRequest"];
         delete?: never;
@@ -2575,6 +2594,11 @@ export interface paths {
          *     there, and its subscription is OutLayer's to give. That key is answered
          *     `400` with `reason: trial_key_not_purchasable`; buy on a payment key
          *     the wallet creates (nonce ≥ 1).
+         *
+         *     Never with a grant: a key OutLayer funded (`is_grant`) pays for calls
+         *     only, and a subscription on it is OutLayer's to give. That key is
+         *     answered `403` with `reason: grant_key_not_purchasable`; buy on a
+         *     payment key you funded yourself.
          *
          *     Only the plan's PRICE is spent; an overpayment stays on the key as
          *     balance. The allowance ADDS to whatever is there and validity extends
@@ -3246,7 +3270,7 @@ export interface components {
              * @description Machine-readable name of the refusal.
              * @enum {string}
              */
-            reason: "allowance_no_deposit" | "bad_key_format" | "call_not_found" | "compute_limit_too_low" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "invalid_secrets_ref" | "invalid_version_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "policy_row_not_owner" | "calls_suspended" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "call_already_in_flight" | "trial_exhausted" | "trial_expired" | "trial_key_not_purchasable" | "invalid_request" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
+            reason: "allowance_no_deposit" | "bad_key_format" | "call_not_found" | "compute_limit_too_low" | "expires_too_soon" | "insufficient_allowance" | "insufficient_balance" | "internal_error" | "invalid_key" | "invalid_secrets_ref" | "invalid_version_key" | "keystore_error" | "max_per_call_exceeded" | "missing_payment_key" | "no_bound_identity" | "no_deposit" | "operation_limit_reached" | "policy_row_not_owner" | "calls_suspended" | "out_of_funds" | "project_not_allowed" | "project_not_found" | "rate_limit_exceeded" | "upstream_unavailable" | "tee_session_required" | "timeout" | "call_already_in_flight" | "trial_exhausted" | "trial_expired" | "trial_key_not_purchasable" | "grant_key_not_purchasable" | "invalid_request" | "unknown_operation" | "vault_not_verified" | "vault_unlocked" | "wallet_not_yours" | "wk_is_not_a_payer";
             /**
              * Format: date-time
              * @description On `trial_expired` only — when the trial ended.
@@ -3745,6 +3769,8 @@ export interface components {
             approved?: number | null;
             /** @description Present on `pending_approval` — sha256(canonical_json(op)); sign to approve. */
             request_hash?: string | null;
+            /** @description Present on `processing`: the transaction was sent and its outcome is not known yet (the node stopped waiting — a call that yields, a timeout). The request is already charged to the velocity counters; `GET` this URL for `success` or `failed`, and do not resend. */
+            poll_url?: string | null;
         };
         /**
          * @description Native transfer on a single chain. Canonical recipient field is
@@ -3878,6 +3904,8 @@ export interface components {
             request_id: string;
             status: components["schemas"]["RequestStatus"];
             tx_hash?: string | null;
+            /** @description Present on `processing`: the deposit was sent and its outcome is not known yet. `GET` this URL; do not resend. */
+            poll_url?: string | null;
         };
         WithdrawRequest: {
             chain: components["schemas"]["WithdrawChain"];
@@ -4991,7 +5019,7 @@ export interface components {
             /** Format: uuid */
             approval_id: string;
             /**
-             * @description `rejected` — the reject came from a REAL policy approver, so the request is cancelled (a real reject vetoes it irrevocably). `reject_vote_recorded` — the signer is not a configured approver: the vote is stored and the request stays `pending_approval` (the keystore still vetoes execution at sign time).
+             * @description `rejected` — the reject came from a REAL policy approver, so the request is cancelled (a real reject vetoes it irrevocably). `reject_vote_recorded` — the vote is stored and the request stays `pending_approval` (the keystore still vetoes execution at sign time): the policy it was judged on is not yet in a final block — the same NO vote sent again cancels the request once it is — or the request had already started, and nothing cancels it.
              * @enum {string}
              */
             status: "rejected" | "reject_vote_recorded";
@@ -5096,7 +5124,7 @@ export interface components {
         ConfidentialShieldRequest: components["schemas"]["IntentsDepositRequest"];
         /** @description UNSHIELD body — same shape as `IntentsDepositRequest`. */
         ConfidentialUnshieldRequest: components["schemas"]["IntentsDepositRequest"];
-        /** @description Confidential withdraw body — same shape as `WithdrawRequest`; `token` is required (the source confidential asset to deliver). `chain` is the token's home chain, `"near"`, or another chain that lists the same symbol (delivered as that listing, swapped on the way). `chain="near"` delivers native NEAR for `nep141:wrap.near` (via `intents.near native_withdraw`) and the NEP-141 token on NEAR for omft bridge assets (use `confidentialUnshield` if you want to send to your own public balance instead). */
+        /** @description Confidential withdraw body — same shape as `WithdrawRequest`; `token` is required (the source confidential asset to deliver). `chain` is the token's home chain (the chain the 1Click catalog lists it on), where the token itself is delivered, or another chain that lists the same symbol, `"near"` included (delivered as that listing, swapped on the way). `chain="near"` delivers native NEAR for `nep141:wrap.near` (via `intents.near native_withdraw`); use `confidentialUnshield` to send to your own public balance instead. */
         ConfidentialWithdrawRequest: components["schemas"]["WithdrawRequest"];
         /** @description Confidential swap body — same shape as `SwapRequest` (`token_in` / `amount_in` / `token_out` / optional `min_amount_out`). On a multisig wallet the confidential swap binds `token_out` and `min_amount_out` into the approved op (like a public swap), so approvers commit to the output terms — a compromised coordinator cannot change them after approval. */
         ConfidentialSwapRequest: components["schemas"]["SwapRequest"];
@@ -8911,8 +8939,9 @@ export interface operations {
             };
             404: components["responses"]["NotFound"];
             /**
-             * @description `already_approved`: this account has already voted on this
-             *     approval, approve or reject. One vote per account.
+             * @description `already_approved`: this account has already voted YES on this
+             *     approval. One vote per account; a repeated NO vote is answered
+             *     `200` (see above).
              *     `conflict`: the approval is no longer pending (approved, rejected
              *     or expired); the message names its state. Stop; do not retry.
              */
@@ -9941,6 +9970,19 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /**
+             * @description `reason: grant_key_not_purchasable` — the key holds a grant from
+             *     OutLayer, which pays for calls and does not buy a plan.
+             *     **`terminal: true`**.
+             */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallRefusal"];
+                };
             };
         };
     };

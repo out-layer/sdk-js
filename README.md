@@ -10,7 +10,7 @@ If you've used Steward.fi or similar AI-agent wallet infra, you know the shape: 
 
 - **Keys live in a TEE** (Intel Trust Domain Extensions on Phala Cloud). The infrastructure operator cannot extract them.
 - **Policy is enforced inside the TEE**, before signing, against an encrypted policy stored on the NEAR blockchain.
-- **Sovereign exit** is available: a customer can permissionlessly recover their wallet's master key even if OutLayer shuts down. (Requires opting into the `vault` flow — see the [vault docs](https://app.outlayer.ai/docs/vaults).)
+- **Sovereign exit** is available: a wallet's owner can permissionlessly leave with its keys even if OutLayer shuts down. Two ways: the **owner exit** — a NEAR account registers once, the agent asks for the wallet with `OutlayerClient.createExitLink()`, no contract to deploy — and a **vault** of your own, which takes the secrets out too. See [leaving OutLayer](https://app.outlayer.ai/docs/leaving).
 - **Multi-chain wallets** (NEAR, Ethereum, Solana, Bitcoin) with deterministic address derivation and gasless cross-chain transfers via NEAR Intents.
 
 ## Install

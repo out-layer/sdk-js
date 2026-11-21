@@ -1,10 +1,13 @@
 # Vaults (sovereign custody)
 
-By default, a wallet's master key is derived from **OutLayer's shared master**, held inside the keystore TEE. Convenient, zero setup. The trust model is "OutLayer is honest" — if OutLayer shuts down or its keystore DAO loses quorum, your derived keys go with it.
+By default, a wallet's master key is derived from **OutLayer's shared master**, held inside the keystore TEE. Convenient, zero setup — and with no way for anyone to take the keys out.
 
-A **vault** replaces that shared master with a **per-customer master** derived via NEAR's MPC network. The customer's parent NEAR account can **permissionlessly recover** the vault — even if OutLayer disappears.
+There are two ways to give a wallet an exit that works even if OutLayer disappears:
 
-If you don't know whether you need a vault: you probably don't, for v0.1. Vaults are for production deployments where the customer can't or won't trust a third-party operator. They add a one-time setup tax (one atomic NEAR transaction) in exchange for sovereignty.
+- the **owner exit**: a NEAR account registers in OutLayer's keystore DAO (one transaction, 0.05 NEAR) and its wallets' keys can be claimed by that account after 24–48 hours. The agent asks for such a wallet with `OutlayerClient.createExitLink()` and its user completes the link. No contract to deploy; secrets stay in OutLayer;
+- a **vault**, this page: it replaces the shared master with a **per-customer master** derived via NEAR's MPC network. The customer's parent NEAR account can **permissionlessly recover** the vault — keys and secrets — under contract code no upgrade can change.
+
+If you don't know whether you need a vault: you probably don't — the owner exit covers a wallet's keys. Vaults are for production deployments where the customer can't or won't trust a third-party operator. They add a one-time setup tax (one atomic NEAR transaction) in exchange for sovereignty.
 
 ## What the SDK does and doesn't
 

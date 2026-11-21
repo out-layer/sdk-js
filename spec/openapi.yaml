@@ -8817,6 +8817,22 @@ components:
           type: array
           items:
             type: string
+        unlisted:
+          type: string
+          enum: [refuse, ask]
+          description: |
+            Under `whitelist`, what happens to a payment whose destination is
+            not on the list. `refuse` (and absent): `403 policy_denied`. `ask`:
+            the payment answers `pending_approval` and waits for the approvers,
+            who sign over the exact address, however small its amount —
+            `approval.auto_up_to` and `approval.excluded_types` do not let it
+            through. Applies to `transfer`, `withdraw`, `intents_transfer` and
+            `cross_chain_withdraw`; a call, a delete, a limit order, a storage
+            deposit or a confidential op aimed off the list is refused either
+            way. `ask` is accepted only under `whitelist` and with a reachable
+            quorum in `approval`. A payment that asks is still held to
+            everything else first: its type, its token, the limits, and for
+            `cross_chain_withdraw` its capability.
 
     TimeRestrictions:
       type: object
@@ -8886,6 +8902,35 @@ components:
             unfreezing are not policy writes and stay the owner's. Accepted
             only with a reachable quorum: `threshold` ≥ 1 and at least that
             many approvers with an `id`.
+        auto_up_to:
+          type: object
+          description: |
+            Per window and token, the total (smallest units, decimal string)
+            that leaves without the approvers. A `transfer`, a `withdraw` or an
+            `intents_transfer` that the approval trigger would hold runs at
+            once while, in every window that names its token, what the wallet
+            already spent there plus this amount is at most the entry. The
+            windows and their counters are those of `rules.limits`: the clock
+            hour, the UTC day, the calendar month, counting approved spend
+            too. A token no window names always waits; `*` is not accepted;
+            an entry that is not a whole number is refused when the policy is
+            stored. Every other op type waits as without it. Limits are
+            checked first: above a limit is `403 policy_denied`, approved or
+            not.
+          properties:
+            hourly:
+              $ref: '#/components/schemas/AutoUpToWindow'
+            daily:
+              $ref: '#/components/schemas/AutoUpToWindow'
+            monthly:
+              $ref: '#/components/schemas/AutoUpToWindow'
+
+    AutoUpToWindow:
+      type: object
+      description: Token id (`native`, `nep141:<contract>`, …) → amount in the token's smallest unit.
+      additionalProperties:
+        type: string
+        pattern: '^[0-9]+$'
 
     Approver:
       type: object
@@ -8906,8 +8951,11 @@ components:
         role:
           type: string
           description: >-
-            Optional. `admin` may also modify policy / freeze; `signer` may only
-            approve transactions. Defaults to `signer` when omitted.
+            Optional label, stored with the policy and read by nothing: every
+            approver's vote counts the same, on an operation and on a change
+            to a locked policy alike. Changing an unlocked policy and freezing
+            the wallet belong to the policy's owner — the NEAR account that
+            stored it — whatever is written here.
           enum: [admin, signer]
 
     Capability:

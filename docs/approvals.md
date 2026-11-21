@@ -4,10 +4,14 @@ When a policy has an `approval` config, certain actions queue for human approval
 
 ## Trigger condition
 
-A request requires approval if:
+With an `approval.threshold` in the policy, every operation that moves funds waits for the approvers, except:
 
-- The transaction value exceeds `approval.above_usd`, **or**
-- The transaction is below the velocity limits but the policy explicitly says so (e.g., all withdraws to non-whitelisted addresses)
+- a type listed in `approval.excluded_types`;
+- a `transfer`, a `withdraw` or an `intents_transfer` that fits `approval.auto_up_to` — per window (`hourly`, `daily`, `monthly`) and token, the total that may leave without the approvers. The payment runs at once while what the wallet already spent in the token in that window, plus this amount, is at most the entry; the one that would cross it waits. The windows are those of `rules.limits` (the clock hour, the UTC day, the calendar month) and count approved payments too. A token with no entry always waits.
+
+One rule makes an operation wait that would otherwise be refused: under an address whitelist with `rules.addresses.unlisted: 'ask'`, a payment to an address off the list answers `pending_approval` instead of `policy_denied`, however small its amount. Asked about: `transfer`, `withdraw`, `intents_transfer`, `cross_chain_withdraw` (each still held to its type, the limits and, for the last, its capability). Refused either way: `call`, `delete`, `limit_order`, `intents_storage_deposit`, `confidential`.
+
+An approval never raises a limit: an amount above `rules.limits` is refused, approved or not.
 
 When that happens, the action's response carries `status: 'pending_approval'` and an `approval_id`:
 
@@ -15,7 +19,7 @@ When that happens, the action's response carries `status: 'pending_approval'` an
 const result = await client.withdraw({
   chain: 'near',
   to: 'bob.near',
-  amount: '50000000000000000000000000', // 50 NEAR — above per-tx limit
+  amount: '50000000000000000000000000', // 50 NEAR — past what `auto_up_to` lets through
 });
 
 if (result.status === 'pending_approval') {
@@ -38,14 +42,14 @@ for (const a of approvals) {
 
 ## Approving
 
-Approvers sign a NEP-413 message of the form `approve:{approval_id}:{request_hash}` with their NEAR wallet. The signature is sent in the request body — **no API key required** (the signature itself is the auth).
+Approvers sign a NEP-413 message of the form `approve:{approval_id}:{wallet_pubkey}:{request_hash}` with their NEAR wallet (`wallet_pubkey` and `request_hash` come from the approval's detail). The signature is sent in the request body — **no API key required** (the signature itself is the auth).
 
 ```ts
 import { OutlayerClient } from '@outlayer/sdk';
 import { signMessage } from 'near-api-js/lib/utils'; // or your preferred signer
 
 // 1. Build the NEP-413 message
-const message = `approve:${approval.approval_id}:${requestHashFromApproval(approval)}`;
+const message = `approve:${approval.approval_id}:${approval.wallet_pubkey}:${approval.request_hash}`;
 const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64');
 
 // 2. Sign with the approver's NEAR key (in browser: use NEAR Wallet Selector; in Node: keystore)
@@ -98,7 +102,7 @@ const selector = await setupWalletSelector({
 const wallet = await selector.wallet();
 
 // Sign the NEP-413 message
-const message = `approve:${approvalId}:${requestHash}`;
+const message = `approve:${approvalId}:${walletPubkey}:${requestHash}`;
 const nonce = ...; // 32 random bytes, base64
 const signed = await wallet.signMessage({
   message,
@@ -114,14 +118,14 @@ await client.approvals.approve(approvalId, {
 });
 ```
 
-## Roles
+## Who may do what
 
-| Role | Approve transactions | Modify policy | Freeze wallet |
+| Who | Approve operations | Change the policy | Freeze the wallet |
 |---|---|---|---|
-| `admin` | yes | yes (via `admin_quorum`) | yes |
-| `signer` | yes | no | no |
+| The policy's owner — the NEAR account that stored it | only if also listed as an approver | yes; under `approval.locked`, only with the approvers' quorum | yes |
+| An approver — any account in `approval.approvers` | yes | votes on a change to a locked policy | no |
 
-Only `admin` accounts can change the policy itself; `signer` accounts can approve in-flight actions but cannot rewrite the rules. Use this to separate operational signers (frequent, lower-stakes) from governance admins (rare, high-stakes).
+All approvers are equal. An approver entry may carry a `role` (`admin`, `signer`); it is a label stored with the policy and nothing reads it — a `signer` votes on a change to a locked policy exactly as an `admin` does. To keep someone out of policy changes, do not list them as an approver of a locked policy.
 
 ## Expiration
 
@@ -133,37 +137,38 @@ Pending approvals expire after a default window (currently 24h, surface in `expi
 
 ```ts
 approval: {
-  threshold: { required: 1, of: 1 },
-  above_usd: 10000,
-  approvers: [{ id: 'ed25519:cfo_pubkey', role: 'admin' }],
+  threshold: { required: 1 },
+  approvers: [{ id: 'cfo.near', role: 'admin' }],
+  auto_up_to: { daily: { 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1': '10000000000' } }, // 10,000 USDC a day
 }
 ```
 
-One approver, fires for any withdraw above $10k.
+One approver. Withdrawals run unattended until the day's total reaches 10,000 USDC; each one past that waits.
 
 ### 2-of-3 admin multisig
 
 ```ts
 approval: {
-  threshold: { required: 2, of: 3 },
+  threshold: { required: 2 },
   approvers: [
-    { id: 'ed25519:admin_a', role: 'admin' },
-    { id: 'ed25519:admin_b', role: 'admin' },
-    { id: 'ed25519:admin_c', role: 'admin' },
+    { id: 'admin-a.near', role: 'admin' },
+    { id: 'admin-b.near', role: 'admin' },
+    { id: 'admin-c.near', role: 'admin' },
   ],
 }
 ```
 
-No `above_usd` — every transaction goes through approval. Use for vault-style wallets where speed isn't critical.
+No `auto_up_to` — every transaction goes through approval. Use for vault-style wallets where speed isn't critical.
 
 ### Bot + human safety net
 
 ```ts
-rules: { limits: { per_transaction: { '*': '1000000000000000000000000' } } }, // 1 NEAR auto
+rules: { limits: { per_transaction: { native: '10000000000000000000000000' } } }, // never more than 10 NEAR at once
 approval: {
-  threshold: { required: 1, of: 2 },
+  threshold: { required: 1 },
   approvers: [admin1, admin2],
+  auto_up_to: { daily: { native: '1000000000000000000000000' } }, // 1 NEAR a day unattended
 }
 ```
 
-Bot operates freely up to 1 NEAR per tx; anything bigger needs a human sign-off. Single approver suffices for low-stakes recovery.
+Bot transfers freely until the day's total reaches 1 NEAR; past that each transfer needs a human sign-off, and nothing above 10 NEAR is signed at all. Single approver suffices for low-stakes recovery.

@@ -14,24 +14,47 @@ type PolicyRules = {
     daily?:           { [tokenId: string]: string };
     monthly?:         { [tokenId: string]: string };
   };
-  addresses?: { mode: 'whitelist' | 'blacklist'; list: string[] };
-  transaction_types?: Array<'call' | 'transfer' | 'withdraw' | 'deposit' | 'swap'>;
+  addresses?: {
+    mode: 'whitelist' | 'blacklist' | 'none';
+    list: string[];
+    unlisted?: 'refuse' | 'ask';   // whitelist only: a payment off the list is refused (default) or waits for approval
+  };
+  transaction_types?: Array<
+    | 'transfer'                 // native NEAR
+    | 'call'                     // a contract call
+    | 'delete'                   // delete the wallet's account
+    | 'withdraw'                 // out of NEAR Intents (also spelled 'intents_withdraw')
+    | 'intents_transfer'         // inside NEAR Intents
+    | 'intents_storage_deposit'  // a token registration paid from the intents balance
+    | 'cross_chain_withdraw'     // to another chain; needs its capability too
+    | 'swap'                     // also spelled 'intents_swap'; needs its capability too
+    | 'limit_order'              // needs its capability too
+    | 'payment_check'            // needs its capability too
+    | 'confidential'             // needs its capability too
+    | 'raw'                      // raw signing; needs its capability too
+  >;
   time_restrictions?: {
-    timezone: string;          // IANA, e.g. 'UTC' or 'Europe/Berlin'
-    allowed_hours: number[];   // 0..23
-    allowed_days:  number[];   // 0 = Sunday … 6 = Saturday
+    timezone?: 'UTC';          // the only zone; any other refuses every operation
+    allowed_hours?: [number, number]; // [start, end), hours 0..23 in UTC; [22, 6] wraps midnight
+    allowed_days?:  number[];  // 1 = Monday … 7 = Sunday
   };
   rate_limit?: { max_per_hour: number };
 };
 
 type ApprovalConfig = {
-  threshold: { required: number; of: number };  // e.g. 2 of 3
-  above_usd?: number;                            // gate triggers when tx > $X
-  approvers: Array<{ id: string; role: 'admin' | 'signer' }>;
+  threshold: { required: number };               // approvals needed
+  approvers: Array<{ id: string; pubkey?: string; role?: 'admin' | 'signer' }>; // id = NEAR account; role is a label, all approvers are equal
+  excluded_types?: string[];                     // op types that never wait
+  auto_up_to?: {                                 // total that leaves without approval, per window and token
+    hourly?:  { [tokenId: string]: string };
+    daily?:   { [tokenId: string]: string };
+    monthly?: { [tokenId: string]: string };
+  };
+  locked?: boolean;                              // later policy changes need the approvers' quorum
 };
 ```
 
-`"*"` as a token ID matches all tokens. Amount strings are in the token's smallest unit — yoctoNEAR for NEAR, satoshis-equivalent for tokens with custom decimals.
+`"*"` as a token ID matches all tokens in `limits`; `auto_up_to` names each token and has no `"*"`. Amount strings are in the token's smallest unit — yoctoNEAR for NEAR, satoshis-equivalent for tokens with custom decimals.
 
 ## EVM signing capability (`evm_sign`)
 
@@ -156,25 +179,25 @@ On the next operation, the keystore reads fresh policy from chain, sees `frozen:
 
 ## Multisig (approval workflows)
 
-To require human approval on transactions above a threshold:
+To require human approval once the day's payments pass an amount:
 
 ```ts
 await client.policy.encrypt({
   wallet_id: walletId,
-  rules: { limits: { per_transaction: { '*': '1000000000000000000000000' } } }, // 1 NEAR auto-approve
+  rules: { limits: { daily: { 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1': '5000000000' } } }, // never more than 5,000 USDC a day
   approval: {
-    threshold: { required: 2, of: 3 },
-    above_usd: 1000,
+    threshold: { required: 2 },
     approvers: [
-      { id: 'ed25519:alice_pubkey', role: 'admin' },
-      { id: 'ed25519:bob_pubkey',   role: 'signer' },
-      { id: 'ed25519:carol_pubkey', role: 'signer' },
+      { id: 'alice.near', role: 'admin' },
+      { id: 'bob.near',   role: 'signer' },
+      { id: 'carol.near', role: 'signer' },
     ],
+    auto_up_to: { daily: { 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1': '1000000000' } }, // 1,000 USDC a day unattended
   },
 });
 ```
 
-Now any withdraw above $1000 USD value queues for approval. See [approvals.md](approvals.md) for the approve/reject flow.
+Withdrawals run unattended until the day's total reaches 1,000 USDC; each one past that queues for two approvals, and nothing past 5,000 USDC a day is signed. Without `auto_up_to`, every operation that moves funds queues. See [approvals.md](approvals.md) for the approve/reject flow.
 
 ## Common patterns
 
@@ -201,24 +224,24 @@ rules: {
   addresses: { mode: 'whitelist', list: ['approved-vendor-1.near', 'approved-vendor-2.near'] },
 },
 approval: {
-  threshold: { required: 2, of: 3 },
-  above_usd: 5000,
+  threshold: { required: 2 },
   approvers: [admin1, admin2, admin3],
+  auto_up_to: { daily: { 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1': '5000000000' } }, // 5,000 USDC a day
 }
 ```
 
-Small payouts go through; anything above $5k waits for 2-of-3 admin approval.
+Payouts to the two vendors go through until the day's total reaches 5,000 USDC; each one past that waits for 2 of the 3 admins.
 
 ### Time-restricted (business hours only)
 
 ```ts
 rules: {
   time_restrictions: {
-    timezone: 'America/New_York',
-    allowed_hours: [9, 10, 11, 12, 13, 14, 15, 16, 17],
+    timezone: 'UTC',
+    allowed_hours: [14, 22],       // 14:00 up to 22:00 UTC — nine to five in New York in winter
     allowed_days: [1, 2, 3, 4, 5], // Mon–Fri
   },
 }
 ```
 
-Wallet rejects all writes outside business hours, NYC time.
+Wallet refuses every operation outside those hours. The hours are UTC and do not follow daylight saving; a list of more than two hours, or another time zone, is unreadable and refuses everything.

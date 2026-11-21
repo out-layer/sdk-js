@@ -64,6 +64,8 @@ export type SignMessageRequest = Schemas['SignMessageRequest'];
 export type SignMessageResponse = Schemas['SignMessageResponse'];
 
 export type AuthSignRequest = Schemas['AuthSignRequest'];
+export type ExitLinkResponse = Schemas['ExitLinkResponse'];
+export type ExitOwnerOfWallet = Schemas['ExitOwnerOfWallet'];
 export type AuthSignResponse = Schemas['AuthSignResponse'];
 
 export type DepositIntentRequest = Schemas['DepositIntentRequest'];
@@ -325,6 +327,30 @@ export class OutlayerClient {
     const { data, error, response } = await client.POST('/register', { body });
     if (!response.ok) throw await errorFromResponse(response, error);
     return data as RegisterResponse;
+  }
+
+  /**
+   * Ask for a wallet whose owner can leave OutLayer with its keys.
+   *
+   * The owner is a NEAR account registered in the keystore DAO, and that
+   * registration is a transaction a person signs, so an agent cannot create
+   * such a wallet itself. Hand the user
+   * `https://app.outlayer.ai/exit?link=<link>`, keep `api_key`, and poll
+   * `getAddress` on a client made with it: 401 until the user has finished,
+   * the address — with `exit_owner` — after.
+   *
+   * Without `seed` the wallet takes the owner's next free numbered seed.
+   * Nothing is stored by this call; a link is used once and creates a new
+   * wallet only.
+   */
+  static async createExitLink(
+    opts: { seed?: string } & UnauthenticatedOptions = {},
+  ): Promise<ExitLinkResponse> {
+    const client = makeUnauthenticatedClient(opts);
+    const body = opts.seed !== undefined ? { seed: opts.seed } : {};
+    const { data, error, response } = await client.POST('/wallet/v1/exit-link', { body });
+    if (!response.ok) throw await errorFromResponse(response, error);
+    return data as ExitLinkResponse;
   }
 
   // ------- Wallet read -------
@@ -682,9 +708,10 @@ export class OutlayerClient {
    *
    * The keystore builds the exact `<prefix>:<seed>:<ts>` challenge with a fresh
    * **server** timestamp and signs it raw ed25519 — you do not supply the
-   * timestamp. Send the returned `auth_message` verbatim. `vault_id` is only
-   * valid for `purpose: 'bearer'`. Replaces the old
-   * `signMessage({ format: 'raw' })`.
+   * timestamp. Send the returned `auth_message` verbatim. `purpose: 'api-key'`
+   * takes `key_hash`, the sha256 of the key being registered, and the
+   * challenge names it: the signature registers that key and no other.
+   * `vault_id` is valid for `bearer` and `api-key`.
    */
   authSign(opts: AuthSignRequest): Promise<AuthSignResponse> {
     return runWithRetry(() => this.client.POST('/wallet/v1/auth-sign', { body: opts }), this.retry);

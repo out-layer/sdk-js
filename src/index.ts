@@ -36,6 +36,8 @@ export type {
   SignMessageResponse,
   AuthSignRequest,
   AuthSignResponse,
+  ExitLinkResponse,
+  ExitOwnerOfWallet,
   DepositIntentRequest,
   DepositIntentResponse,
   DepositStatusResponse,

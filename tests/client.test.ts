@@ -26,6 +26,27 @@ const BASE = 'https://api.outlayer.ai';
 // Registration
 // ============================================================================
 
+describe('OutlayerClient.createExitLink', () => {
+  it('asks without a key and sends the seed only when one is named', async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      http.post(`${BASE}/wallet/v1/exit-link`, async ({ request }) => {
+        expect(request.headers.get('authorization')).toBeNull();
+        bodies.push(await request.json());
+        return HttpResponse.json({
+          api_key: 'wk_test',
+          link: 'payload.mac',
+          expires_at: 1800000000,
+        });
+      }),
+    );
+    const r = await OutlayerClient.createExitLink();
+    expect(r.link).toBe('payload.mac');
+    await OutlayerClient.createExitLink({ seed: 'trading' });
+    expect(bodies).toEqual([{}, { seed: 'trading' }]);
+  });
+});
+
 describe('OutlayerClient.register', () => {
   it('returns an API key + wallet id', async () => {
     const r = await OutlayerClient.register();

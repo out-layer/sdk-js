@@ -215,6 +215,13 @@ export interface paths {
          *     in the account's extension set (and, for `hos_lease`, to provision a
          *     spend grant for).
          *
+         *     A wallet whose keys can leave custody — one made from an owner's exit
+         *     link, or one in a vault — is bound only to the account its keys leave
+         *     to (the owner's own account, or the vault's parent), in the
+         *     `personal_account` mode: any other `asset_account_id`, and `hos_lease`
+         *     for such a wallet, answer `400` naming the account. The keystore holds
+         *     the same line when it signs.
+         *
          *     Guarantees: binding is one-to-one, and a second call naming a
          *     DIFFERENT asset account is rejected rather than silently rebinding
          *     (re-PUTting the same pair in the same mode is idempotent). An
@@ -10029,7 +10036,13 @@ export interface operations {
              *     that is not the wallet owner's; `calls_suspended` — the wallet is
              *     blocked on the trading connectors for a while;
              *     `tee_session_required`, `vault_not_verified`, `wallet_not_yours` —
-             *     the wallet or vault named does not stand behind this caller.
+             *     the wallet or vault named does not stand behind this caller;
+             *     `wallet_exited` — the key belongs to a wallet whose keys have left
+             *     custody (its owner's exit, or its vault's), and no key of that wallet
+             *     spends any more. The money on a funded key comes back by closing it
+             *     and claiming the refund; the message names the commands.
+             *     **`terminal: true`**, except while the owner's claim is in flight or
+             *     the keystore DAO does not verify the vault.
              */
             403: {
                 headers: {
@@ -10366,7 +10379,9 @@ export interface operations {
             /**
              * @description `reason: grant_key_not_purchasable` — the key holds a grant from
              *     OutLayer, which pays for calls and does not buy a plan.
-             *     **`terminal: true`**.
+             *     **`terminal: true`**. `reason: wallet_exited` — the key belongs to a
+             *     wallet whose keys have left custody; it buys nothing (as on
+             *     `POST /call`).
              */
             403: {
                 headers: {

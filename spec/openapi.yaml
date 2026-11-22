@@ -9111,7 +9111,10 @@ components:
             hour, the UTC day, the calendar month, counting approved spend
             too. A token no window names always waits; `*` is not accepted;
             an entry that is not a whole number is refused when the policy is
-            stored. Every other op type waits as without it. Limits are
+            stored. Every other op type waits as without it — a token sent
+            from the wallet's NEAR account is a `call` (`ft_transfer`) and
+            waits; a token is covered only when it leaves the intents balance.
+            NEAR inside intents is `nep141:wrap.near`, not `native`. Limits are
             checked first: above a limit is `403 policy_denied`, approved or
             not.
           properties:

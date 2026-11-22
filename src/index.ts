@@ -116,3 +116,25 @@ export { NETWORK_BASE_URLS } from './http.js';
 
 export { SEALED_FORMAT, getEncryptionPubkey, sealTo } from './seal.js';
 export type { EncryptionKeyOf } from './seal.js';
+
+export {
+  WEBHOOK_KEYS_MIN_REFETCH_SEC,
+  WEBHOOK_KEYS_READ_TIMEOUT_SEC,
+  WEBHOOK_KEYS_TTL_SEC,
+  WEBHOOK_MAX_TOLERANCE_SEC,
+  WEBHOOK_SIGNED_LABEL,
+  WEBHOOK_TOLERANCE_SEC,
+  WebhookVerificationError,
+  createWebhookKeyCache,
+  fetchWebhookKeys,
+  verifyWebhook,
+} from './webhook.js';
+export type {
+  VerifiedWebhook,
+  VerifyWebhookInput,
+  WebhookHeaders,
+  WebhookKey,
+  WebhookKeyCache,
+  WebhookKeyCacheOptions,
+  WebhookRefusal,
+} from './webhook.js';

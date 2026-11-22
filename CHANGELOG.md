@@ -6,6 +6,16 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ### Added
 
+- `verifyWebhook({ headers, rawBody, keys, walletIds, toleranceSec })`,
+  `createWebhookKeyCache()` and `fetchWebhookKeys()`: check that a webhook is
+  OutLayer's and about a wallet you expect, with the network's public Ed25519
+  key — the delivery id (a random UUID), the timestamp, the wallet id, the
+  event type and the body are signed. The key cache re-reads the list every ten
+  minutes, drops a key that left it, and reads at most once a minute for an
+  unknown key id. Every webhook carries the signature (`X-Webhook-Id`,
+  `X-Webhook-Timestamp`, `X-Webhook-Key-Id`, `X-Webhook-Signature-Ed25519`); a
+  wallet's webhook carries no `X-Webhook-Signature`, and an owner's keeps it as
+  the owner's HMAC (`inbox.verifyWebhook`).
 - `answerWithinSeconds` on every write that waits on a settlement: sends
   `X-Answer-Within`, so the call answers `processing` with a `poll_url` within
   that many seconds instead of outliving your timeout.

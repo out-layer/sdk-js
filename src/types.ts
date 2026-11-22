@@ -145,6 +145,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/webhook-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The public keys webhooks are verified under
+         * @description The Ed25519 public keys of this network's webhook signatures (see the
+         *     `Webhooks` tag for what is signed). No authentication; the answer is
+         *     the same for everyone and may be cached (`Cache-Control: public,
+         *     max-age=300`).
+         *
+         *     The first key is the one that signs. A second key, when present, is
+         *     the one that signs next: it is listed ahead of its first signature so a
+         *     receiver already holds it. Pick a key by the `id` the request's
+         *     `X-Webhook-Key-Id` names, never by position.
+         *
+         *     Read the list again at least every ten minutes and replace the one you
+         *     hold with the answer: a key that is not in the answer is a key to
+         *     trust no more. An id that is not in the list you hold is a reason to
+         *     read it again, at most once a minute. Keys differ per network.
+         */
+        get: operations["getWebhookKeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/v1/binding": {
         parameters: {
             query?: never;
@@ -2478,9 +2511,17 @@ export interface paths {
         /**
          * Name the URL task events go to
          * @description `task_created`, `task_approved`, `task_answered`, `task_failed`
-         *     (with `failure_reason`) and `task_expired` are POSTed there,
-         *     signed with a secret of the owner's own (`X-Webhook-Signature`, the
-         *     HMAC-SHA256 of the body in hex), with `X-Wallet-Id: owner:{account}`.
+         *     (with `failure_reason`) and `task_expired` are POSTed there with
+         *     `X-Wallet-Id: owner:{account}`. Each request carries two signatures:
+         *     OutLayer's Ed25519 signature, checked with the public keys of
+         *     `GET /wallet/v1/webhook-keys` and no secret (the headers, the signed
+         *     bytes and the steps are under the `Webhooks` tag), and
+         *     `X-Webhook-Signature`, the HMAC-SHA256 of the body in hex under a
+         *     secret of the owner's own. The Ed25519 signature says OutLayer sent the
+         *     event, not whose it is: a receiver that relies on it also checks that
+         *     `X-Wallet-Id` is `owner:` and its own account, since any owner may
+         *     name any URL. The HMAC holds only for events of the owner who was told
+         *     the secret.
          *     The secret is in the answer to this call and nowhere else. A body says who asked whom, of what
          *     kind and when, and links to the inbox; nothing of what the task shows.
          *     A notice is told as `task_created` with `kind: notice`; Got it sends
@@ -2714,6 +2755,10 @@ export interface paths {
          * @description Either channel, or both; `null` clears one. Never defaulted to an
          *     address the owner did not choose — a warning nobody reads is worse than
          *     no warning.
+         *
+         *     A warning sent to `webhook_url` is a signed webhook of type
+         *     `subscription_notification` (see the `Webhooks` tag); its `X-Wallet-Id`
+         *     is the key's owner account and nonce, `alice.near:3`.
          *
          *     PERSONAL DATA: the address is stored against the key.
          */
@@ -3232,7 +3277,7 @@ export interface components {
             set_by_key: string | null;
             /** @description Whether the URL was named in the session that asks. `false` is a URL named in a session that is over, or on another device: one the owner should recognise, or remove. */
             set_here: boolean;
-            /** @description The secret the owner's events are signed with (`X-Webhook-Signature` is the HMAC-SHA256 of the body, in hex). Present only in the answer to `PUT`: told once, never again. Naming a URL again makes a new secret. */
+            /** @description The owner's own secret: `X-Webhook-Signature` on the owner's events is the HMAC-SHA256 of the body under it, in hex. It stands beside OutLayer's Ed25519 signature, which every webhook carries and which needs no secret (see the `Webhooks` tag). Present only in the answer to `PUT`: told once, never again. Naming a URL again makes a new secret. */
             secret?: string;
         };
         OwnerSignIn: {
@@ -3896,6 +3941,23 @@ export interface components {
         };
         TokensResponse: {
             tokens: components["schemas"]["TokenInfo"][];
+        };
+        WebhookKeyList: {
+            /** @description The key that signs, then the one that signs next when there is one. */
+            keys: components["schemas"]["WebhookKey"][];
+        };
+        WebhookKey: {
+            /** @description The first 16 hex characters of the SHA-256 of the 32 public-key bytes: the value of `X-Webhook-Key-Id`. */
+            id: string;
+            /**
+             * @description The signature algorithm of this key. `ed25519` today; skip a key whose algorithm you do not know.
+             * @example ed25519
+             */
+            algorithm: string;
+            /** @description The 32 public-key bytes, as 64 hex characters. */
+            public_key: string;
+            /** @description The same key as NEAR writes one: `ed25519:<base58>`. */
+            public_key_near: string;
         };
         CallRequest: {
             receiver_id: string;
@@ -4994,7 +5056,10 @@ export interface components {
             rules: components["schemas"]["PolicyRules"];
             approval?: components["schemas"]["ApprovalConfig"];
             capabilities?: components["schemas"]["Capabilities"];
-            /** Format: uri */
+            /**
+             * Format: uri
+             * @description Where the wallet's events are POSTed (`approval_needed`, `approval_received`, `request_completed`, `policy_update_signed`). An HTTPS URL on a public host. Every request is signed and carries the wallet's id in `X-Wallet-Id`; the headers and how to verify them are under the `Webhooks` tag.
+             */
             webhook_url?: string;
             authorized_key_hashes?: string[];
             refund_addresses?: components["schemas"]["RefundAddresses"];
@@ -5766,6 +5831,39 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    getWebhookKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The keys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "keys": [
+                     *         {
+                     *           "id": "<16 hex characters>",
+                     *           "algorithm": "ed25519",
+                     *           "public_key": "<64 hex characters>",
+                     *           "public_key_near": "ed25519:<base58>"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["WebhookKeyList"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
         };
     };
     getBinding: {

@@ -403,9 +403,10 @@ export async function mute(
 /**
  * Name the URL the owner's task events are POSTed to. The wallet confirms it
  * (one signature over the sentence that names the URL's hash). Answers the
- * secret the events are signed with — told this once: keep it where
- * {@link verifyWebhook} reads it. One URL per owner: this one replaces any
- * other.
+ * owner's own secret — told this once: keep it where {@link verifyWebhook}
+ * reads it. Every event also carries OutLayer's Ed25519 signature, checked
+ * with no secret by the package's top-level `verifyWebhook`. One URL per
+ * owner: this one replaces any other.
  */
 export async function nameWebhook(
   session: Session & { recipient: string },
@@ -438,10 +439,17 @@ export async function nameWebhook(
 }
 
 /**
- * Is `body` an event of the owner's, as the inbox signed it? `signature` is
- * the `X-Webhook-Signature` header: the HMAC-SHA256 of the body, hex, under
- * the secret. Compared in constant time. A body that is not the bytes
- * received — parsed and written again — does not verify.
+ * Does `body` carry the owner's HMAC? `signature` is the `X-Webhook-Signature`
+ * header of an owner's event: the HMAC-SHA256 of the body, hex, under the
+ * secret {@link nameWebhook} answered. Compared in constant time. A body that
+ * is not the bytes received — parsed and written again — does not verify.
+ *
+ * The HMAC covers the body alone: no time, no delivery id, no headers, so a
+ * captured body verifies whenever it is sent again. It is the owner's second
+ * check beside the package's top-level `verifyWebhook` (Ed25519 over the id,
+ * the timestamp, the wallet id, the event type and the body). There the
+ * timestamp bounds a repeat to the tolerance, and remembering the delivery
+ * ids accepted for that long is what refuses one inside it.
  */
 export async function verifyWebhook(
   body: string | Uint8Array,

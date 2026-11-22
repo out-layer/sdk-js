@@ -87,6 +87,7 @@ That's the whole flow. The wallet has no policy yet, so withdraws are unrestrict
 | `client.policy.*` | Policy lifecycle (encrypt → sign → store) |
 | `client.approvals.*` | Multisig approval workflow |
 | `client.audit.list({...})` | Event history |
+| `createWebhookKeyCache()` / `verifyWebhook({...})` | Check that a webhook is OutLayer's and about your wallet — Ed25519, no secret ([see below](#verifying-webhooks)) |
 
 Full reference: [API spec](https://api.outlayer.ai/docs).
 
@@ -217,12 +218,109 @@ for (const listed of (await inbox.listTasks(session)).tasks) {
 ```
 
 To be told of new tasks at a URL instead of asking: `inbox.nameWebhook(session,
-url, signer)` answers the secret, once; check each delivery with
+url, signer)` answers the owner's secret, once. Check each delivery with
+`verifyWebhook` and `walletIds: ['owner:' + accountId]`
+([Verifying webhooks](#verifying-webhooks)); an owner's event also carries the
+owner's own HMAC, a second check:
 `inbox.verifyWebhook(rawBody, request.headers.get('x-webhook-signature'),
 secret)`. One URL per owner — naming one replaces any other. A delivery says who
 asked whom, of what kind and when, and nothing of what the task shows: read the
 task to show it. A custody account never sent NEAR signs in too; a wallet whose
 policy lists the recipients of `sign_message` must list the OutLayer contract.
+
+## Verifying webhooks
+
+Every webhook OutLayer sends — a wallet's events to the `webhook_url` of its
+policy (`request_completed`, `approval_needed`, …) and an owner's task events —
+is signed with the network's Ed25519 key. The public keys are served without
+authentication, so the receiver holds no secret.
+
+A signature says OutLayer sent the request. It does not say the event is
+yours: anyone may name your URL as the webhook of a wallet of their own, and
+that wallet's events arrive correctly signed. `X-Wallet-Id` says whose event it
+is, so `verifyWebhook` takes the wallet ids you expect and refuses any other.
+
+```ts
+import { createWebhookKeyCache, verifyWebhook, WebhookVerificationError } from '@outlayer/sdk';
+
+const keys = createWebhookKeyCache({ network: 'mainnet' });  // one per network, made once
+const walletIds = [myWalletId];                              // or `owner:${myAccount}` for task events
+const seen = new Map<string, number>();                      // delivery id → when it was taken
+
+async function onWebhook(request: Request): Promise<Response> {
+  const rawBody = await request.text();                      // the bytes received, not re-serialized JSON
+  let event: Awaited<ReturnType<typeof verifyWebhook>>;
+  try {
+    event = await verifyWebhook({ headers: request.headers, rawBody, keys, walletIds });
+  } catch (e) {
+    if (e instanceof WebhookVerificationError) return new Response('not verified', { status: 401 });
+    return new Response('keys unavailable', { status: 503 }); // the delivery is tried again
+  }
+  const now = Date.now();
+  for (const [id, at] of seen) if (now - at > 300_000) seen.delete(id);
+  if (seen.has(event.id)) return new Response('ok');         // a retry, or a capture sent again
+  seen.set(event.id, now);
+  // event.walletId is one of walletIds; JSON.parse(rawBody) is the payload.
+  return new Response('ok');
+}
+```
+
+`walletIds` holds the `X-Wallet-Id` values you take events of:
+
+| Events | `X-Wallet-Id` |
+|---|---|
+| A wallet's: `approval_needed`, `approval_received`, `request_completed`, `policy_update_signed`; a vault's | the `wallet_id` registration answered |
+| An owner's task events (`inbox.nameWebhook`) | `owner:` and the owner's account — `owner:alice.near` |
+| `subscription_notification` | the payment key's owner account and nonce — `alice.near:3` |
+
+The signature covers the delivery id, the timestamp, `X-Wallet-Id`,
+`X-Event-Type` and the body:
+
+```text
+outlayer-webhook-v1\n{X-Webhook-Id}\n{X-Webhook-Timestamp}\n{X-Wallet-Id}\n{X-Event-Type}\n{body}
+```
+
+| Header | Value |
+|---|---|
+| `X-Webhook-Id` | The delivery's id: a random UUID, the same on each of its attempts (three at most) |
+| `X-Webhook-Timestamp` | Unix seconds at the moment of the attempt |
+| `X-Webhook-Key-Id` | Which key of `GET /wallet/v1/webhook-keys` signed |
+| `X-Webhook-Signature-Ed25519` | The signature, hex |
+| `X-Wallet-Id`, `X-Event-Type` | Whose event it is, and the event |
+
+`verifyWebhook({ headers, rawBody, keys, walletIds, toleranceSec?, now? })`
+answers `{ id, timestamp, walletId, eventType, keyId }` or throws a
+`WebhookVerificationError` whose `reason` is `malformed`, `unknown_key`,
+`bad_signature`, `unexpected_wallet` or `stale_timestamp`. A timestamp more
+than `toleranceSec` (300 by default) from the receiver's clock is stale; that
+bounds how long a captured request can be sent again. Inside that time the same
+request verifies again and `verifyWebhook` keeps no state: remembering the ids
+already taken, for as long as the tolerance, is the receiver's, as above. An
+empty `walletIds`, a `toleranceSec` or `now` that is not a finite,
+non-negative number, or a `toleranceSec` above 3600 throws a `RangeError`
+instead of accepting anything.
+
+`createWebhookKeyCache({ network?, baseUrl?, ttlSec?, minRefetchSec?, readTimeoutSec? })` holds
+the keys the way a receiver should:
+
+- it reads the list again once it is ten minutes old (`ttlSec`), and what it
+  reads replaces what it held, so a key that left `webhook-keys` verifies
+  nothing after the next read;
+- a request naming a key it does not hold makes it read the list — a new key
+  may have been published — but at most once a minute (`minRefetchSec`),
+  however many such requests arrive: the key id is read before any signature
+  is checked, so anyone can send one;
+- a read takes five seconds at most (`readTimeoutSec`); a longer one has
+  failed, and nothing waits on it further;
+- when the list cannot be read and none read in the last ten minutes is held,
+  `get()` — and `verifyWebhook` with it — throws: answer an error, and the
+  delivery is tried again.
+
+`keys` may also be a plain list from `fetchWebhookKeys()`, for a receiver that
+holds the keys by the same three rules itself. Keys are per network — a testnet
+webhook verifies under `createWebhookKeyCache({ network: 'testnet' })`. A
+webhook is a signal: where money depends on it, read the request with
+`client.getRequest(id)` before acting.
 
 ## Errors
 

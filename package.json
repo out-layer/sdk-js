@@ -49,7 +49,7 @@
     "lint": "biome check src tests",
     "format": "biome format --write src tests",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run gen && npm run typecheck && npm test && npm run build"
+    "release": "npm run gen && npm run typecheck && npm test && npm run build && npm publish"
   },
   "dependencies": {
     "openapi-fetch": "^0.13.0"

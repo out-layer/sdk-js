@@ -113,3 +113,6 @@ export type { ClientOptions, Network, RetryConfig, UnauthenticatedOptions } from
 
 export * as inbox from './inbox.js';
 export { NETWORK_BASE_URLS } from './http.js';
+
+export { SEALED_FORMAT, getEncryptionPubkey, sealTo } from './seal.js';
+export type { EncryptionKeyOf } from './seal.js';

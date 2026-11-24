@@ -1265,6 +1265,20 @@ paths:
         source Intents asset; 1Click bridges and delivers the destination chain's
         native asset.
 
+        **Size.** `amount` is an exact input: what the recipient gets is that
+        amount less 1Click's fees, and on a chain that charges to open the
+        recipient's account (a fresh Solana token account) that cost comes out
+        of it too. To deliver an exact amount — an invoice — send `amount_out`
+        with `max_amount_in` instead: the recipient receives `amount_out`, the
+        wallet spends at most `max_amount_in`, and what 1Click does not use
+        comes back to the balance. `min_amount_out` puts a floor under an
+        exact input. All three exist on cross-chain withdrawals only; see
+        [`WithdrawRequest`](#/components/schemas/WithdrawRequest). A dry-run
+        prices either mode without moving anything.
+
+        **No memo.** A withdrawal delivers no memo or destination tag on any
+        route; a body with `memo` is `400 memo_not_supported`.
+
         If the policy requires approval, returns `status=pending_approval` with
         an `approval_id`.
 
@@ -1337,9 +1351,15 @@ paths:
         same order: request shape, policy (same canonical op — cross-chain is
         gated by the separate `cross_chain_withdraw` capability), intents
         balance, NEAR recipient existence / NEP-141 storage registration, and —
-        for a cross-chain withdraw — a `dry` 1Click quote. The quote is what
-        surfaces bridge minimums, unsupported routes and missing liquidity
-        before the user confirms; its result is summarised in `message`.
+        for a cross-chain withdraw — a `dry` 1Click quote, asked with the
+        request's own mode (`amount`, or `amount_out` + `max_amount_in`). The
+        quote is what surfaces bridge minimums, unsupported routes and missing
+        liquidity before the user confirms. Its figures are in the body under
+        1Click's own values (`amount_in`, `min_amount_in`, `amount_out`,
+        `min_amount_out`, `withdraw_fee`, …) and summarised in `message`; read
+        the fields, not the sentence. A quote that does not meet the request's
+        `min_amount_out` or `max_amount_in` answers `would_succeed: false`
+        with that `reason` and the figures beside it.
 
         Approval-gated wallets get the same pre-condition checks: a
         `would_succeed: true` with `message` "Operation would require multisig
@@ -1347,7 +1367,8 @@ paths:
 
         Cross-chain results omit `estimated_fee`/`fee_token` — the bridge takes
         its cut out of the transferred amount rather than charging NEAR gas, so
-        the quote line in `message` is the cost estimate.
+        the quote's figures are the cost: `amount_in` against `amount_out`, with
+        `withdraw_fee` the part of it 1Click names.
       requestBody:
         required: true
         content:
@@ -1524,6 +1545,14 @@ paths:
       description: |
         Cross-chain swap via the 1Click solver. Quote → deposit to intents.near
         → mt_transfer → poll. Returns when the swap settles or fails.
+
+        Sized by its input (`amount_in`, with an optional `min_amount_out`
+        floor) or by its output (`amount_out` with `max_amount_in`); see
+        [`SwapRequest`](#/components/schemas/SwapRequest). The floor is held to
+        the output 1Click guarantees, which is 1% under its estimate: a floor
+        set at a quote's `amount_out` is refused `400 below_min_amount_out`,
+        and one set exactly at its `min_amount_out` is refused whenever the
+        fresh quote is a unit worse.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AnswerWithin'
@@ -1564,9 +1593,15 @@ paths:
       operationId: intentsSwapQuote
       summary: Get a swap quote (no execution)
       description: |
-        Returns the indicative output and deadline for a swap without executing
-        it. Use this before calling `/intents/swap` to show the user expected
-        output and allow them to set `min_amount_out`.
+        Returns 1Click's figures for a swap without executing it, in either
+        mode of [`SwapRequest`](#/components/schemas/SwapRequest). Use it
+        before `/intents/swap` to show the expected output and to set
+        `min_amount_out` (under the quote's `min_amount_out`) or, for an exact
+        output, `max_amount_in` (over the quote's `amount_in`). The swap takes
+        a quote of its own, so leave between your bound and this quote the
+        room you give the market to move.
+        A quote that does not meet the floor or ceiling already in the body
+        answers `200` with `reason` naming the refusal the swap would give.
       requestBody:
         required: true
         content:
@@ -5859,6 +5894,12 @@ components:
               value: { error: no_liquidity, message: "No liquidity available" }
             upstream_rejected:
               value: { error: upstream_rejected, message: "Amount is too low for bridge, try at least 30368" }
+            memo_not_supported:
+              value: { error: memo_not_supported, message: "`memo` is not supported: a withdrawal carries no memo or destination tag to the recipient on any route. Do not withdraw to an address that needs one — the funds would arrive without it." }
+            below_min_amount_out:
+              value: { error: below_min_amount_out, message: "The quote guarantees 115426, less than min_amount_out (116592); nothing was signed. Re-quote and retry, or lower the floor", min_amount_out: '116592', quoted_min_amount_out: '115426' }
+            above_max_amount_in:
+              value: { error: above_max_amount_in, message: "The quote needs 486272 in, more than max_amount_in (480000); nothing was signed. Re-quote and retry, or raise the ceiling", max_amount_in: '480000', quoted_amount_in: '486272' }
             insufficient_balance:
               value: { error: insufficient_balance }
     Unauthorized:
@@ -6723,6 +6764,19 @@ components:
         # request as sent; nothing moved.
         - storage_not_registered
         - recipient_not_found
+        # 400. A withdrawal body that carries `memo`. No route delivers a memo
+        # or a destination tag to the recipient, so the request is refused
+        # rather than executed without it. Not retried as sent.
+        - memo_not_supported
+        # 400. The fresh quote guarantees less than the request's
+        # `min_amount_out`. Nothing was signed. The body carries
+        # `min_amount_out` and `quoted_min_amount_out` (the quote's own
+        # guarantee) beside `error` and `message`.
+        - below_min_amount_out
+        # 400. An exact output whose fresh quote needs more input than
+        # `max_amount_in`. Nothing was signed. The body carries `max_amount_in`
+        # and `quoted_amount_in`.
+        - above_max_amount_in
         # 402, and about the SIGNER rather than the request: the account that
         # would send the transaction cannot pay for it. `wallet_underfunded`
         # names the wallet's own NEAR account and what the call costs;
@@ -6812,6 +6866,18 @@ components:
         details:
           type: object
           additionalProperties: {}
+        min_amount_out:
+          type: string
+          description: On `below_min_amount_out` — the floor the request set.
+        quoted_min_amount_out:
+          type: string
+          description: On `below_min_amount_out` — what the quote guarantees.
+        max_amount_in:
+          type: string
+          description: On `above_max_amount_in` — the ceiling the request set.
+        quoted_amount_in:
+          type: string
+          description: On `above_max_amount_in` — the input the quote needs.
 
     OnChainTxFailedError:
       type: object
@@ -7813,7 +7879,32 @@ components:
 
     WithdrawRequest:
       type: object
-      required: [chain, amount]
+      description: |-
+        A withdrawal and its size. The size is one of two modes:
+
+        - **Exact input** — `amount`: exactly this leaves the wallet. On a
+          route quoted at 1Click (every cross-chain withdrawal, and every
+          confidential one) an optional `min_amount_out` is the least the
+          recipient may receive.
+        - **Exact output** — `amount_out` with `max_amount_in`: the recipient
+          receives exactly `amount_out`, for no more than `max_amount_in` of
+          the source token. Only on a route quoted at 1Click.
+
+        A public withdrawal on NEAR (`chain: near`) is not quoted: it delivers
+        `amount` as it is and refuses `amount_out`, `max_amount_in` and
+        `min_amount_out` (`400 bad_request`).
+
+        Every amount is decimal digits in the token's minimal units and nothing
+        else: a sign (`+5`), a leading zero (`007`), whitespace or a decimal
+        point is `400 bad_request`.
+
+        No route delivers a memo or a destination tag to the recipient. A body
+        that carries `memo` is refused, `400 memo_not_supported` — do not
+        withdraw to an address that needs one. Any other field this schema does
+        not name is `400 bad_request`: a request that moves money never runs
+        with part of it unread.
+      required: [chain]
+      additionalProperties: false
       properties:
         chain:
           $ref: '#/components/schemas/WithdrawChain'
@@ -7822,6 +7913,43 @@ components:
           description: Destination address on the target chain.
         amount:
           type: string
+          description: >-
+            Exact input, in the source token's minimal units. Required unless
+            `amount_out` is sent.
+        amount_out:
+          type: string
+          description: >-
+            Exact output: what the recipient receives, in the destination
+            token's minimal units, fees included — the quote is asked from
+            1Click as `swapType: EXACT_OUTPUT`. Sent with `max_amount_in`, in
+            place of `amount`; `min_amount_out` is refused beside it.
+        max_amount_in:
+          type: string
+          description: >-
+            Required with `amount_out`: the most of the source token the
+            withdrawal may spend. The policy, the spending limits and the
+            approvers judge THIS amount, and the limit is charged it. The
+            transfer carries the fresh quote's `amount_in` (the input with
+            1Click's slippage buffer in it); a quote that needs more is refused
+            before signing, `400 above_max_amount_in` with `quoted_amount_in`.
+            The quote is taken again when the call runs, so set the ceiling
+            over the `amount_in` a dry-run answered by as much as you let the
+            market move in between. The wallet must hold the whole ceiling: the
+            balance is checked against `max_amount_in`, not against the quote
+            (`insufficient_balance` on the dry-run), so do not set it past the
+            balance. What 1Click does not use comes back to the wallet's
+            balance after the swap, and is not given back to the limit.
+        min_amount_out:
+          type: string
+          description: >-
+            With `amount`: the least the recipient may receive, in the
+            destination token's minimal units. Compared to the fresh quote's
+            `min_amount_out` — what 1Click guarantees, not its `amount_out`
+            estimate — before anything is signed; a quote under it is
+            `400 below_min_amount_out` with `quoted_min_amount_out`. The quote
+            is taken again when the call runs, so set the floor under the
+            `min_amount_out` a dry-run answered by as much as you let the
+            market move in between.
         token:
           type: string
           description: >-
@@ -7849,6 +7977,7 @@ components:
     IntentsTransferRequest:
       type: object
       required: [to, amount, token]
+      additionalProperties: false
       properties:
         to:
           type: string
@@ -7910,7 +8039,88 @@ components:
             synchronous call whose settlement outlasted its wait. Poll this path
             (`GET /wallet/v1/requests/{request_id}`) for the terminal status.
 
+    QuoteFigures:
+      type: object
+      description: |-
+        The figures of a 1Click quote, with 1Click's own values unchanged. One
+        shape for a withdraw dry-run, a swap quote and the quote a request ran
+        with. Each is present when 1Click reported it.
+
+        On an exact input `amount_out` is 1Click's estimate and
+        `min_amount_out` what it guarantees (the estimate less the 1% slippage
+        tolerance); delivery lands between them. On an exact output the two are
+        the same number, `amount_in` is the input with the slippage buffer in
+        it — the amount the transfer carries — and `min_amount_in` the least
+        the swap needs; the difference comes back to the wallet.
+
+        Quotes move: two quotes a moment apart differ by the market, so compare
+        a request against the quote in its own answer, not against an earlier
+        one.
+      properties:
+        amount_in:
+          type: string
+          description: What goes in, in the source token's minimal units.
+        min_amount_in:
+          type: string
+          description: The least of `amount_in` the swap needs; the rest is returned.
+        amount_out:
+          type: string
+          description: >-
+            Expected output in minimal units. Absent on a confidential
+            swap-quote or withdraw dry-run when 1Click gave no estimate for the
+            route; `hint` then says so, and asking again quotes the same way.
+        min_amount_out:
+          type: string
+          description: Guaranteed output. Absent together with `amount_out`.
+        amount_in_usd:
+          type: string
+        amount_out_usd:
+          type: string
+        withdraw_fee:
+          type: string
+          description: >-
+            1Click's fee for delivering to the recipient, in the destination
+            token's minimal units, already inside `amount_out`. Where the
+            destination chain charges to open the recipient's account (a Solana
+            token account, NEAR storage), that cost is in this figure.
+        refund_fee:
+          type: string
+          description: >-
+            1Click's fee for a refund, in the source token's minimal units.
+        deadline:
+          type: string
+          format: date-time
+          description: The quote's deadline. Absent on a dry quote.
+        time_estimate_seconds:
+          type: integer
+
+    ExecutedQuote:
+      description: |-
+        The quote a cross-chain withdrawal, a swap or a confidential operation
+        ran with, recorded on the request before its transfer is sent — so a
+        request that is still `processing` shows what it was promised.
+      allOf:
+        - $ref: '#/components/schemas/QuoteFigures'
+        - type: object
+          properties:
+            swap_type:
+              type: string
+              enum: [EXACT_INPUT, EXACT_OUTPUT]
+            max_amount_in:
+              type: string
+              description: The request's ceiling. Present on an exact output.
+
     DryRunResponse:
+      description: |-
+        A withdraw dry-run. For a cross-chain withdrawal the bridge quote's
+        figures ([`QuoteFigures`](#/components/schemas/QuoteFigures)) are flat
+        in the body — also when `would_succeed` is false because the quote
+        itself decided it (`below_min_amount_out`, `above_max_amount_in`).
+      allOf:
+        - $ref: '#/components/schemas/QuoteFigures'
+        - $ref: '#/components/schemas/DryRunVerdict'
+
+    DryRunVerdict:
       type: object
       properties:
         would_succeed:
@@ -7924,7 +8134,11 @@ components:
             token storage), `recipient_not_found` (native NEAR to a non-existent named
             account — would burn the wNEAR), `insufficient_balance` (intents balance
             below the requested amount), `invalid_request` (body the real withdraw
-            would reject with a 400), `no_liquidity` (1Click found no route with
+            would reject with a 400), `memo_not_supported` (the body carries a
+            `memo`), `below_min_amount_out` (the quote guarantees less than the
+            request's `min_amount_out`; the quote's figures are in the body),
+            `above_max_amount_in` (an exact output whose quote needs more than
+            `max_amount_in`; likewise), `no_liquidity` (1Click found no route with
             liquidity for this amount), `upstream_rejected` (1Click refused the
             cross-chain quote on grounds of its own — below the bridge minimum, for
             one; `message` is 1Click's text, e.g. "Amount is too low for bridge, try
@@ -7964,7 +8178,14 @@ components:
 
     SwapRequest:
       type: object
-      required: [token_in, token_out, amount_in]
+      description: |-
+        A swap and its size, in one of two modes: `amount_in` with an optional
+        `min_amount_out` floor (exact input), or `amount_out` with
+        `max_amount_in` (exact output). The fields read as on
+        [`WithdrawRequest`](#/components/schemas/WithdrawRequest). A field this
+        schema does not name is `400 bad_request`.
+      required: [token_in, token_out]
+      additionalProperties: false
       properties:
         token_in:
           type: string
@@ -7984,8 +8205,35 @@ components:
             the response echoes `destination_asset` as sent.
         amount_in:
           type: string
+          description: >-
+            Exact input, in `token_in`'s minimal units. Required unless
+            `amount_out` is sent.
+        amount_out:
+          type: string
+          description: >-
+            Exact output: what the swap delivers, in `token_out`'s minimal
+            units (`swapType: EXACT_OUTPUT`). Sent with `max_amount_in`, in
+            place of `amount_in`; `min_amount_out` is refused beside it.
+        max_amount_in:
+          type: string
+          description: >-
+            Required with `amount_out`: the most of `token_in` the swap may
+            spend. The policy, the spending limits and the approvers judge this
+            amount, and the limit is charged it. The transfer carries the fresh
+            quote's `amount_in`; a quote that needs more is
+            `400 above_max_amount_in` with `quoted_amount_in`. The wallet must
+            hold the whole ceiling, not only the quoted input. The unused input
+            comes back to the wallet's balance after the swap.
         min_amount_out:
           type: string
+          description: >-
+            With `amount_in`: the least the swap may deliver. Compared to the
+            fresh quote's `min_amount_out` — the guarantee, not the
+            `amount_out` estimate — before anything is signed; a quote under it
+            is `400 below_min_amount_out` with `quoted_min_amount_out`. The
+            quote is taken again when the swap runs, so set the floor under a
+            swap quote's `min_amount_out` by as much as you let the market move
+            in between.
 
     SwapResponse:
       type: object
@@ -8032,26 +8280,27 @@ components:
             (`GET /wallet/v1/requests/{request_id}`) for the terminal status.
 
     SwapQuoteResponse:
-      type: object
-      properties:
-        amount_out:
-          type: string
-          description: |-
-            Expected output in minimal units. Absent on a confidential
-            swap-quote or withdraw dry-run when 1Click gave no estimate for the
-            route; `hint` then says so. Such an answer is final for the route:
-            asking again quotes the same way.
-        min_amount_out:
-          type: string
-          description: Minimum guaranteed output (after slippage). Absent together with `amount_out`.
-        deadline:
-          type: string
-          format: date-time
-        time_estimate_seconds:
-          type: integer
-        hint:
-          type: string
-          description: Present only when `amount_out` is absent, and says why.
+      description: |-
+        A swap quote, or a confidential withdraw dry-run: the quote's figures
+        ([`QuoteFigures`](#/components/schemas/QuoteFigures)), flat, and
+        whether the real call would take this quote.
+      allOf:
+        - $ref: '#/components/schemas/QuoteFigures'
+        - type: object
+          properties:
+            reason:
+              type: string
+              enum: [below_min_amount_out, above_max_amount_in]
+              description: >-
+                Present when the route quotes but the request's own
+                `min_amount_out` or `max_amount_in` is not met by this quote:
+                the name the real call would answer in `error`. Absent when the
+                quote meets the request.
+            hint:
+              type: string
+              description: >-
+                With `reason`, its sentence. Otherwise present only when
+                `amount_out` is absent, and says why.
 
     DefuseAssetId:
       type: string
@@ -9974,11 +10223,29 @@ components:
               webhook carries it. All other identifier fields
               (`transfer_intent_hash`, `intent_hash`) are NEAR-Intents
               hashes, NOT destination-chain transactions.
+            - Cross-chain withdraws, gasless swaps and confidential operations
+              carry `quote` — the quote the request ran with
+              ([`ExecutedQuote`](#/components/schemas/ExecutedQuote)), on the
+              row from the moment its transfer is signed, beside
+              `deposit_address`. `amount_out` at the top of the result is what
+              1Click reports delivered once settled (the quote's estimate
+              until then). `refunded_amount`, once 1Click reports one, is what
+              it returned to the wallet in the source token: the unused input
+              of an exact output, or the deposit of a refunded swap
+              (`swap_details.refunded_amount` on a confidential operation).
             - Withdraws and swaps: `settled_late: true` marks a request whose
               outcome was settled from the chain after its response came
               back `processing`. A `failed` request carrying
               `never_executed: true` or `never_submitted: true` moved no
-              funds and is safe to retry under a new idempotency key. A
+              funds and is safe to retry under a new idempotency key. One
+              refused at its quote — in the background of an `async` call, or
+              when an approved request runs — carries beside
+              `never_submitted` what the call itself would have answered:
+              `error_code` (`below_min_amount_out` or `above_max_amount_in`),
+              the sentence in `error`, the request's bound (`min_amount_out` /
+              `max_amount_in`) and the quote's figure
+              (`quoted_min_amount_out` / `quoted_amount_in`). The approval is
+              spent: re-price and send a new request. A
               `failed` one without them may have moved funds — a bridge
               that failed or refunded (`result.reason`), or a NEAR
               transaction that failed on chain after its gas was spent —
@@ -10071,15 +10338,18 @@ components:
         symbol, `"near"` included (delivered as that listing, swapped on the
         way). `chain="near"` delivers native NEAR for `nep141:wrap.near` (via
         `intents.near native_withdraw`); use `confidentialUnshield` to send to
-        your own public balance instead.
+        your own public balance instead. Every confidential withdrawal is
+        quoted at 1Click, so both sizes of `WithdrawRequest` and its
+        `min_amount_out` apply on every chain, `near` included; on a multisig
+        wallet the output the request pins is bound into the approved op.
       allOf:
         - $ref: '#/components/schemas/WithdrawRequest'
     ConfidentialSwapRequest:
       description: >-
-        Confidential swap body — same shape as `SwapRequest`
-        (`token_in` / `amount_in` / `token_out` / optional `min_amount_out`).
-        On a multisig wallet the confidential swap binds `token_out` and
-        `min_amount_out` into the approved op (like a public swap), so approvers
+        Confidential swap body — same shape as `SwapRequest`, in either of its
+        two sizes. On a multisig wallet the confidential swap binds `token_out`
+        and the output it pins — its `min_amount_out` floor, or its exact
+        `amount_out` — into the approved op (like a public swap), so approvers
         commit to the output terms — a compromised coordinator cannot change them
         after approval.
       allOf:

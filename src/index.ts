@@ -29,6 +29,8 @@ export type {
   IntentsStorageDepositRequest,
   IntentsStorageDepositResponse,
   DryRunResponse,
+  QuoteFigures,
+  ExecutedQuote,
   SwapRequest,
   SwapResponse,
   SwapQuoteResponse,
@@ -104,6 +106,7 @@ export {
   OnChainTxFailedError,
   AgentConnectDeniedError,
   WalletBusyError,
+  QuoteRefusedError,
   DuplicateRequestError,
 } from './errors.js';
 

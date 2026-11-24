@@ -107,6 +107,43 @@ console.log('Policy decision:', dryRun.policy_check?.decision);
 
 Dry-run runs the full policy + balance check without signing or broadcasting. Use this in interactive UIs to show the user whether their action will succeed.
 
+For a cross-chain withdrawal the dry-run also carries the bridge quote as fields, with 1Click's own values: `amount_in`, `min_amount_in`, `amount_out`, `min_amount_out`, `withdraw_fee`, `refund_fee`, `amount_in_usd`, `amount_out_usd`, `time_estimate_seconds`. Read these, not the sentence in `message`. Quotes move with the market, so two quotes a moment apart can differ by a unit.
+
+### Deliver an exact amount (invoices)
+
+`amount` is what leaves the wallet; the recipient gets it less the bridge's fees, and on a chain that charges to open the recipient's account (a fresh Solana token account) that cost comes out of it too. To pay an invoice, fix the output instead:
+
+```ts
+const invoice = {
+  chain: 'solana',
+  to: recipient,
+  token: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1', // USDC
+  amount_out: '300000', // the recipient receives exactly 0.30 USDC
+} as const;
+
+// 1. Price it. The dry-run needs a ceiling too; the balance is a fine first one.
+const preview = await client.withdrawDryRun({ ...invoice, max_amount_in: balance });
+if (!preview.would_succeed) throw new Error(`${preview.reason}: ${preview.message}`);
+
+// 2. Pay. The withdrawal takes a quote of its own, so the ceiling leaves the
+//    market 1% of room over the preview; a quote above it is refused, unsigned.
+const ceiling = ((BigInt(preview.amount_in!) * 101n) / 100n).toString();
+await client.withdraw({ ...invoice, max_amount_in: ceiling, async: true });
+```
+
+- The wallet transfers the fresh quote's `amount_in`, which already holds 1Click's 1% slippage buffer; what the swap does not use comes back to the wallet's balance afterwards (`result.refunded_amount` once 1Click reports it).
+- Your policy, spending limits and approvers judge `max_amount_in`, and the limit is charged that figure — the returned input is not given back to it. The wallet must hold the whole ceiling, not only the quoted input: do not set it above the balance.
+- An `async` or approved request refused at its quote ends `failed` with `result.never_submitted: true` and `result.error_code` (`above_max_amount_in` / `below_min_amount_out`), the bound and the quote's figure beside it. Nothing moved; send a new request.
+- If the fresh quote needs more than `max_amount_in`, nothing is signed and the call throws `QuoteRefusedError` (`code: 'above_max_amount_in'`, `quoted` = the input it needs). Raise the ceiling or leave it.
+- `min_amount_out` is the opposite guard for an exact input: the least the recipient may receive, held to the quote's `min_amount_out` (the guarantee). A miss throws `QuoteRefusedError` with `code: 'below_min_amount_out'`.
+- Both exist on cross-chain withdrawals, swaps and their confidential twins. A public withdrawal on NEAR delivers `amount` exactly and takes neither.
+
+`result.quote` on the request (`getRequest`) is the quote it ran with — `amount_in`, `amount_out`, `min_amount_out`, `deadline`, and `max_amount_in` for an exact output — beside `deposit_address`.
+
+### No memo, no destination tag
+
+A withdrawal delivers no memo or destination tag on any route, and a body that carries `memo` is refused (`memo_not_supported`). Do not withdraw to an exchange address that needs one. Any other field the request type does not name is refused too.
+
 ## Cross-chain swap (1Click)
 
 ```ts
@@ -116,16 +153,20 @@ const quote = await client.swapQuote({
   token_out: 'nep141:usdt.tether-token.near',
   amount_in: '5000000000000000000000000',
 });
-console.log('Expected output:', quote.amount_out, 'min:', quote.min_amount_out);
+console.log('Expected output:', quote.amount_out, 'guaranteed:', quote.min_amount_out);
 
 // 2. Execute
 const result = await client.swap({
   token_in: 'nep141:wrap.near',
   token_out: 'nep141:usdt.tether-token.near',
   amount_in: '5000000000000000000000000',
-  min_amount_out: quote.min_amount_out, // slippage guard
+  // The floor: under the quote's guarantee by what you let the market move
+  // before the swap takes its own quote (here 0.5%).
+  min_amount_out: ((BigInt(quote.min_amount_out!) * 995n) / 1000n).toString(),
 });
 ```
+
+The floor is compared to what the swap's own fresh quote guarantees (`min_amount_out`), not to its `amount_out` estimate, which delivery may fall 1% under. A floor set at a quote's `amount_out` is refused, and one set exactly at an earlier quote's `min_amount_out` is refused whenever the fresh quote is a unit worse — a miss throws `QuoteRefusedError` and signs nothing. To receive an exact amount instead, send `amount_out` with `max_amount_in` in place of `amount_in`; the quote then answers the `amount_in` it needs.
 
 The swap goes through the 1Click solver: quote → deposit to intents.near → mt_transfer → poll for settlement. `result.amount_out` is the actual settled amount.
 

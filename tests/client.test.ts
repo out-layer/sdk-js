@@ -9,6 +9,7 @@ import {
   OutlayerClient,
   OutlayerError,
   PolicyDeniedError,
+  QuoteRefusedError,
   RateLimitedError,
   UnauthorizedError,
   WalletBusyError,
@@ -611,6 +612,139 @@ describe('Wallet writes: swap + swapQuote', () => {
       amount_in: '1000',
     });
     expect(receivedKey).toBeNull();
+  });
+});
+
+describe('Wallet writes: exact output, floors and quote refusals', () => {
+  it('withdraw sends amount_out + max_amount_in as given, and no amount', async () => {
+    let received: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/wallet/v1/intents/withdraw`, async ({ request }) => {
+        received = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({
+          request_id: '77777777-7777-7777-7777-777777777777',
+          status: 'processing',
+          poll_url: '/wallet/v1/requests/77777777-7777-7777-7777-777777777777',
+        });
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await client.withdraw({
+      chain: 'solana',
+      to: 'So1anaRecipient',
+      token: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+      amount_out: '300000',
+      max_amount_in: '500000',
+      async: true,
+    });
+    expect(received).toEqual({
+      chain: 'solana',
+      to: 'So1anaRecipient',
+      token: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+      amount_out: '300000',
+      max_amount_in: '500000',
+      async: true,
+    });
+  });
+
+  it('withdrawDryRun returns the bridge quote as fields', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/intents/withdraw/dry-run`, () =>
+        HttpResponse.json({
+          would_succeed: true,
+          message: 'Bridge quote: 486272 in → 300000 out (min 300000) as nep141:sol-…, ETA ~7s',
+          amount_in: '486272',
+          min_amount_in: '483241',
+          amount_out: '300000',
+          min_amount_out: '300000',
+          withdraw_fee: '183178',
+          refund_fee: '0',
+          time_estimate_seconds: 7,
+          policy_check: { within_limits: true, address_allowed: true },
+        }),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    const r = await client.withdrawDryRun({
+      chain: 'solana',
+      to: 'So1anaRecipient',
+      token: 'nep141:usdc',
+      amount_out: '300000',
+      max_amount_in: '500000',
+    });
+    expect(r.would_succeed).toBe(true);
+    expect([r.amount_in, r.min_amount_in, r.withdraw_fee]).toEqual(['486272', '483241', '183178']);
+  });
+
+  it('a floor the quote does not guarantee is a QuoteRefusedError with the quoted figure', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/intents/swap`, () =>
+        HttpResponse.json(
+          {
+            error: 'below_min_amount_out',
+            message:
+              'The quote guarantees 115426, less than min_amount_out (116592); nothing was signed.',
+            min_amount_out: '116592',
+            quoted_min_amount_out: '115426',
+          },
+          { status: 400 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey, maxRetries: 0 });
+    await expect(
+      client.swap({
+        token_in: 'nep141:a',
+        token_out: 'nep141:b',
+        amount_in: '300000',
+        min_amount_out: '116592',
+      }),
+    ).rejects.toSatisfy((e: unknown) => {
+      const err = e as QuoteRefusedError;
+      expect(err).toBeInstanceOf(QuoteRefusedError);
+      expect([err.code, err.quoted, err.bound]).toEqual([
+        'below_min_amount_out',
+        '115426',
+        '116592',
+      ]);
+      return true;
+    });
+  });
+
+  it('an exact output over its ceiling is a QuoteRefusedError with the input the quote needs', async () => {
+    server.use(
+      http.post(`${BASE}/wallet/v1/intents/withdraw`, () =>
+        HttpResponse.json(
+          {
+            error: 'above_max_amount_in',
+            message:
+              'The quote needs 486272 in, more than max_amount_in (480000); nothing was signed.',
+            max_amount_in: '480000',
+            quoted_amount_in: '486272',
+          },
+          { status: 400 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey, maxRetries: 0 });
+    await expect(
+      client.withdraw({
+        chain: 'solana',
+        to: 'x',
+        token: 'nep141:usdc',
+        amount_out: '300000',
+        max_amount_in: '480000',
+      }),
+    ).rejects.toSatisfy((e: unknown) => {
+      const err = e as QuoteRefusedError;
+      expect(err).toBeInstanceOf(QuoteRefusedError);
+      expect([err.code, err.quoted, err.bound]).toEqual([
+        'above_max_amount_in',
+        '486272',
+        '480000',
+      ]);
+      return true;
+    });
   });
 });
 
@@ -2163,9 +2297,7 @@ describe('Agent Connect binding', () => {
           asset_account_id: 'user.testnet',
           executor_account_id: 'ab'.repeat(32),
           code_hash: 'BwjDnyemmBhrCyuviDGpoQAm9mdjTfrX7ZjqgZB4MHvM',
-          transactions: [
-            { signer_id: 'user.testnet', receiver_id: 'user.testnet', actions: [] },
-          ],
+          transactions: [{ signer_id: 'user.testnet', receiver_id: 'user.testnet', actions: [] }],
         });
       }),
     );
@@ -2225,10 +2357,7 @@ describe('Agent Connect refusals carry what a client acts on', () => {
     // A refusal we cannot classify is not one to retry blindly.
     server.use(
       http.post(`${BASE}/wallet/v1/call`, () =>
-        HttpResponse.json(
-          { error: 'agent_connect_denied', message: 'refused' },
-          { status: 403 },
-        ),
+        HttpResponse.json({ error: 'agent_connect_denied', message: 'refused' }, { status: 403 }),
       ),
     );
     const client = new OutlayerClient({ apiKey });
@@ -2351,14 +2480,14 @@ describe('wallet_busy is the one 409 worth asking again', () => {
       apiKey,
       retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 2 },
     });
-    await expect(
-      client.transfer({ chain: 'near', to: 'bob.near', amount: '1' }),
-    ).rejects.toSatisfy((e: unknown) => {
-      const err = e as WalletBusyError;
-      expect(err).toBeInstanceOf(WalletBusyError);
-      expect(err.inFlightRequestId).toBe('req-42');
-      return true;
-    });
+    await expect(client.transfer({ chain: 'near', to: 'bob.near', amount: '1' })).rejects.toSatisfy(
+      (e: unknown) => {
+        const err = e as WalletBusyError;
+        expect(err).toBeInstanceOf(WalletBusyError);
+        expect(err.inFlightRequestId).toBe('req-42');
+        return true;
+      },
+    );
   });
 
   it('a 200 duplicate_idempotency_key is thrown with the request it names, not returned as the answer', async () => {
@@ -2438,9 +2567,7 @@ describe('wallet_busy is the one 409 worth asking again', () => {
       apiKey,
       retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 2 },
     });
-    await expect(
-      client.transfer({ chain: 'near', to: 'bob.near', amount: '1' }),
-    ).rejects.toThrow();
+    await expect(client.transfer({ chain: 'near', to: 'bob.near', amount: '1' })).rejects.toThrow();
     expect(attempts).toBe(1);
   });
 });
@@ -2483,7 +2610,8 @@ describe('Limit orders', () => {
     server.use(
       http.post(`${BASE}/wallet/v1/limit-orders`, async ({ request }) => {
         seenBody = await request.json();
-        seenKey = request.headers.get('x-idempotency-key') ?? request.headers.get('idempotency-key');
+        seenKey =
+          request.headers.get('x-idempotency-key') ?? request.headers.get('idempotency-key');
         return HttpResponse.json({ request_id: 'r1', ...order, transfer_intent_hash: 'h' });
       }),
     );
@@ -2502,7 +2630,11 @@ describe('Limit orders', () => {
     expect(seenKey).toBe('once');
     expect(seenBody).not.toHaveProperty('idempotencyKey');
     // 1Click's own parameter names go through as they are.
-    expect(seenBody).toMatchObject({ side: 'sell', price: '12', recipient_type: 'destination_chain' });
+    expect(seenBody).toMatchObject({
+      side: 'sell',
+      price: '12',
+      recipient_type: 'destination_chain',
+    });
   });
 
   it('hands back the pending approval of a multisig wallet as it is, told apart by order_id', async () => {
@@ -2520,7 +2652,11 @@ describe('Limit orders', () => {
     );
     const client = new OutlayerClient({ apiKey });
     const res = await client.createLimitOrder({
-      base_asset: 'a', quote_asset: 'b', side: 'buy', quantity: '1', price: '0.5',
+      base_asset: 'a',
+      quote_asset: 'b',
+      side: 'buy',
+      quantity: '1',
+      price: '0.5',
     });
     expect('order_id' in res).toBe(false);
     expect(res).toHaveProperty('approval_id');
@@ -2535,7 +2671,11 @@ describe('Limit orders', () => {
       }),
       http.get(`${BASE}/wallet/v1/limit-orders`, ({ request }) => {
         const sp = new URL(request.url).searchParams;
-        hit.push(sp.has('limit') ? `list:${sp.get('limit')}/${sp.get('offset')}` : `list:${sp.get('open')}`);
+        hit.push(
+          sp.has('limit')
+            ? `list:${sp.get('limit')}/${sp.get('offset')}`
+            : `list:${sp.get('open')}`,
+        );
         return HttpResponse.json([order]);
       }),
       http.post(`${BASE}/wallet/v1/limit-orders/:id/cancel`, ({ params }) => {
@@ -2545,7 +2685,13 @@ describe('Limit orders', () => {
       http.post(`${BASE}/wallet/v1/limit-orders/cancel-all`, ({ request }) => {
         const offset = new URL(request.url).searchParams.get('offset');
         hit.push(offset === null ? 'cancel-all' : `cancel-all:${offset}`);
-        return HttpResponse.json({ known: 1, cancelled: 1, failed: 0, remaining: 0, complete: true });
+        return HttpResponse.json({
+          known: 1,
+          cancelled: 1,
+          failed: 0,
+          remaining: 0,
+          complete: true,
+        });
       }),
     );
     const client = new OutlayerClient({ apiKey });
@@ -2557,7 +2703,15 @@ describe('Limit orders', () => {
     const all = await client.cancelAllLimitOrders();
     await client.cancelAllLimitOrders({ offset: 50 });
 
-    expect(hit).toEqual(['get:order_x', 'list:true', 'list:null', 'list:100/200', 'cancel:order_x', 'cancel-all', 'cancel-all:50']);
+    expect(hit).toEqual([
+      'get:order_x',
+      'list:true',
+      'list:null',
+      'list:100/200',
+      'cancel:order_x',
+      'cancel-all',
+      'cancel-all:50',
+    ]);
     // Accepted for cancellation is not finished: a last slice may still fill,
     // and the only terminal signal is the payout flag.
     expect(cancelled.fill_status).toBe('pending_cancel');
@@ -2569,14 +2723,23 @@ describe('Limit orders', () => {
     server.use(
       http.post(`${BASE}/wallet/v1/limit-orders`, () =>
         HttpResponse.json(
-          { error: 'policy_denied', message: "Capability for 'limit_order' is not enabled by policy" },
+          {
+            error: 'policy_denied',
+            message: "Capability for 'limit_order' is not enabled by policy",
+          },
           { status: 403 },
         ),
       ),
     );
     const client = new OutlayerClient({ apiKey });
     await expect(
-      client.createLimitOrder({ base_asset: 'a', quote_asset: 'b', side: 'sell', quantity: '1', price: '1' }),
+      client.createLimitOrder({
+        base_asset: 'a',
+        quote_asset: 'b',
+        side: 'sell',
+        quantity: '1',
+        price: '1',
+      }),
     ).rejects.toBeInstanceOf(PolicyDeniedError);
   });
 });

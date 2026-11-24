@@ -50,6 +50,10 @@ export type IntentsTransferRequest = Schemas['IntentsTransferRequest'];
 export type IntentsStorageDepositRequest = Schemas['IntentsStorageDepositRequest'];
 export type IntentsStorageDepositResponse = Schemas['IntentsStorageDepositResponse'];
 export type DryRunResponse = Schemas['DryRunResponse'];
+/** A 1Click quote's figures, as dry-runs, quotes and request results carry them. */
+export type QuoteFigures = Schemas['QuoteFigures'];
+/** The quote a request ran with: `result.quote` of a cross-chain withdraw or a swap. */
+export type ExecutedQuote = Schemas['ExecutedQuote'];
 
 export type SwapRequest = Schemas['SwapRequest'];
 export type SwapResponse = Schemas['SwapResponse'];
@@ -401,10 +405,7 @@ export class OutlayerClient {
    * `pending`: this call records a relationship and authorizes nothing.
    */
   putBinding(body: PutBindingRequest): Promise<BindingResponse> {
-    return runWithRetry(
-      () => this.client.PUT('/wallet/v1/binding', { body }),
-      this.retry,
-    );
+    return runWithRetry(() => this.client.PUT('/wallet/v1/binding', { body }), this.retry);
   }
 
   /**
@@ -413,10 +414,7 @@ export class OutlayerClient {
    * start failing for gas.
    */
   getBinding(): Promise<BindingResponse> {
-    return runWithRetry(
-      () => this.client.GET('/wallet/v1/binding'),
-      this.retry,
-    );
+    return runWithRetry(() => this.client.GET('/wallet/v1/binding'), this.retry);
   }
 
   /**
@@ -425,10 +423,7 @@ export class OutlayerClient {
    * left completable.
    */
   deleteBinding(): Promise<DeleteBindingResponse> {
-    return runWithRetry(
-      () => this.client.DELETE('/wallet/v1/binding'),
-      this.retry,
-    );
+    return runWithRetry(() => this.client.DELETE('/wallet/v1/binding'), this.retry);
   }
 
   /**
@@ -461,9 +456,12 @@ export class OutlayerClient {
    * two are different operations, not modes of one: this one can refuse with
    * `AgentConnectDeniedError` — read `terminal` before retrying.
    */
-  bindingTransfer(
-    body: { to: string; amount: string; token?: string; memo?: string },
-  ): Promise<CallResponse> {
+  bindingTransfer(body: {
+    to: string;
+    amount: string;
+    token?: string;
+    memo?: string;
+  }): Promise<CallResponse> {
     return runWithRetry(
       () => this.client.POST('/wallet/v1/binding/transfer', { body }),
       this.retry,

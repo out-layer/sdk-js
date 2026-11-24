@@ -38,6 +38,14 @@ export type ErrorBody = {
   result?: unknown;
   /** `duplicate_idempotency_key` only: where to follow it while not terminal. */
   poll_url?: string;
+  /** `below_min_amount_out` only: the floor the request set. */
+  min_amount_out?: string;
+  /** `below_min_amount_out` only: the output the quote guarantees. */
+  quoted_min_amount_out?: string;
+  /** `above_max_amount_in` only: the ceiling the request set. */
+  max_amount_in?: string;
+  /** `above_max_amount_in` only: the input the quote needs. */
+  quoted_amount_in?: string;
   /** `duplicate_idempotency_key` of a payment-check create or batch: the checks it made, with their keys. */
   checks?: Array<{ check_id: string; check_key: string | null; status: string }>;
 };
@@ -102,6 +110,30 @@ export class BadRequestError extends OutlayerError {
   constructor(opts: OutlayerErrorOptions) {
     super(opts);
     this.name = 'BadRequestError';
+  }
+}
+
+/**
+ * The fresh 1Click quote did not meet the request's own bound, and nothing was
+ * signed. `code` says which: `below_min_amount_out` (the quote guarantees
+ * {@link quoted}, under the `min_amount_out` in {@link bound}) or
+ * `above_max_amount_in` (an exact output needs {@link quoted} in, over the
+ * `max_amount_in` in {@link bound}). Re-price from `quoted` and send again, or
+ * leave it: the same request may pass on the next quote. HTTP 400.
+ */
+export class QuoteRefusedError extends BadRequestError {
+  /** The quote's own figure, in minimal units. */
+  readonly quoted: string;
+  /** The request's `min_amount_out` or `max_amount_in`. */
+  readonly bound: string;
+
+  constructor(
+    opts: OutlayerErrorOptions & { quoted?: string | undefined; bound?: string | undefined },
+  ) {
+    super(opts);
+    this.name = 'QuoteRefusedError';
+    this.quoted = opts.quoted ?? '';
+    this.bound = opts.bound ?? '';
   }
 }
 
@@ -242,6 +274,7 @@ const codeToCtor: Partial<Record<ErrorCode, new (opts: OutlayerErrorOptions) => 
   insufficient_balance: BadRequestError,
   unsupported_chain: BadRequestError,
   unsupported_token: BadRequestError,
+  memo_not_supported: BadRequestError,
   binding_not_found: NotFoundError,
   no_payment_key: NotFoundError,
   sponsor_code_invalid: NotFoundError,
@@ -260,6 +293,22 @@ export function makeError(body: ErrorBody, status: number): OutlayerError {
   // (not under `details`) — surface them on the typed error.
   if (code === 'onchain_tx_failed') {
     return new OnChainTxFailedError({ ...opts, txHash: body.tx_hash, failure: body.failure });
+  }
+  // The quote's figure is at the top level of the body: it is what the caller
+  // re-prices from.
+  if (code === 'below_min_amount_out') {
+    return new QuoteRefusedError({
+      ...opts,
+      quoted: body.quoted_min_amount_out,
+      bound: body.min_amount_out,
+    });
+  }
+  if (code === 'above_max_amount_in') {
+    return new QuoteRefusedError({
+      ...opts,
+      quoted: body.quoted_amount_in,
+      bound: body.max_amount_in,
+    });
   }
   // Same reason as above: these bodies carry their meaning OUTSIDE `details`,
   // and a client that only sees {code, message} cannot act on `terminal` —

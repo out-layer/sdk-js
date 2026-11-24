@@ -4,8 +4,43 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking.** A withdrawal with `memo` is refused (`memo_not_supported`):
+  no route delivers a memo or a destination tag. `WithdrawRequest`,
+  `SwapRequest` and `IntentsTransferRequest` no longer type-check with a field
+  the API does not name, and the API refuses one.
+- **Breaking.** A swap's `min_amount_out` is held to the quote's
+  `min_amount_out` (the guarantee) instead of its `amount_out` estimate; a
+  floor set at a quote's `amount_out` is refused, and one set exactly at an
+  earlier quote's `min_amount_out` whenever the fresh quote is a unit worse —
+  leave the market room under it. The refusal is a
+  `QuoteRefusedError` (`below_min_amount_out`), not a `BadRequestError` with
+  code `bad_request`.
+- `amount` on `WithdrawRequest` and `amount_in` on `SwapRequest` are optional
+  in the types: a request carries one of the two sizes.
+- **Breaking.** An amount of a withdrawal, a swap, an intents transfer and
+  the confidential operations is decimal digits only: a leading `+`, a leading
+  zero or whitespace is refused (`bad_request`).
+- Every confidential route answers an unparseable body with `400 bad_request`
+  (a `BadRequestError`), as the public routes do.
+- A request refused at its quote after the call returned ends `failed` with
+  `result.error_code`, the bound and the quote's figure.
+
 ### Added
 
+- Exact output: `amount_out` + `max_amount_in` on `withdraw` (cross-chain),
+  `swap`, `confidentialWithdraw`, `confidentialSwap` and their dry-runs and
+  quotes. The recipient receives exactly `amount_out`; the wallet spends at
+  most `max_amount_in`, and 1Click returns what it does not use.
+- `min_amount_out` on `withdraw` (cross-chain) and `confidentialWithdraw`.
+- `QuoteRefusedError` (`quoted`, `bound`) for `below_min_amount_out` and
+  `above_max_amount_in`.
+- `withdrawDryRun` on a cross-chain route, `swapQuote` and the confidential
+  previews carry the quote's figures as fields (`QuoteFigures`): `amount_in`,
+  `min_amount_in`, `amount_out`, `min_amount_out`, `withdraw_fee`,
+  `refund_fee`, `amount_in_usd`, `amount_out_usd`. A request's `result.quote`
+  is the quote it ran with (`ExecutedQuote`).
 - `verifyWebhook({ headers, rawBody, keys, walletIds, toleranceSec })`,
   `createWebhookKeyCache()` and `fetchWebhookKeys()`: check that a webhook is
   OutLayer's and about a wallet you expect, with the network's public Ed25519

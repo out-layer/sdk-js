@@ -175,6 +175,15 @@ async function showDepositInfo(): Promise<void> {
 // 4. Buy NEAR — swap intents-USDT → wNEAR → unwrap
 // ---------------------------------------------------------------------------
 
+/**
+ * A swap's floor from a quote: half a percent under what the quote guaranteed.
+ * The swap takes a quote of its own and holds the floor to THAT guarantee, so
+ * the floor leaves the market room to move in between.
+ */
+function floorUnder(quotedMin: string | undefined): string {
+  return ((BigInt(quotedMin ?? '0') * 995n) / 1000n).toString();
+}
+
 async function buyNear(usdtAmount: string): Promise<void> {
   console.log(`━━━ Buying NEAR with ${formatUsdt(usdtAmount)} USDT ━━━\n`);
 
@@ -196,7 +205,7 @@ async function buyNear(usdtAmount: string): Promise<void> {
       token_in: USDT,
       token_out: WNEAR,
       amount_in: usdtAmount,
-      min_amount_out: quote.min_amount_out ?? '0',
+      min_amount_out: floorUnder(quote.min_amount_out),
     }),
   );
   if (!swap) return;
@@ -314,7 +323,7 @@ async function withdrawToEth(amountYocto: string): Promise<void> {
       token_in: WNEAR,
       token_out: USDT,
       amount_in: amountYocto,
-      min_amount_out: quote.min_amount_out ?? '0',
+      min_amount_out: floorUnder(quote.min_amount_out),
     }),
   );
   if (!swap) return;

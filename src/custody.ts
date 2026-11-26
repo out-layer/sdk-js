@@ -72,7 +72,12 @@ function base64Decode(text: string): Uint8Array {
 }
 
 function base64Encode(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes));
+  // in pieces: an argument list has a limit a large input would pass
+  let binary = '';
+  for (let at = 0; at < bytes.length; at += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  }
+  return btoa(binary);
 }
 
 function unsigned(text: string, bits: 32 | 64 | 128, name: string): bigint {
@@ -193,6 +198,9 @@ export type Operation =
   | { kind: 'cross_chain_withdraw'; to: string; amount: string; token: string; chain: string };
 
 const INTENTS_CONTRACT = 'intents.near';
+
+/** The fields of an operation that are numbers written as decimal strings. */
+const DECIMAL_FIELDS = new Set(['amount', 'amount_in', 'min_out', 'gas', 'deposit']);
 
 function sameJson(args: string, expected: Record<string, string>): boolean {
   let parsed: unknown;
@@ -711,6 +719,13 @@ export class WalletContract {
    * the same operation: after its approvers voted, this is how it goes on.
    */
   ask(id: string, op: Operation): Promise<OperationState> {
+    // A number in another spelling (`05`, `+5`) is prepared and counted by
+    // the API and then fails this client's own check of the request.
+    for (const [field, value] of Object.entries(op)) {
+      if (DECIMAL_FIELDS.has(field) && !/^(0|[1-9][0-9]*)$/.test(value)) {
+        throw new CustodyError(`\`${field}\` is a decimal number with no sign and no leading zero`);
+      }
+    }
     return this.send('POST', OPERATION_PATH, JSON.stringify({ id, op }));
   }
 

@@ -260,6 +260,14 @@ describe('the client', () => {
     expect(sent).toHaveLength(1);
   });
 
+  it('sends no operation whose number is in another spelling', async () => {
+    const { client, sent } = await stand(prepared);
+    for (const amount of ['05', '+5', '5.0', '', ' 5']) {
+      await expect(client.ask('pay-1', { ...op, amount })).rejects.toThrow(/decimal number/);
+    }
+    expect(sent).toHaveLength(0);
+  });
+
   it('returns an operation that waits for approvers as it stands', async () => {
     const { client, sent } = await stand({
       id: 'pay-1',

@@ -52,6 +52,7 @@
     "release": "npm run gen && npm run typecheck && npm test && npm run build && npm publish"
   },
   "dependencies": {
+    "@noble/hashes": "^1.8.0",
     "openapi-fetch": "^0.13.0"
   },
   "devDependencies": {

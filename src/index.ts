@@ -141,3 +141,28 @@ export type {
   WebhookKeyCacheOptions,
   WebhookRefusal,
 } from './webhook.js';
+
+export {
+  AgentKey,
+  WalletContract,
+  CustodyError,
+  OPERATION_PATH,
+  REQUEST_TIMEOUT_SECS,
+  encodeRequestMessage,
+  requestHash,
+  messageIsFor,
+  agentRequestBytes,
+  verifyTeeHalf,
+  toHex,
+  fromHex,
+} from './custody.js';
+
+export type {
+  Operation,
+  OperationState,
+  RequestMessage,
+  FunctionCallAction,
+  TransferAction,
+  SignedRequestHeaders,
+  WalletContractOptions,
+} from './custody.js';

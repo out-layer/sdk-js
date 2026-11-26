@@ -718,7 +718,7 @@ export class WalletContract {
    * Ask for an operation under `id`. Asking again under the same id continues
    * the same operation: after its approvers voted, this is how it goes on.
    */
-  ask(id: string, op: Operation): Promise<OperationState> {
+  async ask(id: string, op: Operation): Promise<OperationState> {
     // A number in another spelling (`05`, `+5`) is prepared and counted by
     // the API and then fails this client's own check of the request.
     for (const [field, value] of Object.entries(op)) {

@@ -13,8 +13,6 @@ export type {
   RegisterResponse,
   AddressResponse,
   BalanceResponse,
-  WalletContractKeyResponse,
-  WalletContractResponse,
   TokensResponse,
   CallRequest,
   CallResponse,
@@ -95,6 +93,8 @@ export type {
   ConfidentialOpResponse,
   ConfidentialBalanceResponse,
   ConfidentialBalancesResponse,
+  WalletContractKeyResponse,
+  WalletContractResponse,
 } from './client.js';
 
 export {
@@ -106,6 +106,7 @@ export {
   NotFoundError,
   BadRequestError,
   OnChainTxFailedError,
+  AgentConnectDeniedError,
   WalletBusyError,
   QuoteRefusedError,
   DuplicateRequestError,

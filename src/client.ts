@@ -31,6 +31,12 @@ export type TokensResponse = Schemas['TokensResponse'];
 export type WalletContractKeyResponse = Schemas['WalletContractKeyResponse'];
 /** The account that is a wallet's wallet contract, and the agent's key read from it. */
 export type WalletContractResponse = Schemas['WalletContractResponse'];
+export type PutBindingRequest = Schemas['PutBindingRequest'];
+export type BindingResponse = Schemas['BindingResponse'];
+export type DeleteBindingResponse = Schemas['DeleteBindingResponse'];
+export type BindingSetupResponse = Schemas['BindingSetupResponse'];
+/** The structured `403` the Agent Connect pre-flight answers with. */
+export type AgentConnectDeniedResponse = Schemas['AgentConnectDeniedResponse'];
 
 export type CallRequest = Schemas['CallRequest'];
 export type CallResponse = Schemas['CallResponse'];
@@ -416,6 +422,105 @@ export class OutlayerClient {
   /** This wallet's wallet contract. Throws `NotFoundError` when it has none. */
   getWalletContract(): Promise<WalletContractResponse> {
     return runWithRetry(() => this.client.GET('/wallet/v1/contract'), this.retry);
+  }
+
+  // ------- Agent Connect binding -------
+
+  /**
+   * Record which on-chain account this wallet operates, in one of two
+   * mutually exclusive modes.
+   *
+   * - `hos_lease` (the default when `kind` is omitted) — a leased, keyless
+   *   account. `impl_version` and `owner_account_id` are required.
+   * - `personal_account` — your own named account, with the wallet contract
+   *   you install yourself via {@link getBindingSetup}. `impl_version` is
+   *   REJECTED here (that mode is versioned by the account's code hash) and
+   *   `owner_account_id`, if given, must equal `asset_account_id`.
+   *
+   * The response carries `executor_account_id` — the identity to add to the
+   * account's extension set. Until it is there, `binding_status` stays
+   * `pending`: this call records a relationship and authorizes nothing.
+   */
+  putBinding(body: PutBindingRequest): Promise<BindingResponse> {
+    return runWithRetry(() => this.client.PUT('/wallet/v1/binding', { body }), this.retry);
+  }
+
+  /**
+   * The binding, refreshed against the chain. Throws `404` when the wallet has
+   * none. `gas_balance_low` says the executor needs topping up before calls
+   * start failing for gas.
+   */
+  getBinding(): Promise<BindingResponse> {
+    return runWithRetry(() => this.client.GET('/wallet/v1/binding'), this.retry);
+  }
+
+  /**
+   * End the binding. Idempotent — deleting when there is none is a success.
+   * Pending approvals aimed at the bound account are cancelled rather than
+   * left completable.
+   */
+  deleteBinding(): Promise<DeleteBindingResponse> {
+    return runWithRetry(() => this.client.DELETE('/wallet/v1/binding'), this.retry);
+  }
+
+  /**
+   * The balance of the account this wallet is BOUND to — where an Agent
+   * Connect wallet's product money lives.
+   *
+   * {@link balance} is the wallet's own account (gas, and whatever it holds
+   * itself). One rule for the whole API: everything under `binding` is the
+   * bound account, everything else is the wallet.
+   *
+   * Throws `404` when there is no binding and `400` when it is still pending —
+   * never the wallet's own figure under an asset label.
+   */
+  bindingBalance(query: { token?: string } = {}): Promise<BalanceResponse> {
+    return runWithRetry(
+      () => this.client.GET('/wallet/v1/binding/balance', { params: { query } }),
+      this.retry,
+    );
+  }
+
+  /**
+   * Spend from the BOUND account: native NEAR, or a NEP-141 token.
+   *
+   * A builder over the same lane {@link call} exposes — identical policy,
+   * pre-flight, spend-grant rules and approval path — so you do not assemble
+   * the nested base64 envelope yourself. `to` is the LOGICAL recipient, not
+   * the token contract.
+   *
+   * Separate from {@link transfer}, which moves the wallet's OWN funds. The
+   * two are different operations, not modes of one: this one can refuse with
+   * `AgentConnectDeniedError` — read `terminal` before retrying.
+   */
+  bindingTransfer(body: {
+    to: string;
+    amount: string;
+    token?: string;
+    memo?: string;
+  }): Promise<CallResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/binding/transfer', { body }),
+      this.retry,
+    );
+  }
+
+  /**
+   * `personal_account` only: the transaction to install the wallet contract on
+   * your own account and add the executor — assembled here, signed by you with
+   * any wallet. Requires an existing `personal_account` binding.
+   *
+   * Answers `409` if the account already runs ANY contract: deploying over one
+   * would not clear its state.
+   */
+  getBindingSetup(): Promise<BindingSetupResponse> {
+    return runWithRetry(
+      () =>
+        this.client.GET('/wallet/v1/binding/setup', {
+          params: { query: { kind: 'personal_account' as const } },
+        }),
+      this.retry,
+    );
   }
 
   // ------- Wallet write -------

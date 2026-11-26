@@ -4,26 +4,19 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- Agent On-chain custody. On `OutlayerClient`: `getWalletContractKey()`,
+  `putWalletContract(accountId)` and `getWalletContract()` (types
+  `WalletContractKeyResponse`, `WalletContractResponse`). `AgentKey` and
+  `WalletContract` run a wallet contract's operations under the agent's
+  signature (`WalletContractOptions` takes `teePublicKey`: the enclave's half
+  is verified before the agent signs its own). `SetupKey`, `openSetup()` and
+  `collectSetup()` open a setup for the owner and collect the agent's key,
+  sealed to a one-time key. Nothing of the binding methods changes.
+
 ### Changed
 
-- **Breaking.** Agent On-chain custody replaces the binding methods. Added on
-  `OutlayerClient`: `getWalletContractKey()`, `putWalletContract(accountId)`
-  and `getWalletContract()` (types `WalletContractKeyResponse`,
-  `WalletContractResponse`), beside `AgentKey` and `WalletContract`, which run
-  a wallet contract's operations under the agent's signature
-  (`WalletContractOptions` takes `teePublicKey`: the enclave's half is
-  verified before the agent signs its own), and `SetupKey`, `openSetup()` and
-  `collectSetup()`, by which the agent opens a setup for its owner and
-  collects its key, sealed to a one-time key. Removed:
-  `putBinding`, `getBinding`, `deleteBinding`, `bindingBalance`,
-  `bindingTransfer`, `getBindingSetup`; the types `PutBindingRequest`,
-  `BindingResponse`, `DeleteBindingResponse`, `BindingSetupResponse`,
-  `AgentConnectDeniedResponse`; `AgentConnectDeniedError`; `account` on
-  `BalanceResponse`; `asset_account_id`, `executor_account_id` and
-  `gas_balance` on `AddressResponse`; the request statuses `partially_failed`
-  and `cancelled`; the error codes `agent_connect_denied` and
-  `binding_not_found`. A `call` of `w_execute_extension` is a
-  `PolicyDeniedError` for every wallet.
 - **Breaking.** A withdrawal with `memo` is refused (`memo_not_supported`):
   no route delivers a memo or a destination tag. `WithdrawRequest`,
   `SwapRequest` and `IntentsTransferRequest` no longer type-check with a field

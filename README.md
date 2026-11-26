@@ -8,7 +8,7 @@ TypeScript SDK for **OutLayer Agent Custody** — multi-chain wallets for AI age
 
 If you've used Steward.fi or similar AI-agent wallet infra, you know the shape: API key in, signed transactions out. OutLayer keeps that shape but moves the trust root:
 
-- **Keys live in a TEE** (Intel Trust Domain Extensions). The infrastructure operator cannot extract them. With [on-chain custody](#on-chain-custody) the main balance lies in a wallet contract that also requires a key the agent holds itself.
+- **Keys live in a TEE** (Intel Trust Domain Extensions on Phala Cloud). The infrastructure operator cannot extract them.
 - **Policy is enforced inside the TEE**, before signing, against an encrypted policy stored on the NEAR blockchain.
 - **Sovereign exit** is available: a wallet's owner can permissionlessly leave with its keys even if OutLayer shuts down. Two ways: the **owner exit** — a NEAR account registers once, the agent asks for the wallet with `OutlayerClient.createExitLink()`, no contract to deploy — and a **vault** of your own, which takes the secrets out too. See [leaving OutLayer](https://app.outlayer.ai/docs/leaving).
 - **Multi-chain wallets** (NEAR, Ethereum, Solana, Bitcoin) with deterministic address derivation and gasless cross-chain transfers via NEAR Intents.

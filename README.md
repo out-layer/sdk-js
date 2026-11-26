@@ -183,8 +183,9 @@ const setup = await openSetup(options);
 
 const collected = await collectSetup(options, setup.key);
 // null while the owner has not finished; then:
-// { account, key, seed }: the wallet contract's account, the agent's key,
-// and its 32-byte seed.
+// { account, key, seed, teePublicKey }: the wallet contract's account, the
+// agent's key, its 32-byte seed, and the enclave's public key of the pair.
+// Store teePublicKey beside the account: WalletContract needs both.
 ```
 
 `seed` is the agent's secret: store it where the agent keeps its secrets, and
@@ -208,7 +209,7 @@ import { AgentKey, WalletContract } from '@outlayer/sdk';
 const contract = new WalletContract({
   account: 'trader.alice.near', // the wallet contract's account
   key,
-  teePublicKey: tee_public_key, // verify the enclave's half before signing
+  teePublicKey, // the enclave's half is verified against it
   // baseUrl: 'https://testnet-api.outlayer.ai',
 });
 
@@ -225,9 +226,10 @@ if (state.status === 'pending_approval') {
 `run(id, op)` asks for the operation under an id of the agent's choice (1 to
 64 letters, digits, `-`, `_`). When the answer is `awaiting_signature` it
 checks that the returned request is the operation that was asked for, from
-this wallet contract (`messageIsFor`); with `teePublicKey` it verifies the
-enclave's half; then it signs the agent's half, last, and relays. It returns
-where the operation stands:
+this wallet contract (`messageIsFor`), verifies the enclave's half against
+`teePublicKey`, and refuses a second request under an id it has signed for.
+Then it signs the agent's half, last, and relays. It returns where the
+operation stands:
 
 | `status` | Meaning |
 |---|---|

@@ -260,6 +260,35 @@ describe('the client', () => {
     expect(sent).toHaveLength(1);
   });
 
+  it('signs one request under an id, and no second one', async () => {
+    // The same operation prepared again, as another request, with a TEE half
+    // that is valid for it.
+    const again = { ...(vector.message as unknown as RequestMessage), nonce: 1 };
+    const pkcs8 = fromHex(`302e020100300506032b657004220420${messages.tee_seed}`, 48);
+    const tee = await globalThis.crypto.subtle.importKey(
+      'pkcs8',
+      pkcs8 as BufferSource,
+      'Ed25519',
+      false,
+      ['sign'],
+    );
+    const signedBytes = new Uint8Array([
+      ...new TextEncoder().encode('NEAR_WALLET_TWO_KEY/V1/TEE'),
+      ...requestHash(again),
+    ]);
+    const teeHalf = toHex(
+      new Uint8Array(await globalThis.crypto.subtle.sign('Ed25519', tee, signedBytes)),
+    );
+
+    const { client, sent } = await stand(prepared);
+    await client.relay(prepared, op);
+    await client.relay(prepared, op);
+    await expect(
+      client.relay({ ...prepared, message: again, tee_half: teeHalf }, op),
+    ).rejects.toThrow(/another request was already signed/);
+    expect(sent).toHaveLength(2);
+  });
+
   it('sends no operation whose number is in another spelling', async () => {
     const { client, sent } = await stand(prepared);
     for (const amount of ['05', '+5', '5.0', '', ' 5']) {
@@ -284,7 +313,12 @@ describe('the client', () => {
       new Response(JSON.stringify({ error: 'policy_denied', message: 'over the daily limit' }), {
         status: 403,
       })) as unknown as typeof globalThis.fetch;
-    const client = new WalletContract({ account: ACCOUNT, key: await agent(), fetch });
+    const client = new WalletContract({
+      account: ACCOUNT,
+      key: await agent(),
+      teePublicKey,
+      fetch,
+    });
     await expect(client.ask('pay-1', op)).rejects.toMatchObject({
       code: 'policy_denied',
       status: 403,
@@ -319,8 +353,11 @@ describe('a setup', () => {
     let stored: { recipient?: string } = {};
     let answer: Record<string, unknown> = { wallet_id: walletId, done: false };
     const fetch = (async (url: string, init: RequestInit) => {
-      expect(new URL(url).pathname).toBe('/wallet/v1/contract/setup');
       expect((init.headers as Record<string, string>).authorization).toBe('Bearer wk_test');
+      if (new URL(url).pathname === '/wallet/v1/contract/key') {
+        return new Response(JSON.stringify({ tee_public_key: keys.tee.public_key }));
+      }
+      expect(new URL(url).pathname).toBe('/wallet/v1/contract/setup');
       if (init.method === 'POST') {
         stored = { recipient: JSON.parse(init.body as string).recipient_public_key };
         return new Response(
@@ -352,6 +389,7 @@ describe('a setup', () => {
     expect(collected?.account).toBe('trader.alice.near');
     expect(collected?.key.publicKey).toBe(keys.agent.public_key);
     expect(toHex(collected?.seed ?? new Uint8Array())).toBe(keys.agent.seed);
+    expect(collected?.teePublicKey).toBe(keys.tee.public_key);
 
     // a key that is not the one in the contract's pair is not taken
     answer = { ...done, agent_public_key: keys.tee.public_key };

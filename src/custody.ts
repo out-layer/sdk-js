@@ -555,10 +555,11 @@ async function setupCall(
   options: SetupOptions,
   method: 'GET' | 'POST',
   body?: unknown,
+  path = '/wallet/v1/contract/setup',
 ): Promise<Record<string, unknown>> {
   const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   const baseUrl = (options.baseUrl ?? 'https://api.outlayer.ai').replace(/\/+$/, '');
-  const response = await doFetch(`${baseUrl}/wallet/v1/contract/setup`, {
+  const response = await doFetch(`${baseUrl}${path}`, {
     method,
     headers: {
       authorization: `Bearer ${options.apiKey}`,
@@ -596,9 +597,10 @@ export async function openSetup(options: SetupOptions): Promise<OpenedSetup> {
 }
 
 /**
- * What the owner left: the wallet contract's account and the agent's key.
- * `null` while the owner has not finished. Refuses a key that is not the one
- * in the contract's pair.
+ * What the owner left: the wallet contract's account and the agent's key,
+ * with the TEE's public key of the pair for {@link WalletContract}. `null`
+ * while the owner has not finished. Refuses a key that is not the one in the
+ * contract's pair.
  *
  * `seed` is the agent's secret: store it where the agent keeps its secrets
  * and make the key again with `AgentKey.fromSeed(seed)`. The setup's one-time
@@ -607,7 +609,7 @@ export async function openSetup(options: SetupOptions): Promise<OpenedSetup> {
 export async function collectSetup(
   options: SetupOptions,
   key: SetupKey,
-): Promise<{ account: string; key: AgentKey; seed: Uint8Array } | null> {
+): Promise<{ account: string; key: AgentKey; seed: Uint8Array; teePublicKey: string } | null> {
   const answer = await setupCall(options, 'GET');
   if (answer.done !== true) return null;
   const seed = await key.open(String(answer.sealed_agent_key), String(answer.wallet_id));
@@ -615,7 +617,13 @@ export async function collectSetup(
   if (agentKey.publicKey !== answer.agent_public_key) {
     throw new CustodyError("the key the owner left is not the agent's key of the wallet contract");
   }
-  return { account: String(answer.account_id), key: agentKey, seed };
+  const pair = await setupCall(options, 'GET', undefined, '/wallet/v1/contract/key');
+  return {
+    account: String(answer.account_id),
+    key: agentKey,
+    seed,
+    teePublicKey: String(pair.tee_public_key),
+  };
 }
 
 // ── The API ──────────────────────────────────────────────────────────────────
@@ -663,10 +671,12 @@ export interface WalletContractOptions {
   /** `https://api.outlayer.ai` by default. */
   baseUrl?: string;
   /**
-   * The TEE's public key in the contract's pair, in hex. When given, the
-   * TEE's half is verified before the agent signs.
+   * The TEE's public key in the contract's pair, in hex: the second half of
+   * the contract's `w_public_key`. The TEE's half of every request is verified
+   * against it before the agent signs, so the agent signs only what the
+   * enclave has held to the owner's policy.
    */
-  teePublicKey?: string;
+  teePublicKey: string;
   fetch?: typeof fetch;
 }
 
@@ -677,6 +687,8 @@ export interface WalletContractOptions {
 export class WalletContract {
   private readonly baseUrl: string;
   private readonly fetch: typeof fetch;
+  /** The request this client signed under each id, by its hash. */
+  private readonly signed = new Map<string, string>();
 
   constructor(private readonly options: WalletContractOptions) {
     this.baseUrl = (options.baseUrl ?? 'https://api.outlayer.ai').replace(/\/+$/, '');
@@ -736,8 +748,9 @@ export class WalletContract {
 
   /**
    * Sign the agent's half of a prepared operation and send it. Refuses a
-   * request that is not the operation `op`, is not this wallet contract's, or
-   * (with `teePublicKey`) does not carry the TEE's half.
+   * request that is not the operation `op`, is not this wallet contract's,
+   * does not carry the TEE's half, or is a second request under an id this
+   * client has signed for: one id is one move.
    */
   async relay(state: OperationState, op: Operation): Promise<OperationState> {
     const msg = state.message;
@@ -751,14 +764,19 @@ export class WalletContract {
         `the request returned for \`${state.id}\` is not the operation that was asked for; it was not signed`,
       );
     }
-    if (
-      this.options.teePublicKey &&
-      !(await verifyTeeHalf(msg, fromHex(state.tee_half, 64), this.options.teePublicKey))
-    ) {
+    if (!(await verifyTeeHalf(msg, fromHex(state.tee_half, 64), this.options.teePublicKey))) {
       throw new CustodyError(
         `the TEE's half returned for \`${state.id}\` is not valid; nothing was signed`,
       );
     }
+    const hash = toHex(requestHash(msg));
+    const before = this.signed.get(state.id);
+    if (before !== undefined && before !== hash) {
+      throw new CustodyError(
+        `another request was already signed for \`${state.id}\`; this one was not signed`,
+      );
+    }
+    this.signed.set(state.id, hash);
     const half = await this.options.key.signHalf(msg);
     return this.send(
       'POST',

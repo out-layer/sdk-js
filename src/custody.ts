@@ -466,8 +466,11 @@ export class SetupKey {
     return new SetupKey(pair, toHex(new Uint8Array(await subtle.exportKey('raw', pair.publicKey))));
   }
 
-  /** The agent's key from what the owner's page sealed for the wallet `walletId`. */
-  async open(sealedBase64: string, walletId: string): Promise<AgentKey> {
+  /**
+   * The 32-byte seed of the agent's key, from what the owner's page sealed
+   * for the wallet `walletId`.
+   */
+  async open(sealedBase64: string, walletId: string): Promise<Uint8Array> {
     const sealed = base64Decode(sealedBase64);
     if (sealed[0] !== SEALED_FORMAT || sealed.length !== 1 + 32 + 32 + 16) {
       throw new CustodyError('this is not a sealed agent key');
@@ -517,7 +520,7 @@ export class SetupKey {
         'the sealed agent key does not open: it was sealed to another key or for another wallet',
       );
     }
-    return AgentKey.fromSeed(new Uint8Array(seed));
+    return new Uint8Array(seed);
   }
 }
 
@@ -588,18 +591,23 @@ export async function openSetup(options: SetupOptions): Promise<OpenedSetup> {
  * What the owner left: the wallet contract's account and the agent's key.
  * `null` while the owner has not finished. Refuses a key that is not the one
  * in the contract's pair.
+ *
+ * `seed` is the agent's secret: store it where the agent keeps its secrets
+ * and make the key again with `AgentKey.fromSeed(seed)`. The setup's one-time
+ * key opens it once; after that only the owner can derive it again.
  */
 export async function collectSetup(
   options: SetupOptions,
   key: SetupKey,
-): Promise<{ account: string; key: AgentKey } | null> {
+): Promise<{ account: string; key: AgentKey; seed: Uint8Array } | null> {
   const answer = await setupCall(options, 'GET');
   if (answer.done !== true) return null;
-  const agentKey = await key.open(String(answer.sealed_agent_key), String(answer.wallet_id));
+  const seed = await key.open(String(answer.sealed_agent_key), String(answer.wallet_id));
+  const agentKey = await AgentKey.fromSeed(seed);
   if (agentKey.publicKey !== answer.agent_public_key) {
     throw new CustodyError("the key the owner left is not the agent's key of the wallet contract");
   }
-  return { account: String(answer.account_id), key: agentKey };
+  return { account: String(answer.account_id), key: agentKey, seed };
 }
 
 // ── The API ──────────────────────────────────────────────────────────────────

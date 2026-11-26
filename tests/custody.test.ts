@@ -300,7 +300,7 @@ describe('a setup', () => {
   it("opens the agent's key the owner sealed, for this wallet and this key alone", async () => {
     const setup = await SetupKey.generate();
     const sealed = await sealedFor(setup.publicKey);
-    expect((await setup.open(sealed, walletId)).publicKey).toBe(keys.agent.public_key);
+    expect(toHex(await setup.open(sealed, walletId))).toBe(keys.agent.seed);
 
     await expect(setup.open(sealed, 'another-wallet')).rejects.toThrow(CustodyError);
     await expect((await SetupKey.generate()).open(sealed, walletId)).rejects.toThrow(CustodyError);
@@ -343,6 +343,7 @@ describe('a setup', () => {
     const collected = await collectSetup(options, opened.key);
     expect(collected?.account).toBe('trader.alice.near');
     expect(collected?.key.publicKey).toBe(keys.agent.public_key);
+    expect(toHex(collected?.seed ?? new Uint8Array())).toBe(keys.agent.seed);
 
     // a key that is not the one in the contract's pair is not taken
     answer = { ...done, agent_public_key: keys.tee.public_key };

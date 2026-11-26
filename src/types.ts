@@ -210,6 +210,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/v1/contract/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether the owner has finished the setup, and the agent's sealed key
+         * @description The agent asks whether its owner has finished the setup it opened.
+         *     While the owner has not, the answer is `done: false` with the
+         *     `wallet_id` alone. Once the owner has, it carries the wallet
+         *     contract's account, the agent's public key in the contract's pair, and
+         *     the agent's key sealed to the one-time key the setup was opened with.
+         *
+         *     The agent opens the sealed key with the private half of that one-time
+         *     key and checks that the public key of what it opened is
+         *     `agent_public_key`. `collectSetup` of `@outlayer/sdk` does both.
+         *
+         *     404 when the wallet has opened no setup.
+         */
+        get: operations["getWalletContractSetup"];
+        put?: never;
+        /**
+         * Open the setup of this wallet's wallet contract
+         * @description The agent opens a setup and gets a `token` to hand to its owner, as
+         *     the link `https://app.outlayer.ai/wallet/custody?setup=<token>`. On
+         *     that page the owner installs the wallet contract, derives the agent's
+         *     key from a signature of their own, names the account, and leaves the
+         *     agent's key sealed to `recipient_public_key`. The agent then collects
+         *     it with `GET /wallet/v1/contract/setup`.
+         *
+         *     `recipient_public_key` is a one-time X25519 public key the agent makes
+         *     for this setup and keeps the private half of: the sealed key opens
+         *     with that half alone, so the API carries the agent's key and cannot
+         *     read it.
+         *
+         *     The token is valid for 24 hours. Whoever holds it can name this
+         *     wallet's wallet contract until it expires; the account it names is
+         *     taken only when its pair on chain holds this wallet's key from
+         *     `GET /wallet/v1/contract/key`. A wallet has one setup: opening again
+         *     replaces the token and the one-time key, and discards a sealed key
+         *     that was left and not collected.
+         *
+         *     On-chain custody is for a wallet with an owner: one whose owner can
+         *     leave with its keys (`exit_owner` in `GET /wallet/v1/address`). Any
+         *     other wallet is refused with 400.
+         */
+        post: operations["openWalletContractSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/contract/setup/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the owner's page installs
+         * @description What the holder of a setup token needs to install the wallet contract:
+         *     the wallet, its owner account, the enclave's key of the wallet's
+         *     wallet contract, the agent's one-time key, and the NEP-413 request
+         *     whose signature by the owner's own key the agent's key is derived
+         *     from. The owner's page at `https://app.outlayer.ai/wallet/custody`
+         *     reads it.
+         *
+         *     The token is the only credential: no API key is sent. A token that is
+         *     unknown, has expired or was replaced by a newer setup answers 404.
+         */
+        get: operations["getWalletContractSetupForOwner"];
+        /**
+         * Name the wallet contract's account and leave the agent's key
+         * @description The owner's page names the account the wallet contract is installed on
+         *     and leaves the agent's key for the agent, sealed to
+         *     `recipient_public_key` of the setup.
+         *
+         *     The account is recorded exactly as `PUT /wallet/v1/contract` records
+         *     it: its pair of keys is read from the chain (`w_public_key`), and its
+         *     second half has to be this wallet's key, so a token gives no way to
+         *     point the wallet at a contract set up for another wallet. The sealed
+         *     key is stored as it came and returned to the agent by
+         *     `GET /wallet/v1/contract/setup`.
+         *
+         *     The token is the only credential: no API key is sent.
+         */
+        put: operations["completeWalletContractSetup"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/contract/v1/operations": {
         parameters: {
             query?: never;
@@ -3766,6 +3864,57 @@ export interface components {
             /** @description The agent's Ed25519 public key in the wallet contract's pair, 32 bytes in hex, as it was read from the chain when the account was named. */
             agent_public_key: string;
         };
+        OpenWalletContractSetupRequest: {
+            /** @description The agent's one-time X25519 public key, 32 bytes in lowercase hex: what the owner's page seals the agent's key to. */
+            recipient_public_key: string;
+        };
+        OpenWalletContractSetupResponse: {
+            /** @description What the agent hands to its owner, in the link `https://app.outlayer.ai/wallet/custody?setup=<token>`. Whoever holds it can name this wallet's wallet contract until it expires. */
+            token: string;
+            /**
+             * Format: date-time
+             * @description When the token stops opening the setup, 24 hours after it was opened.
+             */
+            expires_at: string;
+        };
+        WalletContractSetupForOwner: {
+            /** @description The wallet the setup is of. */
+            wallet_id: string;
+            /** @description The account that owns the wallet: the one whose key signs. */
+            owner: string;
+            /** @description The enclave's Ed25519 public key of this wallet's wallet contract, 32 bytes in hex: the second half of the pair the contract is initialised with. */
+            tee_public_key: string;
+            /** @description The agent's one-time X25519 public key, 32 bytes in hex: what the agent's key is sealed to. */
+            recipient_public_key: string;
+            /** @description What the owner's own key signs (NEP-413). The agent's key is derived from the signature: its 32-byte seed is `HMAC-SHA256(key = "outlayer/agent-key/v1", signature ‖ message)`. The owner's wallet makes the same signature again on request, so whoever is given that signature holds the agent's key. */
+            agent_key_request: {
+                /** @description The message, which names the owner account and the wallet. */
+                message: string;
+                /** @description The NEP-413 recipient: `outlayer-agent-key`. */
+                recipient: string;
+                /** @description The NEP-413 nonce, 32 bytes in base64. It is fixed, so the same request gives the same signature. */
+                nonce_base64: string;
+            };
+        };
+        CompleteWalletContractSetupRequest: {
+            /** @description The NEAR account the wallet contract is installed on. */
+            account_id: string;
+            /** @description The 32-byte seed of the agent's key, sealed to `recipient_public_key`, in base64. The sealed bytes are the byte `0x02`, a one-time X25519 public key (32 bytes), and the AES-256-GCM ciphertext of the seed with its tag (48 bytes). The AES key is HKDF-SHA256 of the X25519 shared secret with an empty salt and the info `outlayer:encryption-keys:v1:seal:kdf` followed by the one-time public key and `recipient_public_key`; the nonce is twelve zero bytes and the additional data is `outlayer:wallet-contract:agent-key:<wallet_id>`. */
+            sealed_agent_key: string;
+        };
+        /** @description Where the setup of a wallet contract stands, for the agent that opened it. `account_id`, `agent_public_key` and `sealed_agent_key` are present when `done` is true and absent, not `null`, otherwise. */
+        WalletContractSetupForAgent: {
+            /** @description The wallet the setup is of: what the sealed key is bound to. */
+            wallet_id: string;
+            /** @description Whether the owner has finished. */
+            done: boolean;
+            /** @description The wallet contract's account. */
+            account_id?: string;
+            /** @description The agent's Ed25519 public key in the wallet contract's pair, 32 bytes in hex: the agent checks the key it opened against it. */
+            agent_public_key?: string;
+            /** @description The agent's key, sealed to the one-time key the setup was opened with, in base64 (`CompleteWalletContractSetupRequest`). */
+            sealed_agent_key?: string;
+        };
         WalletContractOperationRequest: {
             /** @description The agent's own id of the operation: 1 to 64 characters of letters, digits, `-` and `_`. Asking again under the same id continues the same operation. */
             id: string;
@@ -5805,6 +5954,8 @@ export interface components {
          *     that list it), and is accepted and changes nothing elsewhere.
          */
         AnswerWithin: number;
+        /** @description The token of a setup, as `POST /wallet/v1/contract/setup` returned it. */
+        WalletContractSetupToken: string;
         /** @description The agent's own id of the operation, as it was asked for. */
         WalletContractOperationId: string;
     };
@@ -6083,6 +6234,198 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            /** @description `chain_refused`: the chain answered about the account instead of with a value — no such account, no contract on it, or no `w_public_key` method. Not retried. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getWalletContractSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Where the setup stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletContractSetupForAgent"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description `request_not_found`: the wallet has opened no setup. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    openWalletContractSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "recipient_public_key": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"
+                 *     }
+                 */
+                "application/json": components["schemas"]["OpenWalletContractSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description The setup is open */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "token": "3f1c9a52d47b08e6a1905cbd72e4f83169d0ab5ce7f214683b9da0c5e1f7428d",
+                     *       "expires_at": "2026-11-27T12:00:00Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["OpenWalletContractSetupResponse"];
+                };
+            };
+            /** @description `bad_request`: the wallet has no owner, or `recipient_public_key` is not 32 bytes in lowercase hex. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getWalletContractSetupForOwner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The token of a setup, as `POST /wallet/v1/contract/setup` returned it. */
+                token: components["parameters"]["WalletContractSetupToken"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The setup */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "wallet_id": "9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20",
+                     *       "owner": "alice.near",
+                     *       "tee_public_key": "d968402f7d15eeca453381e4e78de992a9fa4cc64f8aae70538a4ecb133dd90d",
+                     *       "recipient_public_key": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+                     *       "agent_key_request": {
+                     *         "message": "This signature is the key of your OutLayer agent. Sign it only on app.outlayer.ai, when you set up or recover an agent.\nOwner: alice.near\nWallet: 9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20",
+                     *         "recipient": "outlayer-agent-key",
+                     *         "nonce_base64": "b3V0bGF5ZXIvYWdlbnQta2V5L3YxL25vbmNlAAAAAAA="
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["WalletContractSetupForOwner"];
+                };
+            };
+            /** @description `request_not_found`: the token opens no setup: it is unknown, has expired, or was replaced by a newer one. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    completeWalletContractSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The token of a setup, as `POST /wallet/v1/contract/setup` returned it. */
+                token: components["parameters"]["WalletContractSetupToken"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "account_id": "trader.alice.near",
+                 *       "sealed_agent_key": "Ag…"
+                 *     }
+                 */
+                "application/json": components["schemas"]["CompleteWalletContractSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description The wallet contract is recorded and the sealed key is left for the agent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "account_id": "trader.alice.near",
+                     *       "agent_public_key": "77d5340090180fe99e04064f5b6c40db5c4b952c776801e5b578bd057749dfd1"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["WalletContractResponse"];
+                };
+            };
+            /** @description `bad_request`: `sealed_agent_key` is not base64 of at most 128 characters; `account_id` is not a NEAR account id; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `request_not_found`: the token opens no setup: it is unknown, has expired, or was replaced by a newer one. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description `chain_refused`: the chain answered about the account instead of with a value — no such account, no contract on it, or no `w_public_key` method. Not retried. */
             422: {
                 headers: {

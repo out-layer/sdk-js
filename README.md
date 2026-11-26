@@ -170,26 +170,32 @@ transaction and its gas per move, and a signature made on the agent's side.
 
 ### Setting it up
 
-For a wallet with an owner. The agent holds a 32-byte Ed25519 seed of its own;
-the enclave's key comes from the API with the wallet's API key.
+For a wallet with an owner. The agent opens a setup and hands its owner a
+link; the owner installs the wallet contract on the page behind it and leaves
+the agent its key.
 
 ```ts
-import { AgentKey, OutlayerClient } from '@outlayer/sdk';
+import { collectSetup, openSetup } from '@outlayer/sdk';
 
-const client = new OutlayerClient({ apiKey: process.env.OUTLAYER_API_KEY! });
-const key = await AgentKey.fromSeed(seed); // Uint8Array, 32 bytes
+const options = { apiKey: process.env.OUTLAYER_API_KEY! };
+const setup = await openSetup(options);
+// Give setup.url to the wallet's owner. Keep setup.key in memory.
 
-const { tee_public_key } = await client.getWalletContractKey();
-// The owner installs the wallet contract on an account of their choice and
-// initialises it (`w_init`) with the pair: key.publicKey, then tee_public_key.
-
-await client.putWalletContract('trader.alice.near');
-// → { account_id, agent_public_key }: the pair is read from the chain, and an
-//   account whose second key is not this wallet's is refused.
+const collected = await collectSetup(options, setup.key);
+// null while the owner has not finished; then:
+// { account, key, seed }: the wallet contract's account, the agent's key,
+// and its 32-byte seed.
 ```
 
-`client.getWalletContract()` reads the record back; it throws `NotFoundError`
-for a wallet with no wallet contract.
+`seed` is the agent's secret: store it where the agent keeps its secrets, and
+make the key again with `AgentKey.fromSeed(seed)`. The key comes from one
+signature of the owner's own key, so the owner can derive it again.
+
+`collectSetup` refuses a key that is not the agent's key in the contract's
+pair. `client.getWalletContract()` reads the account and that public key back;
+it throws `NotFoundError` for a wallet with no wallet contract.
+`client.getWalletContractKey()` and `client.putWalletContract(account)` are
+the same steps for an owner who installs the contract without the page.
 
 ### Running an operation
 

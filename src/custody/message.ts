@@ -11,7 +11,7 @@ import { CustodyError } from './errors.js';
 const REQUEST_DOMAIN = utf8('NEAR_WALLET_CONTRACT/V1');
 
 /** How long the wallet contract accepts a request after `created_at`, in seconds. */
-export const REQUEST_TIMEOUT_SECS = 3600;
+export const REQUEST_TIMEOUT_SECS = 600;
 
 function unsigned(text: string, bits: 32 | 64 | 128, name: string): bigint {
   if (!/^[0-9]+$/.test(text)) throw new CustodyError(`\`${name}\` is not a decimal number`);

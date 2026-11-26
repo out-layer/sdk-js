@@ -903,8 +903,8 @@ paths:
         `WalletContract.run` of `@outlayer/sdk` does the check, the signature
         and the relay.
 
-        A prepared request that is not relayed within an hour is `closed`: the
-        wallet contract accepts a request for an hour from its `created_at_ns`.
+        A prepared request that is not relayed within ten minutes is `closed`: the
+        wallet contract accepts a request for ten minutes from its `created_at_ns`.
         A `closed` operation stays closed; asking for the same thing again
         takes another `id`.
 
@@ -1000,6 +1000,10 @@ paths:
             `policy_denied`: the owner's policy, or the enclave judging the
             same operation again, refuses it; `message` says why.
             `wallet_frozen`: the wallet is frozen.
+            `wallet_contract_refused`: the enclave does not serve the account
+            as this wallet's wallet contract (no approved build, an extension,
+            signatures switched off, or a pair that is not this wallet's);
+            `message` says which.
           content:
             application/json:
               schema:
@@ -7009,6 +7013,7 @@ components:
         - missing_timestamp
         - timestamp_expired
         - wallet_frozen
+        - wallet_contract_refused
         - policy_denied
         - not_approver
         - insufficient_balance
@@ -7782,8 +7787,8 @@ components:
               1Click's deposit address; `route_status` follows the route.
             * `closed` — ended with nothing sent, for `reason`: the vote was
               rejected or expired, an approval was not used within its 24
-              hours, a prepared request was not relayed within an hour, or its
-              transaction never reached the chain in that hour.
+              hours, a prepared request was not relayed within ten minutes, or its
+              transaction never reached the chain in that time.
         request_hash:
           type: string
           description: >-
@@ -7868,7 +7873,7 @@ components:
           type: string
           description: >-
             Nanoseconds since the Unix epoch, a decimal string. The wallet
-            contract accepts the request for an hour from this moment.
+            contract accepts the request for ten minutes from this moment.
         promise:
           type: object
           additionalProperties: false

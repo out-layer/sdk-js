@@ -358,8 +358,8 @@ export interface paths {
          *     `WalletContract.run` of `@outlayer/sdk` does the check, the signature
          *     and the relay.
          *
-         *     A prepared request that is not relayed within an hour is `closed`: the
-         *     wallet contract accepts a request for an hour from its `created_at_ns`.
+         *     A prepared request that is not relayed within ten minutes is `closed`: the
+         *     wallet contract accepts a request for ten minutes from its `created_at_ns`.
          *     A `closed` operation stays closed; asking for the same thing again
          *     takes another `id`.
          *
@@ -3635,7 +3635,7 @@ export interface components {
         /** @enum {string} */
         RequestStatus: "pending_deposit" | "processing" | "success" | "completed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "needs_review";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "storage_not_registered" | "recipient_not_found" | "memo_not_supported" | "below_min_amount_out" | "above_max_amount_in" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "no_liquidity" | "upstream_rejected" | "operation_limit_reached" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "route_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "wallet_busy";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "wallet_contract_refused" | "policy_denied" | "not_approver" | "insufficient_balance" | "storage_not_registered" | "recipient_not_found" | "memo_not_supported" | "below_min_amount_out" | "above_max_amount_in" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "no_liquidity" | "upstream_rejected" | "operation_limit_reached" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "route_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "wallet_busy";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -3994,8 +3994,8 @@ export interface components {
              *       1Click's deposit address; `route_status` follows the route.
              *     * `closed` — ended with nothing sent, for `reason`: the vote was
              *       rejected or expired, an approval was not used within its 24
-             *       hours, a prepared request was not relayed within an hour, or its
-             *       transaction never reached the chain in that hour.
+             *       hours, a prepared request was not relayed within ten minutes, or its
+             *       transaction never reached the chain in that time.
              * @enum {string}
              */
             status: "pending_approval" | "awaiting_signature" | "relayed" | "success" | "failed" | "closed";
@@ -4040,7 +4040,7 @@ export interface components {
              * @description The wallet contract accepts a nonce once.
              */
             nonce: number;
-            /** @description Nanoseconds since the Unix epoch, a decimal string. The wallet contract accepts the request for an hour from this moment. */
+            /** @description Nanoseconds since the Unix epoch, a decimal string. The wallet contract accepts the request for ten minutes from this moment. */
             created_at_ns: string;
             promise: {
                 /** @description The account the promise goes to. */
@@ -6486,7 +6486,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["AgentSignatureRefused"];
-            /** @description `policy_denied`: the owner's policy, or the enclave judging the same operation again, refuses it; `message` says why. `wallet_frozen`: the wallet is frozen. */
+            /** @description `policy_denied`: the owner's policy, or the enclave judging the same operation again, refuses it; `message` says why. `wallet_frozen`: the wallet is frozen. `wallet_contract_refused`: the enclave does not serve the account as this wallet's wallet contract (no approved build, an extension, signatures switched off, or a pair that is not this wallet's); `message` says which. */
             403: {
                 headers: {
                     [name: string]: unknown;

@@ -729,7 +729,7 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /wallet/v1/contract/setup/{token}:
+  /wallet/v1/contract/setup/owner:
     get:
       tags: [On-chain custody]
       operationId: getWalletContractSetupForOwner
@@ -742,11 +742,11 @@ paths:
         from. The owner's page at `https://app.outlayer.ai/wallet/custody`
         reads it.
 
-        The token is the only credential: no API key is sent. A token that is
-        unknown, has expired or was replaced by a newer setup answers 404.
-      security: []
-      parameters:
-        - $ref: '#/components/parameters/WalletContractSetupToken'
+        The token is the only credential, sent as `Authorization: Bearer
+        <token>`; no API key is sent. A token that is missing, unknown, has
+        expired or was replaced by a newer setup answers 404.
+      security:
+        - WalletContractSetupToken: []
       responses:
         '200':
           description: The setup
@@ -775,7 +775,7 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
-    put:
+    post:
       tags: [On-chain custody]
       operationId: completeWalletContractSetup
       summary: Name the wallet contract's account and leave the agent's key
@@ -791,10 +791,10 @@ paths:
         key is stored as it came and returned to the agent by
         `GET /wallet/v1/contract/setup`.
 
-        The token is the only credential: no API key is sent.
-      security: []
-      parameters:
-        - $ref: '#/components/parameters/WalletContractSetupToken'
+        The token is the only credential, sent as `Authorization: Bearer
+        <token>`; no API key is sent.
+      security:
+        - WalletContractSetupToken: []
       requestBody:
         required: true
         content:
@@ -861,7 +861,8 @@ paths:
         * `pending_approval` — the policy asks for approvers. `approval_id`
           names the vote, which is read and cast on like any other
           (`GET /wallet/v1/approval/{id}`, `POST /wallet/v1/approve/{id}`);
-          its type is `wallet_contract`, and it stays open for 24 hours. The
+          its type is `wallet_contract`, and it lives 24 hours: asked again
+          later than that, approved or not, the operation is closed. The
           policy's `webhook_url` receives `approval_needed` with
           `operation_id` (this `id`), `approval_id`, `type` and `required`;
         * `awaiting_signature` — the operation is prepared: `message` is the
@@ -5902,6 +5903,14 @@ components:
         `Authorization: Bearer wk_...`. Every route that takes it also takes a
         deterministic wallet's `Bearer near:<base64url>` token (see
         `POST /register` and `authSign`).
+    WalletContractSetupToken:
+      type: http
+      scheme: bearer
+      bearerFormat: <64-hex-chars>
+      description: |
+        The token of a wallet contract's setup, as
+        `POST /wallet/v1/contract/setup` returned it. The owner's page sends
+        it as `Authorization: Bearer <token>`. It is never part of a URL.
     OwnerSession:
       type: http
       scheme: bearer
@@ -6067,15 +6076,6 @@ components:
         with an id to poll instead of a dropped connection. The header is read
         on every wallet route: it acts on the operations that wait (the ones
         that list it), and is accepted and changes nothing elsewhere.
-
-    WalletContractSetupToken:
-      name: token
-      in: path
-      required: true
-      description: The token of a setup, as `POST /wallet/v1/contract/setup` returned it.
-      schema:
-        type: string
-        pattern: '^[0-9a-f]{64}$'
 
     WalletContractOperationId:
       name: id

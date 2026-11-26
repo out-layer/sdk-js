@@ -265,7 +265,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/wallet/v1/contract/setup/{token}": {
+    "/wallet/v1/contract/setup/owner": {
         parameters: {
             query?: never;
             header?: never;
@@ -281,10 +281,12 @@ export interface paths {
          *     from. The owner's page at `https://app.outlayer.ai/wallet/custody`
          *     reads it.
          *
-         *     The token is the only credential: no API key is sent. A token that is
-         *     unknown, has expired or was replaced by a newer setup answers 404.
+         *     The token is the only credential, sent as `Authorization: Bearer
+         *     <token>`; no API key is sent. A token that is missing, unknown, has
+         *     expired or was replaced by a newer setup answers 404.
          */
         get: operations["getWalletContractSetupForOwner"];
+        put?: never;
         /**
          * Name the wallet contract's account and leave the agent's key
          * @description The owner's page names the account the wallet contract is installed on
@@ -298,10 +300,10 @@ export interface paths {
          *     key is stored as it came and returned to the agent by
          *     `GET /wallet/v1/contract/setup`.
          *
-         *     The token is the only credential: no API key is sent.
+         *     The token is the only credential, sent as `Authorization: Bearer
+         *     <token>`; no API key is sent.
          */
-        put: operations["completeWalletContractSetup"];
-        post?: never;
+        post: operations["completeWalletContractSetup"];
         delete?: never;
         options?: never;
         head?: never;
@@ -327,7 +329,8 @@ export interface paths {
          *     * `pending_approval` — the policy asks for approvers. `approval_id`
          *       names the vote, which is read and cast on like any other
          *       (`GET /wallet/v1/approval/{id}`, `POST /wallet/v1/approve/{id}`);
-         *       its type is `wallet_contract`, and it stays open for 24 hours. The
+         *       its type is `wallet_contract`, and it lives 24 hours: asked again
+         *       later than that, approved or not, the operation is closed. The
          *       policy's `webhook_url` receives `approval_needed` with
          *       `operation_id` (this `id`), `approval_id`, `type` and `required`;
          *     * `awaiting_signature` — the operation is prepared: `message` is the
@@ -5954,8 +5957,6 @@ export interface components {
          *     that list it), and is accepted and changes nothing elsewhere.
          */
         AnswerWithin: number;
-        /** @description The token of a setup, as `POST /wallet/v1/contract/setup` returned it. */
-        WalletContractSetupToken: string;
         /** @description The agent's own id of the operation, as it was asked for. */
         WalletContractOperationId: string;
     };
@@ -6328,10 +6329,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                /** @description The token of a setup, as `POST /wallet/v1/contract/setup` returned it. */
-                token: components["parameters"]["WalletContractSetupToken"];
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -6375,10 +6373,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                /** @description The token of a setup, as `POST /wallet/v1/contract/setup` returned it. */
-                token: components["parameters"]["WalletContractSetupToken"];
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody: {

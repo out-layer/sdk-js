@@ -15,6 +15,7 @@
  */
 
 import type { OutlayerClient } from './client.js';
+import { base64Decode, base64Encode, concat, toHex, utf8 } from './custody/bytes.js';
 
 const subtle = () => globalThis.crypto.subtle;
 const FORMAT = 0x01;
@@ -27,40 +28,12 @@ export const MAX_SESSION_SECONDS = 30 * 24 * 60 * 60;
 
 // ── bytes ───────────────────────────────────────────────────────────────────
 
-const utf8 = (text: string) => new TextEncoder().encode(text);
-
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function fromBase64(text: string): Uint8Array {
-  const binary = atob(text);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
-  return out;
-}
-
 const toBase64Url = (bytes: Uint8Array) =>
-  toBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  base64Encode(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 function fromBase64Url(text: string): Uint8Array {
   const plain = text.replace(/-/g, '+').replace(/_/g, '/');
-  return fromBase64(plain + '='.repeat((4 - (plain.length % 4)) % 4));
-}
-
-const toHex = (bytes: Uint8Array) =>
-  Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-
-function concat(...parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const part of parts) {
-    out.set(part, at);
-    at += part.length;
-  }
-  return out;
+  return base64Decode(plain + '='.repeat((4 - (plain.length % 4)) % 4));
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -90,14 +63,14 @@ export async function newDevice(): Promise<Device> {
 
 /** The device's private key as PKCS#8, base64: to keep it, server-side. */
 export async function exportDevice(device: Device): Promise<string> {
-  return toBase64(new Uint8Array(await subtle().exportKey('pkcs8', device.privateKey)));
+  return base64Encode(new Uint8Array(await subtle().exportKey('pkcs8', device.privateKey)));
 }
 
 /** A device kept with {@link exportDevice}. */
 export async function importDevice(pkcs8: string): Promise<Device> {
   const privateKey = await subtle().importKey(
     'pkcs8',
-    fromBase64(pkcs8) as BufferSource,
+    base64Decode(pkcs8) as BufferSource,
     CURVE,
     true,
     ['deriveBits'],
@@ -362,7 +335,7 @@ export async function rejectTask(
   if (reason) {
     if (!('envelope' in task) || task.envelope.kind === 'notice')
       throw new Error('A reason is sealed to a task that was read and takes an answer.');
-    sealed = toBase64(
+    sealed = base64Encode(
       await sealTo(
         readPubkey(task.envelope.reply_pubkey),
         'rejection',
@@ -728,8 +701,8 @@ async function openUnder(
 export async function readTask(device: Device, task: ListedTask, owner: string): Promise<ReadTask> {
   if (task.device_copy === null || task.content === null)
     throw new Error('the task is locked on this device');
-  const contentKey = await openFrom(device, 'device-copy', task.id, fromBase64(task.device_copy));
-  const document = await openUnder(contentKey, task.id, fromBase64(task.content));
+  const contentKey = await openFrom(device, 'device-copy', task.id, base64Decode(task.device_copy));
+  const document = await openUnder(contentKey, task.id, base64Decode(task.content));
   let envelope: unknown;
   try {
     envelope = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(document));
@@ -763,7 +736,7 @@ export async function openFile(session: Session, task: ReadTask, at: number): Pr
   const bytes = await openUnder(
     task.contentKey,
     `${task.envelope.id}:file:${at}`,
-    fromBase64(ciphertext),
+    base64Decode(ciphertext),
   );
   if (bytes.length !== note.size || (await sha256Hex(bytes)) !== note.sha256) {
     throw new Error('the file that opened is not the file the task names');

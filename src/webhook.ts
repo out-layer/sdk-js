@@ -34,6 +34,7 @@
  * WebCrypto only (Ed25519): Node 20+ and a current browser.
  */
 
+import { hexBytes, utf8 } from './custody/bytes.js';
 import { type UnauthenticatedOptions, makeUnauthenticatedClient } from './http.js';
 import type { components } from './types.js';
 
@@ -124,13 +125,9 @@ export type VerifiedWebhook = {
 };
 
 const subtle = () => globalThis.crypto.subtle;
-const utf8 = (text: string) => new TextEncoder().encode(text);
-
 function fromHex(hex: string, bytes: number): Uint8Array | null {
-  if (hex.length !== 2 * bytes || /[^0-9a-fA-F]/.test(hex)) return null;
-  const out = new Uint8Array(bytes);
-  for (let i = 0; i < bytes; i++) out[i] = Number.parseInt(hex.slice(2 * i, 2 * i + 2), 16);
-  return out;
+  const out = hexBytes(hex);
+  return out !== null && out.length === bytes ? out : null;
 }
 
 /**

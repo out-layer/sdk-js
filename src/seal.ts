@@ -20,28 +20,21 @@
  * Firefox 130+, Safari 17+).
  */
 
+import { concat, hexBytes, utf8 } from './custody/bytes.js';
+
 const subtle = () => globalThis.crypto.subtle;
 
 /** The first byte of a sealed message. */
 export const SEALED_FORMAT = 0x02;
 const KEY_LEN = 32;
-const KDF_INFO = new TextEncoder().encode('outlayer:encryption-keys:v1:seal:kdf');
+/** The AES-GCM tag at the end of a sealed message. */
+const TAG_LEN = 16;
+const KDF_INFO = utf8('outlayer:encryption-keys:v1:seal:kdf');
 
 function fromHex(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0 || /[^0-9a-fA-F]/.test(hex)) throw new Error('not hex');
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(hex.slice(2 * i, 2 * i + 2), 16);
-  return out;
-}
-
-function concat(...parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const part of parts) {
-    out.set(part, at);
-    at += part.length;
-  }
-  return out;
+  const bytes = hexBytes(hex);
+  if (bytes === null) throw new Error('not hex');
+  return bytes;
 }
 
 /** Which key: the one a run of `project`, or a direct run of the build `wasm`, holds. */
@@ -124,6 +117,68 @@ export async function sealWith(
     plaintext as BufferSource,
   );
   return concat(Uint8Array.of(SEALED_FORMAT), ephemeralPublic, new Uint8Array(sealed));
+}
+
+/** What {@link openWith} throws when a sealed message does not open. */
+export class SealOpenError extends Error {
+  constructor() {
+    super('the sealed message does not open under this key and aad');
+    this.name = 'SealOpenError';
+  }
+}
+
+/**
+ * Opens what {@link sealWith} made for the key pair `recipient`, bound to the
+ * same `aad`. Throws {@link SealOpenError} when the message was sealed to
+ * another key, under another `aad`, or was changed. Not exported from the
+ * package; a component opens its input inside a run.
+ */
+export async function openWith(
+  recipient: CryptoKeyPair,
+  sealed: Uint8Array,
+  aad: Uint8Array = new Uint8Array(),
+): Promise<Uint8Array> {
+  if (sealed[0] !== SEALED_FORMAT || sealed.length < 1 + KEY_LEN + TAG_LEN) {
+    throw new Error('not a sealed message');
+  }
+  const ephemeralPublic = sealed.slice(1, 1 + KEY_LEN);
+  const ephemeral = await subtle().importKey(
+    'raw',
+    ephemeralPublic as BufferSource,
+    { name: 'X25519' },
+    false,
+    [],
+  );
+  const recipientRaw = new Uint8Array(await subtle().exportKey('raw', recipient.publicKey));
+  const shared = await subtle().deriveBits(
+    { name: 'X25519', public: ephemeral },
+    recipient.privateKey,
+    256,
+  );
+  const hkdf = await subtle().importKey('raw', shared, 'HKDF', false, ['deriveKey']);
+  const key = await subtle().deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(0),
+      info: concat(KDF_INFO, ephemeralPublic, recipientRaw) as BufferSource,
+    },
+    hkdf,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt'],
+  );
+  let plaintext: ArrayBuffer;
+  try {
+    plaintext = await subtle().decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(12), additionalData: aad as BufferSource },
+      key,
+      sealed.slice(1 + KEY_LEN) as BufferSource,
+    );
+  } catch {
+    throw new SealOpenError();
+  }
+  return new Uint8Array(plaintext);
 }
 
 /**

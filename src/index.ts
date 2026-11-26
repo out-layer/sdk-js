@@ -152,6 +152,8 @@ export {
   requestHash,
   messageIsFor,
   agentRequestBytes,
+  agentKeyRequest,
+  agentKeySeed,
   verifyTeeHalf,
   toHex,
   fromHex,

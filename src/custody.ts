@@ -23,6 +23,7 @@
  * what it works with.
  */
 
+import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha2';
 import { sha3_256 } from '@noble/hashes/sha3';
 
@@ -362,6 +363,40 @@ export class AgentKey {
       'x-agent-signature': toHex(signature),
     };
   }
+}
+
+/**
+ * What the owner's wallet is asked to sign (NEP-413) for the agent's key of
+ * the wallet `walletId`. The signature IS the agent's key: ask for it only on
+ * the owner's own setup or recovery page.
+ */
+export function agentKeyRequest(
+  owner: string,
+  walletId: string,
+): {
+  message: string;
+  recipient: string;
+  nonce: Uint8Array;
+} {
+  return {
+    message: `This signature is the key of your OutLayer agent. Sign it only on app.outlayer.ai, when you set up or recover an agent.\nOwner: ${owner}\nWallet: ${walletId}`,
+    recipient: 'outlayer-agent-key',
+    nonce: concat(utf8.encode('outlayer/agent-key/v1/nonce'), new Uint8Array(5)),
+  };
+}
+
+/**
+ * The 32-byte seed of the agent's key from the owner's signature (64 bytes)
+ * over {@link agentKeyRequest}. The owner's wallet makes the same signature
+ * again on request, so the key needs no backup.
+ */
+export function agentKeySeed(signature: Uint8Array, owner: string, walletId: string): Uint8Array {
+  if (signature.length !== 64) throw new CustodyError('an Ed25519 signature is 64 bytes');
+  return hmac(
+    sha256,
+    utf8.encode('outlayer/agent-key/v1'),
+    concat(signature, utf8.encode(agentKeyRequest(owner, walletId).message)),
+  );
 }
 
 /** The bytes the agent's key signs for an HTTPS request. */

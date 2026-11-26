@@ -7,6 +7,8 @@ import {
   type OperationState,
   type RequestMessage,
   WalletContract,
+  agentKeyRequest,
+  agentKeySeed,
   agentRequestBytes,
   encodeRequestMessage,
   fromHex,
@@ -16,6 +18,7 @@ import {
   verifyTeeHalf,
 } from '../src/custody.js';
 import requests from './fixtures/custody/agent_request.json';
+import keys from './fixtures/custody/keys.json';
 import messages from './fixtures/custody/messages.json';
 
 // The fixtures are the Rust implementation's own vectors
@@ -91,6 +94,21 @@ describe("the agent's key", () => {
       expect(headers['x-agent-timestamp']).toBe(String(c.timestamp));
       expect(headers['x-agent-nonce']).toBe(c.nonce);
     }
+  });
+});
+
+describe("the agent's key from the owner's signature", () => {
+  it('asks for the signature the Rust implementation derives from', () => {
+    const request = agentKeyRequest(keys.owner, keys.wallet_id);
+    expect(request.message).toBe(keys.agent.nep413_message);
+    expect(request.recipient).toBe(keys.agent.nep413_recipient);
+    expect(toHex(request.nonce)).toBe(keys.agent.nep413_nonce);
+  });
+
+  it('derives the same key', async () => {
+    const seed = agentKeySeed(fromHex(keys.agent.signature, 64), keys.owner, keys.wallet_id);
+    expect(toHex(seed)).toBe(keys.agent.seed);
+    expect((await AgentKey.fromSeed(seed)).publicKey).toBe(keys.agent.public_key);
   });
 });
 

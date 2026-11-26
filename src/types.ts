@@ -247,8 +247,9 @@ export interface paths {
          *     with that half alone, so the API carries the agent's key and cannot
          *     read it.
          *
-         *     The token is valid for 24 hours. Whoever holds it can name this
-         *     wallet's wallet contract until it expires; the account it names is
+         *     The token is valid for 24 hours and ends when the setup is finished.
+         *     Whoever holds it can name this wallet's wallet contract once, and
+         *     only as the owner account or a sub-account of it; the account is
          *     taken only when its pair on chain holds this wallet's key from
          *     `GET /wallet/v1/contract/key`. A wallet has one setup: opening again
          *     replaces the token and the one-time key, and discards a sealed key
@@ -3872,7 +3873,7 @@ export interface components {
             recipient_public_key: string;
         };
         OpenWalletContractSetupResponse: {
-            /** @description What the agent hands to its owner, in the link `https://app.outlayer.ai/wallet/custody?setup=<token>`. Whoever holds it can name this wallet's wallet contract until it expires. */
+            /** @description What the agent hands to its owner, in the link `https://app.outlayer.ai/wallet/custody?setup=<token>`. Whoever holds it can name this wallet's wallet contract once, as the owner account or a sub-account of it. */
             token: string;
             /**
              * Format: date-time

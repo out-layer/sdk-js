@@ -1,7 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import {
-  AgentConnectDeniedError,
   BadRequestError,
   DuplicateRequestError,
   type Nep413Auth,
@@ -2253,122 +2252,80 @@ describe('Confidential Intents: confidentialBalance', () => {
   });
 });
 
-describe('Agent Connect binding', () => {
-  it('records a personal_account binding and returns the executor to authorize', async () => {
-    // The whole point of the response: the caller cannot add the executor to
-    // its account's extension set until this call tells it which account that
-    // is. So a PUT that omitted it would leave the flow with no next step.
+describe('On-chain custody: the wallet contract of a wallet', () => {
+  const tee = 'cd'.repeat(32);
+  const agent = 'ab'.repeat(32);
+
+  it('reads the enclave key the wallet contract is initialised with', async () => {
     server.use(
-      http.put(`${BASE}/wallet/v1/binding`, async ({ request }) => {
-        const body = (await request.json()) as Record<string, unknown>;
-        expect(body.asset_account_id).toBe('user.testnet');
-        expect(body.kind).toBe('personal_account');
-        expect(body).not.toHaveProperty('impl_version');
-        return HttpResponse.json({
-          binding_id: 'bnd_1',
-          wallet_id: 'w1',
-          kind: 'personal_account',
-          asset_account_id: 'user.testnet',
-          owner_account_id: 'user.testnet',
-          executor_account_id: 'ab'.repeat(32),
-          binding_status: 'pending',
-          created_at: '2026-08-19T00:00:00Z',
-        });
+      http.get(`${BASE}/wallet/v1/contract/key`, ({ request }) => {
+        expect(request.headers.get('authorization')).toBe(`Bearer ${apiKey}`);
+        return HttpResponse.json({ tee_public_key: tee });
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    const r = await client.putBinding({
-      asset_account_id: 'user.testnet',
-      kind: 'personal_account',
-    });
-    expect(r.executor_account_id).toBe('ab'.repeat(32));
-    // Nothing is authorized yet — the executor is not in the set.
-    expect(r.binding_status).toBe('pending');
+    const r = await client.getWalletContractKey();
+    expect(r.tee_public_key).toBe(tee);
   });
 
-  it('asks for the setup kit as personal_account without the caller naming the mode', async () => {
-    // There is no kit for the leased mode, so the SDK pins the only value the
-    // endpoint accepts rather than letting a caller send one that 400s.
+  it('names the account and returns the agent key read from the chain', async () => {
     server.use(
-      http.get(`${BASE}/wallet/v1/binding/setup`, ({ request }) => {
-        expect(new URL(request.url).searchParams.get('kind')).toBe('personal_account');
-        return HttpResponse.json({
-          kind: 'personal_account',
-          asset_account_id: 'user.testnet',
-          executor_account_id: 'ab'.repeat(32),
-          code_hash: 'BwjDnyemmBhrCyuviDGpoQAm9mdjTfrX7ZjqgZB4MHvM',
-          transactions: [{ signer_id: 'user.testnet', receiver_id: 'user.testnet', actions: [] }],
-        });
+      http.put(`${BASE}/wallet/v1/contract`, async ({ request }) => {
+        // The body is the account and nothing else: the route refuses a field
+        // it does not name.
+        expect(await request.json()).toEqual({ account_id: 'trader.alice.near' });
+        return HttpResponse.json({ account_id: 'trader.alice.near', agent_public_key: agent });
       }),
     );
     const client = new OutlayerClient({ apiKey });
-    const r = await client.getBindingSetup();
-    expect(r.transactions).toHaveLength(1);
-    expect(r.transactions[0].signer_id).toBe('user.testnet');
+    const r = await client.putWalletContract('trader.alice.near');
+    expect(r.account_id).toBe('trader.alice.near');
+    expect(r.agent_public_key).toBe(agent);
   });
 
-  it('deletes idempotently', async () => {
+  it('refuses an account set up for another wallet as a bad request', async () => {
     server.use(
-      http.delete(`${BASE}/wallet/v1/binding`, () =>
-        HttpResponse.json({ binding_status: 'revoked', cancelled_approvals: 0 }),
-      ),
-    );
-    const client = new OutlayerClient({ apiKey });
-    const r = await client.deleteBinding();
-    expect(r.binding_status).toBe('revoked');
-  });
-});
-
-describe('Agent Connect refusals carry what a client acts on', () => {
-  it('surfaces terminal, class and promise index instead of a bare message', async () => {
-    // The whole reason `terminal` exists: an agent must not retry a spent
-    // grant. A generic error with only {code, message} would force every
-    // caller to parse a sentence — or, more likely, retry forever.
-    server.use(
-      http.post(`${BASE}/wallet/v1/call`, () =>
+      http.put(`${BASE}/wallet/v1/contract`, () =>
         HttpResponse.json(
           {
-            error: 'agent_connect_denied',
-            message: 'spend exceeds the granted cap',
-            class: 'grant_exhausted',
-            terminal: true,
-            promise_index: 2,
-            additional_violations: 1,
+            error: 'bad_request',
+            message:
+              "The wallet contract on `other.near` was not set up for this wallet: its TEE key is not this wallet's.",
           },
-          { status: 403 },
+          { status: 400 },
         ),
       ),
     );
     const client = new OutlayerClient({ apiKey });
-    await expect(
-      client.call({ receiver_id: 'agent.tla', method_name: 'w_execute_extension' }),
-    ).rejects.toSatisfy((e: unknown) => {
-      const err = e as AgentConnectDeniedError;
-      expect(err).toBeInstanceOf(AgentConnectDeniedError);
-      expect(err.terminal).toBe(true);
-      expect(err.class).toBe('grant_exhausted');
-      expect(err.promiseIndex).toBe(2);
-      expect(err.additionalViolations).toBe(1);
-      return true;
-    });
+    await expect(client.putWalletContract('other.near')).rejects.toBeInstanceOf(BadRequestError);
   });
 
-  it('defaults terminal to true when the field is absent', async () => {
-    // A refusal we cannot classify is not one to retry blindly.
+  it('reads the wallet contract', async () => {
     server.use(
-      http.post(`${BASE}/wallet/v1/call`, () =>
-        HttpResponse.json({ error: 'agent_connect_denied', message: 'refused' }, { status: 403 }),
+      http.get(`${BASE}/wallet/v1/contract`, () =>
+        HttpResponse.json({ account_id: 'trader.alice.near', agent_public_key: agent }),
       ),
     );
     const client = new OutlayerClient({ apiKey });
-    await expect(
-      client.call({ receiver_id: 'agent.tla', method_name: 'w_execute_extension' }),
-    ).rejects.toSatisfy((e: unknown) => {
-      expect((e as AgentConnectDeniedError).terminal).toBe(true);
-      return true;
-    });
+    const r = await client.getWalletContract();
+    expect(r).toEqual({ account_id: 'trader.alice.near', agent_public_key: agent });
   });
 
+  it('answers a wallet with no wallet contract as not found', async () => {
+    server.use(
+      http.get(`${BASE}/wallet/v1/contract`, () =>
+        HttpResponse.json(
+          { error: 'request_not_found', message: 'Request not found' },
+          { status: 404 },
+        ),
+      ),
+    );
+    const client = new OutlayerClient({ apiKey });
+    await expect(client.getWalletContract()).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+describe('a busy wallet says what holds it', () => {
   it('hands back the operation to poll when the wallet is busy', async () => {
     server.use(
       http.post(`${BASE}/wallet/v1/transfer`, () =>

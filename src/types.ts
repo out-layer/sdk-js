@@ -53,14 +53,6 @@ export interface paths {
          * @description Returns the deterministically-derived address for the wallet on the
          *     requested chain. Same `wallet_id` always produces the same addresses
          *     across chains.
-         *
-         *     For `chain=near` the response also carries the two Agent Connect
-         *     identities: `executor_account_id` (always equal to `address` — the
-         *     wallet's implicit account, which signs and pays gas) and
-         *     `asset_account_id` (the bound named account, `null` when the wallet
-         *     has no binding). They are separate fields on purpose: product balances
-         *     belong to the asset account, while signing, predecessor checks and gas
-         *     key off the executor.
          */
         get: operations["getAddress"];
         put?: never;
@@ -86,33 +78,6 @@ export interface paths {
          *
          *     Set `source=intents` to read the wallet's intents.near balance
          *     (`mt_balance_of`) instead of the on-chain account balance.
-         *
-         *     By default this endpoint answers for the WALLET'S OWN account (the
-         *     executor), bound or not — its meaning never changes when a binding is
-         *     added. Pass `account=asset` to ask about the bound account instead;
-         *     that path is identical to `GET /wallet/v1/binding/balance`, which
-         *     remains available.
-         *
-         *     The default is deliberately NOT the binding. Following it would change,
-         *     with no warning, which account an existing caller's number describes —
-         *     including for `personal_account` bindings, whose owners never asked for
-         *     Agent Connect semantics. `asset` is explicit.
-         *
-         *     The rule for both sides of the API is one sentence: everything under
-         *     `/wallet/v1/binding/` is the bound account, everything else is the
-         *     wallet itself unless `account=asset` says otherwise.
-         *     `/wallet/v1/transfer` moves the wallet's own funds;
-         *     `/wallet/v1/binding/transfer` moves the bound account's.
-         *
-         *     `account=asset` on a wallet with no ACTIVE binding is refused rather
-         *     than answered with the executor's figure under an asset label.
-         *
-         *     `source=intents` belongs to the executor and only the executor: an
-         *     intents.near deposit is credited to whoever signed it, so the bound
-         *     account has no intents balance and never will. Combining it with
-         *     `account=asset` is refused.
-         *
-         *     The response names the identity it describes in `account`.
          */
         get: operations["getBalance"];
         put?: never;
@@ -178,7 +143,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/wallet/v1/binding": {
+    "/wallet/v1/contract/key": {
         parameters: {
             query?: never;
             header?: never;
@@ -186,145 +151,19 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read the wallet's binding
-         * @description Returns the binding record, refreshed against the chain
-         *     (`hos_agent_status` + `nft_item_info`), or 404 when the wallet has
-         *     none. `binding_status` reflects OutLayer's view only — it does not
-         *     attest that the executor is still in the control set, which can change
-         *     without OutLayer being told. `gas_balance` is the executor's native
-         *     NEAR in yoctoNEAR, so it can be topped up before a call fails rather
-         *     than after.
+         * The enclave's key of this wallet's wallet contract
+         * @description The Ed25519 public key the enclave signs this wallet's wallet contract
+         *     requests with. It is the second half of the pair of keys the wallet
+         *     contract's `w_init` takes; the first half is the agent's own public
+         *     key. The owner installs the wallet contract on an account with that
+         *     pair, and the wallet then names the account with
+         *     `PUT /wallet/v1/contract`.
+         *
+         *     On-chain custody is for a wallet with an owner: one whose owner can
+         *     leave with its keys (`exit_owner` in `GET /wallet/v1/address`). Any
+         *     other wallet is refused with 400.
          */
-        get: operations["getBinding"];
-        /**
-         * Register the account this wallet operates
-         * @description Records the one-to-one binding between this custody wallet and an
-         *     on-chain account, in one of two mutually exclusive modes (`kind`):
-         *
-         *     * `hos_lease` (default) — a leased, keyless asset account
-         *       (e.g. `agent.tla`). `impl_version` is REQUIRED and gated against
-         *       the supported registry; `owner_account_id` is required.
-         *     * `personal_account` — the caller's own named account
-         *       (e.g. `user.near`) with the upstream no-sign wallet contract the
-         *       owner installs personally (see `GET /wallet/v1/binding/setup`).
-         *       `impl_version` is REJECTED — this mode is versioned by the
-         *       account's wasm code hash, which the client never declares.
-         *       `owner_account_id` is optional and must equal `asset_account_id`.
-         *
-         *     The response returns `executor_account_id` — the identity to register
-         *     in the account's extension set (and, for `hos_lease`, to provision a
-         *     spend grant for).
-         *
-         *     A wallet whose keys can leave custody — one made from an owner's exit
-         *     link, or one in a vault — is bound only to the account its keys leave
-         *     to (the owner's own account, or the vault's parent), in the
-         *     `personal_account` mode: any other `asset_account_id`, and `hos_lease`
-         *     for such a wallet, answer `400` naming the account. The keystore holds
-         *     the same line when it signs.
-         *
-         *     Guarantees: binding is one-to-one, and a second call naming a
-         *     DIFFERENT asset account is rejected rather than silently rebinding
-         *     (re-PUTting the same pair in the same mode is idempotent). An
-         *     unsupported `impl_version` is rejected here, at binding time, not at
-         *     first execution — that refusal is terminal, do not retry.
-         *
-         *     The binding itself authorizes nothing: `binding_status` stays `pending`
-         *     until the executor is first observed live in the extension set on
-         *     chain, and nothing can be executed against the account until its owner
-         *     (for `hos_lease`, the partner's provisioning) puts the executor there.
-         */
-        put: operations["putBinding"];
-        post?: never;
-        /**
-         * End the binding
-         * @description Ends the binding (revocation, transfer, sale, recovery, lease expiry).
-         *     Idempotent — deleting a wallet with no binding is a success. Pending
-         *     multisig approvals whose operation targets the asset account are
-         *     cancelled rather than left completable; the wallet itself survives,
-         *     only the binding ends.
-         */
-        delete: operations["deleteBinding"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/wallet/v1/binding/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Which account names this webhook may report on
-         * @description The account-name suffixes `POST /wallet/v1/binding/events` accepts,
-         *     read with the same `X-Binding-Webhook-Secret`. Ask before sending the
-         *     first event for a newly opened zone: an account outside the list
-         *     answers `binding_status: unbound` and nothing happens.
-         *
-         *     An EMPTY list means no zone restriction — every name is accepted,
-         *     subject to the rule that always applies (only leased bindings are
-         *     reachable at all). Zones are editable by OutLayer without a restart, so
-         *     a new one takes effect as soon as it is added.
-         */
-        get: operations["getBindingZones"];
-        put?: never;
-        /**
-         * Notify OutLayer that a bound account changed
-         * @description For the account provider (House of Stake) to call on revoke, transfer,
-         *     recovery, freeze or lease change. Authorized by a shared secret in
-         *     `X-Binding-Webhook-Secret`; answers `503` where no secret is
-         *     configured.
-         *
-         *     **The body is a hint, not an instruction.** A `revoked` event revokes
-         *     nothing: OutLayer drops its cached view of the account and re-reads the
-         *     chain, and the chain decides the resulting `binding_status`. A webhook
-         *     is an assertion about somebody else's account, so a leaked or
-         *     misconfigured secret must not become the ability to disable an agent by
-         *     name.
-         *
-         *     The endpoint is therefore an accelerator with no authority, and it is
-         *     optional: without it, a change is noticed within seconds anyway,
-         *     because every signing pre-flight reads the chain. Skipping it costs
-         *     latency, never correctness.
-         *
-         *     Answers `200` with `binding_status: unbound` for an account OutLayer
-         *     does not operate, so an unknown account does not accumulate in a retry
-         *     queue.
-         */
-        post: operations["postBindingEvent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/wallet/v1/binding/balance": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read the BOUND account's balance
-         * @description The balance of the account this wallet is bound to — where an Agent
-         *     Connect wallet's product money lives. The wallet's own account (gas,
-         *     and anything it holds itself) is `GET /wallet/v1/balance`.
-         *
-         *     Requires an ACTIVE binding. A `pending` one answers 400 saying so: it
-         *     authorizes nothing, and the executor is not in the account's extension
-         *     set yet, so the account holds nothing on this wallet's behalf. No
-         *     binding at all answers 404. Neither ever falls back to the wallet's own
-         *     figure under an asset label — a number the owner acts on must not
-         *     quietly be about a different account.
-         *
-         *     `source=intents` is refused here and pointed at `/wallet/v1/balance`:
-         *     intents deposits are credited to the signer, which is always the
-         *     executor.
-         */
-        get: operations["getBindingBalance"];
+        get: operations["getWalletContractKey"];
         put?: never;
         post?: never;
         delete?: never;
@@ -333,7 +172,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/wallet/v1/binding/transfer": {
+    "/wallet/v1/contract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read this wallet's wallet contract
+         * @description The account recorded as this wallet's wallet contract and the agent's
+         *     public key read from it at that time. 404 when the wallet has none.
+         */
+        get: operations["getWalletContract"];
+        /**
+         * Name the account that is this wallet's wallet contract
+         * @description Records `account_id` as the wallet contract of this wallet. The
+         *     account's pair of keys is read from the chain (`w_public_key`), and its
+         *     second half has to be this wallet's key from
+         *     `GET /wallet/v1/contract/key`: an account set up for another wallet is
+         *     refused. The first half is recorded as the agent's key, the key the
+         *     operation routes verify requests against.
+         *
+         *     A wallet has one wallet contract. Naming an account again reads its
+         *     pair again, which is how a changed agent key on the same account is
+         *     taken up; naming another account points the wallet at that one.
+         *
+         *     The record is what requests are routed by. That the account is this
+         *     wallet's wallet contract is checked in the enclave, from the chain, on
+         *     every operation.
+         */
+        put: operations["putWalletContract"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/contract/v1/operations": {
         parameters: {
             query?: never;
             header?: never;
@@ -343,34 +220,67 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Spend from the BOUND account
-         * @description Move native NEAR or a NEP-141 token out of the bound asset account.
+         * Ask for an operation of the wallet contract
+         * @description The agent asks for an operation under an `id` of its own choice. The
+         *     request is signed by the agent's key (see `AgentSignature`); no API key
+         *     is sent. The answer says where the operation stands:
          *
-         *     A BUILDER over the existing lane, not a new one. What gets signed is
-         *     exactly the `w_execute_extension` you could post to `/wallet/v1/call`
-         *     yourself: same canonical op, same pre-flight, same spend-grant rules,
-         *     same policy evaluation, same multisig trigger, same per-promise receipt
-         *     handling. It exists so you do not have to assemble a nested base64
-         *     envelope by hand.
+         *     * refused — a 4xx, and no operation exists under the `id`;
+         *     * `pending_approval` — the policy asks for approvers. `approval_id`
+         *       names the vote, which is read and cast on like any other
+         *       (`GET /wallet/v1/approval/{id}`, `POST /wallet/v1/approve/{id}`);
+         *       its type is `wallet_contract`, and it stays open for 24 hours. The
+         *       policy's `webhook_url` receives `approval_needed` with
+         *       `operation_id` (this `id`), `approval_id`, `type` and `required`;
+         *     * `awaiting_signature` — the operation is prepared: `message` is the
+         *       wallet contract's request for it and `tee_half` is the enclave's
+         *       signature over that request.
          *
-         *     Separate from `/wallet/v1/transfer` because it is a different
-         *     operation, not a mode of the same one: `/wallet/v1/transfer` signs a
-         *     plain transfer from the wallet's own account, this signs a contract
-         *     call under an on-chain grant, with its own error classes
-         *     (`agent_connect_denied`) and its own approval path.
+         *     **Asking again under the same `id` continues the same operation**, and
+         *     the body has to be the same operation: another content under a used
+         *     `id` is refused with `409 conflict`. An approval starts nothing. Once
+         *     the approvers have voted, the agent sends the same request again: an
+         *     approved operation is then prepared, and one whose vote ended any other
+         *     way is `closed` with the reason. For an operation that is past the
+         *     policy's judgement the answer is where it stands.
          *
-         *     Responses are those of `/wallet/v1/call`, including `403
-         *     agent_connect_denied` when the pre-flight refuses — read `terminal`
-         *     before retrying.
+         *     **Usage is counted when the request is prepared**, with the answer
+         *     that hands out `tee_half`, because from that moment the agent holds
+         *     everything it needs to execute the request. It is not given back: not
+         *     when the request is never relayed, and not when it fails on chain.
+         *
+         *     **The agent signs its half last.** Before signing, it checks that
+         *     `message` is the operation it asked for, from its own wallet contract:
+         *     the receiver, the method, the arguments and the amounts. Then it signs
+         *     its half over the request and sends it to the `relay` route.
+         *     `WalletContract.run` of `@outlayer/sdk` does the check, the signature
+         *     and the relay.
+         *
+         *     A prepared request that is not relayed within an hour is `closed`: the
+         *     wallet contract accepts a request for an hour from its `created_at_ns`.
+         *     A `closed` operation stays closed; asking for the same thing again
+         *     takes another `id`.
+         *
+         *     A swap and a withdrawal to another chain go through 1Click. The request
+         *     sends the input to the deposit address of a quote made for this
+         *     operation, and `quote` carries its figures. The quote waits ten minutes
+         *     for the input; an input that arrives later is returned by 1Click to the
+         *     wallet contract. The result of a swap arrives in the wallet contract's
+         *     balance inside NEAR Intents, and so does a refund.
+         *
+         *     One operation of a wallet runs at a time, so its limits are counted
+         *     correctly (`409 wallet_busy`). A wallet contract operation is not a
+         *     row under `/wallet/v1/requests`: it is read at
+         *     `GET /wallet/contract/v1/operations/{id}`.
          */
-        post: operations["bindingTransfer"];
+        post: operations["askWalletContractOperation"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/wallet/v1/binding/setup": {
+    "/wallet/contract/v1/operations/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -378,33 +288,56 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Installation kit for a personal_account binding
-         * @description `kind=personal_account` only (for `hos_lease` the partner provisions
-         *     accounts, and this endpoint answers 400). Requires an existing
-         *     `personal_account` binding for the wallet.
+         * Where an operation stands
+         * @description The operation the agent asked for under `id`. A `relayed` operation
+         *     whose outcome is not recorded yet is looked up on chain and answered
+         *     as `success` or `failed` once the chain has it. For a swap or a
+         *     withdrawal to another chain whose input was sent, `route_status` is
+         *     1Click's status of the route.
          *
-         *     Returns ONE transaction of three actions — reference the wallet code
-         *     by its global-contract hash, `w_init` (1 yoctoNEAR), and
-         *     `w_execute_extension` adding the executor as an extension — with
-         *     receiver = signer = the owner's own account. OutLayer only assembles
-         *     payloads; the owner signs with any wallet, and their signature is
-         *     what authorizes the lane, once and entirely.
-         *
-         *     HARD refusal, not a warning: if the account already has ANY contract
-         *     deployed, the kit answers 409 — deploying over it would not clear the
-         *     old contract's state (the typical victim being a 2FA/multisig wallet
-         *     contract).
-         *
-         *     The wallet code is referenced by GLOBAL-CONTRACT HASH, and a global
-         *     contract is published per network: the same wasm has the same hash
-         *     everywhere, but somebody has to publish it once on each chain. This
-         *     endpoint checks that before handing you a transaction, and answers 400
-         *     where it has not been published — otherwise you would sign a
-         *     transaction that cannot succeed.
+         *     Signed by the agent's key (see `AgentSignature`) over the method
+         *     `GET`, this path and an empty body.
          */
-        get: operations["getBindingSetup"];
+        get: operations["getWalletContractOperation"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/contract/v1/operations/{id}/relay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add the agent's half and send the request to the wallet contract
+         * @description The agent sends its half: its Ed25519 signature over the request of an
+         *     `awaiting_signature` operation. The half is verified against the
+         *     agent's key, joined with the enclave's half, and the two are sent to
+         *     the wallet contract in a NEAR transaction whose gas the wallet's own
+         *     NEAR account pays. The answer is the operation as the chain settled
+         *     it: `success`, or `failed` with the chain's failure in `result`. A
+         *     transaction whose outcome did not come back leaves the operation
+         *     `relayed`, with its `tx_hash`; the next read settles it.
+         *
+         *     The half is the signature over the bytes
+         *     `"NEAR_WALLET_TWO_KEY/V1/AGENT"` followed by the request's 32-byte
+         *     hash, `SHA3-256("NEAR_WALLET_CONTRACT/V1" ‖ borsh(request))`.
+         *
+         *     An operation that is not `awaiting_signature` is answered as it
+         *     stands, and nothing is sent.
+         *
+         *     Signed by the agent's key (see `AgentSignature`) over the method
+         *     `POST`, this path and the body.
+         */
+        post: operations["relayWalletContractOperation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -434,13 +367,8 @@ export interface paths {
          *     `/wallet/v1/intents/*` endpoints instead.
          *
          *
-         *     Agent Connect: a `w_execute_extension` call aimed at the wallet's own
-         *     bound account is additionally checked against the LIVE chain — binding
-         *     liveness, spend grant, call form, reserve floor — before anything is
-         *     signed. That refusal is a `403` shaped as `AgentConnectDeniedResponse`
-         *     (not the generic error body), carrying the class, the promise index and
-         *     a `terminal` flag. The policy engine independently decodes the same
-         *     request and rules it on the owner's own limits.
+         *     A call whose method is `w_execute_extension` is refused for every
+         *     wallet, under any policy (`403 policy_denied`).
          */
         post: operations["call"];
         delete?: never;
@@ -3172,23 +3100,22 @@ export interface components {
              */
             version_key?: string;
             /**
-             * @description Agent Connect: run under the BOUND asset account's name, so the
-             *     guest's `NEAR_SENDER_ID` becomes e.g. `agent.tla` instead of the
-             *     wallet's own account. near-email turns that into the mailbox it
-             *     sends from, and other connectors derive keys and state from it.
+             * @description Run the program as the account of the caller's wallet contract
+             *     (`GET /wallet/v1/contract`): the guest's `NEAR_SENDER_ID` is that
+             *     account instead of the wallet's own. Billing does not follow the
+             *     name: `NEAR_USER_ACCOUNT_ID` stays the paying key's owner. The
+             *     on-chain `request_execution` takes the same flag.
              *
-             *     Opt-in, and off by default on purpose. A binding is a capability
-             *     the agent gains, not a change to who it already is — renaming the
-             *     guest the moment one activated would move every derived identity
-             *     with nothing in your code to point at.
+             *     Off by default: a program derives keys and state from
+             *     `NEAR_SENDER_ID`, so the name it runs under is the caller's choice
+             *     on each call.
              *
-             *     Requires an ACTIVE binding, and says so rather than falling back:
-             *     with no binding — or with one still pending, or revoked — the call
-             *     is refused `409 no_bound_identity` before it is priced or charged.
-             *     The worker then re-verifies the claim against the chain inside the
-             *     TEE and refuses the job if the chain disagrees. Billing never
-             *     follows the name: `NEAR_USER_ACCOUNT_ID` stays the paying key's
-             *     owner.
+             *     Refused `409 no_bound_identity`, before the call is priced or
+             *     charged, when the paying key names no wallet or the wallet has no
+             *     wallet contract; the call is never run under the caller's own name
+             *     in its place. Before the program is given the name, the worker has
+             *     the enclave confirm that the caller's wallet is the wallet of that
+             *     wallet contract, and refuses the job when it is not.
              * @default false
              */
             use_bound_identity: boolean;
@@ -3291,7 +3218,7 @@ export interface components {
             /** @description An open task this device has no copy of. It opens after one call of the project's `tasks_unlock` by the owner. */
             locked: boolean;
         };
-        /** @description Why a task is `failed`. Before its run acted: `preparer_key_unavailable`: the payment key that prepared the task could not pay for the run (deleted, out of funds, spent, expiring, or no longer reaching the project). `operation_priced`: the answering operation has a price and must be free. `operation_unknown`: the connector sells no such operation. `operation_limit_reached`: a limit on the operation is reached. `wallet_unresolved`: the key's wallet or its bound identity is not the preparing run's. `build_changed`: the connector published a new build since the task was made; decided at the approval, before the owner's signature is spent, and nothing was charged. `queue_unavailable`: the platform could not start the run. `run_not_started`: the run did not take the task in time. `run_refused:<reason>`: the run was refused the task by the host with `<reason>` (`hash-mismatch`, `not-the-preparer`, `approval-invalid`, `expired`, `unavailable`, …) or ended without reporting (`unreported`); the agent prepares again on any of these — nothing was done. After the run took the task: `run_failed`: the project said it did not carry the task out, and `result` holds why; `run_trapped`: the project reported the task carried out and then the run failed, and `result` holds what it reported — the action most likely happened; `run_unreported`: the run ended without a word on the task, and it may have acted; `run_unfinished`: no word of the run's end in time, and it may have acted. On the last three the agent checks the service before it prepares again. Absent in every other state. */
+        /** @description Why a task is `failed`. Before its run acted: `preparer_key_unavailable`: the payment key that prepared the task could not pay for the run (deleted, out of funds, spent, expiring, or no longer reaching the project). `operation_priced`: the answering operation has a price and must be free. `operation_unknown`: the connector sells no such operation. `operation_limit_reached`: a limit on the operation is reached. `wallet_unresolved`: the key's wallet, or the wallet contract the run is named after, is not the preparing run's. `build_changed`: the connector published a new build since the task was made; decided at the approval, before the owner's signature is spent, and nothing was charged. `queue_unavailable`: the platform could not start the run. `run_not_started`: the run did not take the task in time. `run_refused:<reason>`: the run was refused the task by the host with `<reason>` (`hash-mismatch`, `not-the-preparer`, `approval-invalid`, `expired`, `unavailable`, …) or ended without reporting (`unreported`); the agent prepares again on any of these — nothing was done. After the run took the task: `run_failed`: the project said it did not carry the task out, and `result` holds why; `run_trapped`: the project reported the task carried out and then the run failed, and `result` holds what it reported — the action most likely happened; `run_unreported`: the run ended without a word on the task, and it may have acted; `run_unfinished`: no word of the run's end in time, and it may have acted. On the last three the agent checks the service before it prepares again. Absent in every other state. */
         TaskFailureReason: string;
         InboxTaskMoved: {
             id: string;
@@ -3435,7 +3362,7 @@ export interface components {
             /** @description The human sentence. */
             error: string;
             /**
-             * @description Present on the refusals where retrying has an answer. `true` means the same request can never succeed; `false` means it succeeds once something changes that the caller or the wallet's owner can change. `no_bound_identity` sends both: `true` when the paying key names no wallet at all, `false` when the wallet simply has no ACTIVE binding yet.
+             * @description Present on the refusals where retrying has an answer. `true` means the same request can never succeed; `false` means it succeeds once something changes that the caller or the wallet's owner can change. `no_bound_identity` sends both: `true` when the paying key names no wallet at all, `false` when the wallet has no wallet contract.
              *     `upstream_unavailable` (503 + `Retry-After`) is this door's transient answer — something we depend on has not caught up and the same call works later. It is deliberately NOT called `service_unavailable`: on `/wallet/v1/*` that code means a feature this deployment does not offer and must not be retried, and a client's retry rule is written once for every answer.
              */
             terminal?: boolean;
@@ -3595,16 +3522,18 @@ export interface components {
          *     `call` does not permit it. `policy_update` is a write to a locked
          *     policy awaiting the approvers' quorum (`signPolicy`); it is never
          *     subject to `excluded_types` — the lock is its own check.
+         *     `wallet_contract` is the type of an approval opened for an operation
+         *     of a wallet contract (`POST /wallet/contract/v1/operations`): its
+         *     `request_data` is `{wallet_contract, id, op}`, it has no row under
+         *     `/wallet/v1/requests`, and the policy judges it by the kind of its
+         *     `op`.
          * @enum {string}
          */
-        RequestType: "call" | "transfer" | "withdraw" | "cross_chain_withdraw" | "limit_order" | "deposit" | "swap" | "confidential" | "intents_storage_deposit" | "policy_update";
-        /**
-         * @description `partially_failed` occurs only for `w_execute_extension` (Agent Connect's extension door) and is a NORMAL outcome, not an error: the wallet detaches its promises, they execute concurrently and independently, and one failing neither reverts the others nor undoes the value they moved. Read `result.promises[]` for which did what.
-         * @enum {string}
-         */
-        RequestStatus: "pending_deposit" | "processing" | "success" | "completed" | "partially_failed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "cancelled" | "needs_review";
+        RequestType: "call" | "transfer" | "withdraw" | "cross_chain_withdraw" | "limit_order" | "deposit" | "swap" | "confidential" | "intents_storage_deposit" | "policy_update" | "wallet_contract";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "storage_not_registered" | "recipient_not_found" | "memo_not_supported" | "below_min_amount_out" | "above_max_amount_in" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "no_liquidity" | "upstream_rejected" | "operation_limit_reached" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "route_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
+        RequestStatus: "pending_deposit" | "processing" | "success" | "completed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "needs_review";
+        /** @enum {string} */
+        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "policy_denied" | "not_approver" | "insufficient_balance" | "storage_not_registered" | "recipient_not_found" | "memo_not_supported" | "below_min_amount_out" | "above_max_amount_in" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "no_liquidity" | "upstream_rejected" | "operation_limit_reached" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "route_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "wallet_busy";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -3709,12 +3638,6 @@ export interface components {
             vault_id?: string | null;
             /** @description Present for a wallet whose owner can leave with its keys through the keystore DAO: the owner's NEAR account and the generation the wallet belongs to. Such a wallet reports no `vault_id`. */
             exit_owner?: components["schemas"]["ExitOwnerOfWallet"];
-            /** @description Agent Connect: the bound named asset account. Always present for chain=near and `null` when the wallet has no binding — a key that is simply absent is a different answer to a client that checks for one. */
-            asset_account_id?: string | null;
-            /** @description Agent Connect: the executor identity. For chain=near always equal to `address`. */
-            executor_account_id?: string | null;
-            /** @description Agent Connect: the executor's native balance in yoctoNEAR, cached about 30 seconds. Present only for chain=near on a BOUND wallet — it is here so whoever funds the executor learns the account and whether it needs funding in one call. Absent also when the chain could not be read, which is not a balance of zero. */
-            gas_balance?: string | null;
         };
         ExitOwnerOfWallet: {
             /** @description The NEAR account registered in the keystore DAO that owns the wallet. */
@@ -3790,11 +3713,6 @@ export interface components {
             balance: string;
             token: string;
             account_id: string;
-            /**
-             * @description Which identity `account_id` is, so the figure cannot be misattributed. `executor` for every wallet without a binding.
-             * @enum {string}
-             */
-            account: "asset" | "executor";
         };
         /** @description A `429` meaning the wallet's counted ceiling on this custody operation is reached. `message` reads "limit reached: 1000 per day for custody:*"; the fields carry the same facts for a program. `terminal` is false: this clears by waiting (`retry_after_seconds`, also sent as `Retry-After`, null when the counter's remaining life could not be read) or by a subscription on the wallet's own key. */
         OperationLimitReachedResponse: {
@@ -3832,155 +3750,168 @@ export interface components {
              * @description What the holder is doing. Present even when `in_flight_request_id` is `null`, and worth branching on: a transfer clears in seconds while a cross-chain withdraw can run for many minutes, and that is the difference between retrying at once and backing off. `repair` is the odd one — a read of a request left unresolved settles it under the same lock, and that finishes quickly.
              * @enum {string|null}
              */
-            in_flight_operation?: null | "transfer" | "call" | "swap" | "delete" | "withdraw" | "cross_chain_withdraw" | "cross_chain_deposit" | "limit_order" | "storage_deposit" | "intents_transfer" | "intents_deposit" | "intents_storage_deposit" | "confidential" | "confidential_deposit" | "repair" | "policy_update";
+            in_flight_operation?: null | "transfer" | "call" | "swap" | "delete" | "withdraw" | "cross_chain_withdraw" | "cross_chain_deposit" | "limit_order" | "storage_deposit" | "intents_transfer" | "intents_deposit" | "intents_storage_deposit" | "confidential" | "confidential_deposit" | "repair" | "policy_update" | "wallet_contract";
         };
-        /**
-         * @description A `403` from the Agent Connect pre-flight: the request was refused BEFORE it was signed, so no gas was spent, and the refusal names the rule the wallet contract would have panicked on.
-         *
-         *     Structured rather than prose because a client has to route on it. Read `terminal` first: `true` means retrying is pointless and the OWNER must act — issue a new grant, re-provision the executor, fund the account, or rewrite the request. `false` means the same request may succeed later with nothing changed (a freeze lifted, a parked account reactivated, recognized wallet code restored, the account's registry caught up with it).
-         */
-        AgentConnectDeniedResponse: {
+        WalletContractKeyResponse: {
+            /** @description The enclave's Ed25519 public key of this wallet's wallet contract, 32 bytes in hex: the second half of the pair `w_init` takes. */
+            tee_public_key: string;
+        };
+        PutWalletContractRequest: {
+            /** @description The NEAR account the wallet contract is installed on. */
+            account_id: string;
+        };
+        WalletContractResponse: {
+            /** @description The wallet contract's account. */
+            account_id: string;
+            /** @description The agent's Ed25519 public key in the wallet contract's pair, 32 bytes in hex, as it was read from the chain when the account was named. */
+            agent_public_key: string;
+        };
+        WalletContractOperationRequest: {
+            /** @description The agent's own id of the operation: 1 to 64 characters of letters, digits, `-` and `_`. Asking again under the same id continues the same operation. */
+            id: string;
+            op: components["schemas"]["WalletContractOp"];
+        };
+        /** @description What the wallet contract is asked to do, named by `kind`. Every amount is a decimal string in the smallest unit: yoctoNEAR for NEAR, the token's own for a token. A token is named by its id inside NEAR Intents, `nep141:<account>`. The policy judges an operation by its kind, as it judges the same kind for any wallet; usage is counted under `native` for a `transfer` (its `amount`) and a `call` (its `deposit`), and under the token for the others. */
+        WalletContractOp: {
             /** @enum {string} */
-            error: "agent_connect_denied";
-            /** @description One sentence the owner can act on. */
-            message: string;
-            /** @description Stable machine class. Binding liveness: `executor_not_in_control_set`, `lease_expired`, `account_expired`, `account_frozen`, `account_not_active`, `unsupported_wallet_implementation`, `unrecognized_wallet_code`, `registry_disagrees` (a leased account whose collection's `nft_token` does not confirm the account's own `nft_item_info` — reversible, the registry may trail by a block), `binding_evidence_mismatch`, `chain_status_unreadable`. Spend grant: `grant_missing`, `grant_expired`, `grant_unreadable`, `grant_exhausted`, `receiver_not_granted`, `token_not_granted`, `token_budget_exceeded`, `collection_not_granted`, `item_not_granted`, `own_collection_refused`, `insufficient_vs_reserve`, and `grant_shape_violation:<subcode>` where subcode is one of `refund_target_not_allowed`, `grant_call_must_stand_alone`, `grant_call_deposit`, `grant_approval_not_allowed`, `grant_args_unreadable`, `grant_method_not_allowed`, `grant_action_not_allowed`. */
-            class: string;
-            /** @description `true` — do not retry. Every grant-layer class is terminal: the chain's answer does not change while the request and the grant stay as they are. */
-            terminal: boolean;
-            /** @description Which promise inside the decoded request the rule is about; `null` for a refusal about the request or the binding as a whole. */
-            promise_index?: number | null;
-            /** @description How many further violations the same request carries beyond the one reported — whether fixing this one ends the matter. */
-            additional_violations?: number;
+            kind: "transfer";
+            /** @description The receiving NEAR account. */
+            to: string;
+            /** @description yoctoNEAR. */
+            amount: string;
+        } | {
+            /** @enum {string} */
+            kind: "call";
+            /** @description The contract called. */
+            to: string;
+            method: string;
+            /** @description The exact bytes of the arguments, in base64. */
+            args_base64: string;
+            /** @description The gas of the call, in gas units. */
+            gas: string;
+            /** @description The attached deposit in yoctoNEAR. */
+            deposit: string;
+        } | {
+            /** @enum {string} */
+            kind: "withdraw";
+            /** @description The receiving NEAR account. */
+            to: string;
+            amount: string;
+            /** @description `nep141:<account>`. */
+            token: string;
+        } | {
+            /** @enum {string} */
+            kind: "intents_transfer";
+            /** @description The receiving account inside NEAR Intents. */
+            to: string;
+            amount: string;
+            token: string;
+        } | {
+            /** @enum {string} */
+            kind: "swap";
+            token_in: string;
+            amount_in: string;
+            token_out: string;
+            /** @description The least amount of `token_out` the quote has to guarantee. */
+            min_out: string;
+        } | {
+            /** @enum {string} */
+            kind: "cross_chain_withdraw";
+            /** @description The receiving address on `chain`. */
+            to: string;
+            amount: string;
+            token: string;
+            /** @description The destination chain, as `WithdrawChain` names it. */
+            chain: string;
         };
-        /**
-         * @example {
-         *       "asset_account_id": "agent.tla",
-         *       "owner_account_id": "owner.near",
-         *       "impl_version": 6
-         *     }
-         */
-        PutBindingRequest: {
-            /** @description Named NEAR account this wallet operates: the leased asset account (`agent.tla`) for `hos_lease`, the owner's own account (`user.near`) for `personal_account`. */
-            asset_account_id: string;
+        /** @description Where an operation of a wallet contract stands. `id`, `status` and `request_hash` are always present; every other field is absent, not `null`, when it does not apply. */
+        WalletContractOperationResponse: {
+            /** @description The agent's own id of the operation. */
+            id: string;
             /**
-             * @description Binding mode. Omitted means `hos_lease`, byte-for-byte the pre-kind behavior.
-             * @default hos_lease
+             * @description * `pending_approval` — the policy asks for approvers;
+             *       `approval_id` names the vote. The agent asks again under the
+             *       same `id` once they have voted.
+             *     * `awaiting_signature` — prepared and counted: `message` and
+             *       `tee_half` are present. The agent signs its half and relays.
+             *     * `relayed` — the transaction `tx_hash` was sent and its outcome
+             *       is not recorded yet.
+             *     * `success`, `failed` — the outcome on chain. For a swap or a
+             *       withdrawal to another chain, `success` says the input reached
+             *       1Click's deposit address; `route_status` follows the route.
+             *     * `closed` — ended with nothing sent, for `reason`: the vote did
+             *       not end in approval, or a prepared request was not relayed
+             *       within an hour.
              * @enum {string}
              */
-            kind: "hos_lease" | "personal_account";
-            /** @description `hos_lease`: required; the account that authorized the lane, as reported at provisioning (informational — authorization is proven by the on-chain control set). `personal_account`: optional, and must equal `asset_account_id` — the owner IS the account. */
-            owner_account_id?: string;
-            /** @description `hos_lease` only (REQUIRED there, REJECTED for `personal_account`): wallet implementation version, read from the asset account's `hos_lease()`. Pins which request decoder applies; an unsupported value is rejected at binding time (terminal, do not retry). */
-            impl_version?: number;
-        };
-        /**
-         * @example {
-         *       "binding_id": "bnd_7f3a2b1c9d8e4f60a1b2c3d4e5f60718",
-         *       "wallet_id": "9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20",
-         *       "kind": "hos_lease",
-         *       "asset_account_id": "agent.tla",
-         *       "executor_account_id": "9c3c9e101c1f4f5e9c4a1d7b9a8f3c20",
-         *       "binding_status": "pending",
-         *       "impl_version": 6,
-         *       "decoder_version": 1,
-         *       "created_at": "2026-08-18T14:00:00Z"
-         *     }
-         */
-        BindingResponse: {
-            binding_id: string;
-            wallet_id: string;
-            /** @enum {string} */
-            kind: "hos_lease" | "personal_account";
-            asset_account_id: string;
-            /** @description The OutLayer execution identity — register it in the account's extension set (and, for hos_lease, provision its spend grant). NOTE: the response deliberately carries no owner. `owner_account_id` is accepted at PUT as the provisioning receipt House of Stake hands the integrator, and is stored — but it is checked for shape only and compared against nothing, so returning it would present a claim as an established fact. Who holds a leased account is `nft_item_info.owner_id` on chain, and what ends a lane when it changes hands is the rotation pin — the item's `owner_id`, `rotation_epoch` and `rotation_seq` as read at activation: a different owner, or a different seq inside the same epoch, ends the binding; a new epoch under the same owner re-establishes it. */
-            executor_account_id: string;
+            status: "pending_approval" | "awaiting_signature" | "relayed" | "success" | "failed" | "closed";
+            /** @description The hash of the operation, sha256(canonical_json(op)) in hex: what approvers sign, and what a later request under the same `id` is compared with. It is not the hash of `message`. */
+            request_hash: string;
             /**
-             * @description OutLayer's view only, not an attestation of chain state. `pending` until the executor is first observed live in the extension set; `suspended` on reversible faults (freeze, non-Active state, unsupported impl_version, unrecognized code hash); `revoked` is terminal (extension removed, lease/state expired, ownership rotated, or DELETE). Anything but `active` carries `status_reason`.
-             * @enum {string}
+             * Format: uuid
+             * @description `pending_approval` only: the vote the approvers cast on.
              */
-            binding_status: "pending" | "active" | "suspended" | "revoked";
-            /** @description Why the binding is not `active`: the fault class the last observation reported, in the vocabulary a refused spend uses (`AgentConnectDeniedResponse.class` — `executor_not_in_control_set`, `account_frozen`, `unsupported_wallet_implementation`, `unrecognized_wallet_code`, `registry_disagrees`, ...). Absent while `active` and until the first observation; on `revoked`, what ended the lane. A `pending` personal binding reads `executor_not_in_control_set` until the owner adds the executor. */
-            status_reason?: string | null;
-            /** @description Absent for kind=personal_account. */
-            impl_version?: number | null;
-            /** @description Derived by OutLayer, never client-supplied. Absent for kind=personal_account, whose versioning is the account's code hash checked at verify time. */
-            decoder_version?: number | null;
-            /** Format: date-time */
-            created_at: string;
-            /** @description Executor's native NEAR balance in yoctoNEAR (GET only). Null when the RPC could not answer. */
-            gas_balance?: string | null;
-            /** @description The executor is under `gas_balance_threshold` and will soon be unable to pay for transactions — top it up. `null` means the balance could not be read, which is UNKNOWN rather than low. Poll this endpoint; there is no separate low-gas notification. */
-            gas_balance_low?: boolean | null;
-            /** @description yoctoNEAR floor `gas_balance_low` is measured against. */
-            gas_balance_threshold?: string | null;
+            approval_id?: string;
+            /** @description `awaiting_signature` only: the wallet contract's request. The agent checks it is the operation it asked for and signs its half over it. */
+            message?: components["schemas"]["WalletContractRequestMessage"];
+            /** @description `awaiting_signature` only: the enclave's signature over `message`, 64 bytes in hex. It verifies under `tee_public_key` of `GET /wallet/v1/contract/key` over the bytes `"NEAR_WALLET_TWO_KEY/V1/TEE"` followed by the request's hash. */
+            tee_half?: string;
+            /** @description `relayed`, `success`, `failed`: the transaction that carried the request to the wallet contract. */
+            tx_hash?: string;
+            /** @description What the chain answered. `failed`: the chain's failure object. `success`: the call's return value when it is JSON; absent otherwise. */
+            result?: unknown;
+            /** @description `closed` only: why. */
+            reason?: string;
+            /** @description A swap or a withdrawal to another chain, from `awaiting_signature` on: what 1Click quoted for the input. */
+            quote?: {
+                amount_in: string;
+                amount_out: string;
+                min_amount_out: string;
+                /** @description Until when the quote waits for the input. */
+                deadline?: string | null;
+                /** @description 1Click's estimate of the route's duration, in seconds. */
+                time_estimate?: number | null;
+            };
+            /** @description A swap or a withdrawal to another chain whose input was sent (`success`), on a read: 1Click's status of the route, in its own words. Absent when 1Click did not answer. */
+            route_status?: string;
         };
-        /**
-         * @example {
-         *       "kind": "personal_account",
-         *       "asset_account_id": "user.near",
-         *       "executor_account_id": "9c3c9e101c1f4f5e9c4a1d7b9a8f3c20",
-         *       "code_hash": "BwjDnyemmBhrCyuviDGpoQAm9mdjTfrX7ZjqgZB4MHvM",
-         *       "transactions": [
-         *         {
-         *           "signer_id": "user.near",
-         *           "receiver_id": "user.near",
-         *           "actions": [
-         *             {
-         *               "type": "UseGlobalContract",
-         *               "code_hash": "BwjDnyemmBhrCyuviDGpoQAm9mdjTfrX7ZjqgZB4MHvM"
-         *             },
-         *             {
-         *               "type": "FunctionCall",
-         *               "method_name": "w_init",
-         *               "args": {},
-         *               "gas": "30000000000000",
-         *               "deposit": "1"
-         *             },
-         *             {
-         *               "type": "FunctionCall",
-         *               "method_name": "w_execute_extension",
-         *               "args": {
-         *                 "request": {
-         *                   "internal": [
-         *                     {
-         *                       "op": "add_extension",
-         *                       "payload": {
-         *                         "account_id": "9c3c9e101c1f4f5e9c4a1d7b9a8f3c20"
-         *                       }
-         *                     }
-         *                   ]
-         *                 }
-         *               },
-         *               "gas": "30000000000000",
-         *               "deposit": "1"
-         *             }
-         *           ]
-         *         }
-         *       ]
-         *     }
-         */
-        BindingSetupResponse: {
-            /** @enum {string} */
-            kind: "personal_account";
-            asset_account_id: string;
-            executor_account_id: string;
-            /** @description Base58 code hash of the published no-sign wallet global contract — the same artifact the verifier's allowlist pins. */
-            code_hash: string;
-            /** @description One transaction, three actions; receiver = signer = the owner's account. */
-            transactions: {
-                signer_id: string;
+        /** @description A request to a wallet contract: one promise to another account, with one action. Its hash, which both halves are signed over, is `SHA3-256("NEAR_WALLET_CONTRACT/V1" ‖ borsh(request))` in the wallet contract's own Borsh encoding. */
+        WalletContractRequestMessage: {
+            /** @description `mainnet` or `testnet`. */
+            chain_id: string;
+            /** @description The wallet contract's account. */
+            signer_id: string;
+            /**
+             * Format: int64
+             * @description The wallet contract accepts a nonce once.
+             */
+            nonce: number;
+            /** @description Nanoseconds since the Unix epoch, a decimal string. The wallet contract accepts the request for an hour from this moment. */
+            created_at_ns: string;
+            promise: {
+                /** @description The account the promise goes to. */
                 receiver_id: string;
-                actions: Record<string, never>[];
-            }[];
+                action: {
+                    /** @enum {string} */
+                    action: "transfer";
+                    /** @description yoctoNEAR, a decimal string. */
+                    amount: string;
+                } | {
+                    /** @enum {string} */
+                    action: "function_call";
+                    function_name: string;
+                    /** @description The arguments, in base64. */
+                    args: string;
+                    /** @description yoctoNEAR, a decimal string. */
+                    deposit: string;
+                    /** @description The exact gas of the call, a decimal string. */
+                    gas: string;
+                };
+            };
         };
-        DeleteBindingResponse: {
-            /** @enum {string} */
-            binding_status: "revoked";
-            /** @description The record that was ended; absent when there was nothing to end. */
-            binding_id?: string | null;
-            /** @description Pending multisig approvals targeting the asset account that were cancelled rather than left completable. The requests those approvals were gating are moved to `cancelled` in the same step — an approval cancelled on its own stops the execution but leaves the request at `pending_approval` for good, unable to complete and never saying so. Requests already past the decision (`processing`) are left alone: they may have bytes on the wire. */
-            cancelled_approvals: number;
+        WalletContractRelayRequest: {
+            /** @description The agent's signature over the operation's request, 64 bytes in hex. */
+            agent_half: string;
         };
         TokenInfo: {
             id: string;
@@ -4028,7 +3959,6 @@ export interface components {
             request_id: string;
             status: components["schemas"]["RequestStatus"];
             tx_hash?: string | null;
-            /** @description For `w_execute_extension` this also carries `promises`: one entry per promise of the decoded request, in the order the request listed them, each with `index`, `receiver`, `status` (`success` | `failed` | `unknown`), `receipt_id` and the chain's own `failure` object where it failed. `unknown` means the promise's receipt was not found in the outcome — it is NOT read as success, and its amounts are not charged to the velocity counters. A call the wallet contract REFUSED carries `promises: []`: the refusal happened before anything was detached, so no promise exists to report on, and none of the request is charged to the counters — read `failure` for the contract's reason. */
             result?: {
                 [key: string]: unknown;
             } | null;
@@ -5105,7 +5035,7 @@ export interface components {
             sign_message?: components["schemas"]["SignMessageCapability"];
             evm_sign?: components["schemas"]["EvmSignCapability"];
             solana_sign?: components["schemas"]["SolanaSignCapability"];
-            /** @description A `call` whose receiver is the NEAR Intents contract (`intents.near`, `intents.far`) — directly, or as a `w_execute_extension` promise of the bound account (then the bound account's own intents account is at stake). **Default-DENY with or without a policy.** The contract treats a transaction from an account as the owner of that account's intents account, for 1 yoctoNEAR: such a call can `add_public_key` — a key outside the TEE that signs for the intents account permanently, past any later policy, freeze or lock — or move any intents balance past the transaction types, the address list and the per-token limits (`ft_withdraw`, `mt_transfer`). Every intents operation has its own endpoint (`/wallet/v1/intents/*`); set `allowed: true` only to hand the agent the intents account itself. `call` must be permitted as well. */
+            /** @description A `call` whose receiver is the NEAR Intents contract (`intents.near`, `intents.far`). **Default-DENY with or without a policy.** The contract treats a transaction from an account as the owner of that account's intents account, for 1 yoctoNEAR: such a call can `add_public_key` — a key outside the TEE that signs for the intents account permanently, past any later policy, freeze or lock — or move any intents balance past the transaction types, the address list and the per-token limits (`ft_withdraw`, `mt_transfer`). Every intents operation has its own endpoint (`/wallet/v1/intents/*`); set `allowed: true` only to hand the agent the intents account itself. `call` must be permitted as well. */
             intents_call?: components["schemas"]["Capability"];
         };
         EvmSignTypedDataRequest: {
@@ -5176,8 +5106,8 @@ export interface components {
             /**
              * @description Whether the wallet has a policy at all. `none`: no policy is
              *     stored — every operation is allowed (the engine's own rules,
-             *     which no policy relaxes, still hold: account-control operations
-             *     on the extension door are refused for every wallet). `stored`:
+             *     which no policy relaxes, still hold: a call to
+             *     `w_execute_extension` is refused for every wallet). `stored`:
              *     a policy exists and `rules`, `approval`, `capabilities` and
              *     `authorized_key_hashes` are it, as written — every capability
              *     it does not name is at that capability's default, which is DENY
@@ -5306,14 +5236,6 @@ export interface components {
             op?: {
                 [key: string]: unknown;
             } | null;
-            /**
-             * @description Present ONLY for a `w_execute_extension` op (Agent Connect's extension door), whose own fields describe nothing: the destination is the agent's own account and the deposit is a mandated 1-yocto marker, while every real recipient and amount is nested in `args_base64`. This is those contents, decoded from the same bytes `request_hash` covers — an approver renders it INSTEAD of guessing from `op`. Absent for every other operation, which states its effects in its own fields.
-             *
-             *     Shape: `native_total` (yocto, decimal string), `action_count`, `promises[]` (`index`, `receiver`, `refund_to`, `native`), `token_moves[]` (`promise`, `method`, `token`, `recipient`, `amount`, `unit` = `token_units` | `token_id`), `storage_registrations[]`, plus `internal_ops[]` and `unstatable_calls[]` — the last two are refused before an approval can exist and are rendered only so their presence could never be silent.
-             */
-            decoded_effects?: {
-                [key: string]: unknown;
-            } | null;
             /** @description Canonical request hash to SIGN — approvers sign `approve:{approval_id}:{wallet_pubkey}:{request_hash}` (see `Nep413Auth`), or have their wallet contract resolve it (see `ContractVoteAuth`). */
             request_hash: string;
             /**
@@ -5345,10 +5267,6 @@ export interface components {
             request_hash: string;
             /** @description Canonical op for the dashboard to render. `null` for legacy rows. */
             op?: {
-                [key: string]: unknown;
-            } | null;
-            /** @description What a `w_execute_extension` op actually moves, decoded from the same bytes `request_hash` covers — see `PendingApproval` for the shape and for why rendering `op` alone would show an approver nothing about the money. `null` for every other operation. */
-            decoded_effects?: {
                 [key: string]: unknown;
             } | null;
             /** @description On-chain wallet pubkey bound into the approve/reject vote message. */
@@ -5728,6 +5646,21 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description `invalid_signature`: the request is not signed by the agent's key of the wallet contract `x-agent-account` names, or its timestamp is not within 120 seconds of the server's clock. The answer is the same for an account that is no wallet's wallet contract. */
+        AgentSignatureRefused: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "invalid_signature",
+                 *       "message": "the request is not signed by the agent's key of this wallet contract, or its timestamp is not the current time"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description Action blocked by policy or wallet state */
         Forbidden: {
             headers: {
@@ -5785,7 +5718,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Unavailable — either permanently on this deployment or transiently, and the code says which. `service_unavailable`: feature not enabled/configured (e.g. the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off, the binding-event endpoints without a webhook secret, or NEAR Intents on a network with no solvers) — do not retry; no interval is sent because none would be true. `chain_unavailable`: the chain, or a node in front of it, could not answer this second — a balance that could not be read, a code hash that could not be fetched, a binding that could not be verified, a transaction that expired against a block the node has forgotten. Nothing happened and nothing was charged — transient, retry after the `Retry-After` header. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request — transient, retry after `Retry-After`. `upstream_unavailable`: this deployment's database could not serve the request right now — transient, retry after `Retry-After`; the same code `/call` answers the condition with. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed — transient, retry after `Retry-After`. `route_unavailable`: 1Click did not answer for the route (a 5xx, a timeout, "Failed to get quote") — transient, retry after `Retry-After`; nothing is known about the route. (Transient upstream failures use 503 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, hiding the JSON body from clients.) */
+        /** @description Unavailable — either permanently on this deployment or transiently, and the code says which. `service_unavailable`: feature not enabled/configured (e.g. the `/wallet/v1/confidential/*` routes when `ENABLE_CONFIDENTIAL_INTENTS` is off, or NEAR Intents on a network with no solvers) — do not retry; no interval is sent because none would be true. `chain_unavailable`: the chain, or a node in front of it, could not answer this second — a balance that could not be read, a code hash that could not be fetched, a transaction that expired against a block the node has forgotten. Nothing happened and nothing was charged — transient, retry after the `Retry-After` header. `keystore_error`: the TEE keystore (signing / key derivation) was unreachable or rejected the request — transient, retry after `Retry-After`. `upstream_unavailable`: this deployment's database could not serve the request right now — transient, retry after `Retry-After`; the same code `/call` answers the condition with. `confidential_jwt_expired`: the confidential per-account JWT was rejected by the 1Click upstream and re-authentication also failed — transient, retry after `Retry-After`. `route_unavailable`: 1Click did not answer for the route (a 5xx, a timeout, "Failed to get quote") — transient, retry after `Retry-After`; nothing is known about the route. (Transient upstream failures use 503 rather than 502 because Cloudflare replaces origin 502/504 responses with its own HTML error page, hiding the JSON body from clients.) */
         ServiceUnavailable: {
             headers: {
                 /** @description Present on transient failures (`chain_unavailable`, `keystore_error`, `upstream_unavailable`, `confidential_jwt_expired`) — seconds to wait before retrying. Absent on `service_unavailable`, which is not transient: there is no interval after which an unset environment variable becomes set. */
@@ -5872,6 +5805,8 @@ export interface components {
          *     that list it), and is accepted and changes nothing elsewhere.
          */
         AnswerWithin: number;
+        /** @description The agent's own id of the operation, as it was asked for. */
+        WalletContractOperationId: string;
     };
     requestBodies: never;
     headers: never;
@@ -5930,9 +5865,7 @@ export interface operations {
                      *       "chain": "near",
                      *       "address": "9c3c9e101c1f4f5e9c4a1d7b9a8f3c20",
                      *       "public_key": "ed25519:7BcBZ9Z...",
-                     *       "vault_id": null,
-                     *       "asset_account_id": "agent.tla",
-                     *       "executor_account_id": "9c3c9e101c1f4f5e9c4a1d7b9a8f3c20"
+                     *       "vault_id": null
                      *     }
                      */
                     "application/json": components["schemas"]["AddressResponse"];
@@ -5946,8 +5879,6 @@ export interface operations {
     getBalance: {
         parameters: {
             query?: {
-                /** @description Which of a bound wallet's two identities the balances describe. Omitted means `executor`, unchanged from before this parameter existed. `asset` requires an ACTIVE binding and is refused otherwise. */
-                account?: "asset" | "executor";
                 chain?: components["schemas"]["Chain"];
                 /** @description Token ID (`nep141:<contract>` or `native`). */
                 token?: string;
@@ -5969,8 +5900,7 @@ export interface operations {
                      * @example {
                      *       "balance": "1000000000000000000000000",
                      *       "token": "NEAR",
-                     *       "account_id": "9c3c9e101c1f4f5e9c4a1d7b9a8f3c20",
-                     *       "account": "executor"
+                     *       "account_id": "9c3c9e101c1f4f5e9c4a1d7b9a8f3c20"
                      *     }
                      */
                     "application/json": components["schemas"]["BalanceResponse"];
@@ -6036,7 +5966,7 @@ export interface operations {
             429: components["responses"]["RateLimited"];
         };
     };
-    getBinding: {
+    getWalletContractKey: {
         parameters: {
             query?: never;
             header?: never;
@@ -6045,98 +5975,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The binding record */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BindingResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            /** @description The wallet has no binding */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            500: components["responses"]["InternalError"];
-        };
-    };
-    putBinding: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PutBindingRequest"];
-            };
-        };
-        responses: {
-            /** @description Binding recorded (or the identical existing binding) */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BindingResponse"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            /** @description The wallet or the asset account is already bound */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            500: components["responses"]["InternalError"];
-        };
-    };
-    deleteBinding: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The binding is ended (or there was none) */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeleteBindingResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    getBindingZones: {
-        parameters: {
-            query?: never;
-            header: {
-                "X-Binding-Webhook-Secret": string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The zones currently accepted */
+            /** @description The key */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6144,67 +5983,13 @@ export interface operations {
                 content: {
                     /**
                      * @example {
-                     *       "zones": [
-                     *         "tla.near"
-                     *       ]
+                     *       "tee_public_key": "d968402f7d15eeca453381e4e78de992a9fa4cc64f8aae70538a4ecb133dd90d"
                      *     }
                      */
-                    "application/json": {
-                        zones: string[];
-                    };
+                    "application/json": components["schemas"]["WalletContractKeyResponse"];
                 };
             };
-            401: components["responses"]["Unauthorized"];
-            /** @description No binding-event secret is configured on this deployment. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    postBindingEvent: {
-        parameters: {
-            query?: never;
-            header: {
-                "X-Binding-Webhook-Secret": string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "asset_account_id": "agent.tla",
-                 *       "event": "revoked"
-                 *     }
-                 */
-                "application/json": {
-                    /** @description The account the news is about. */
-                    asset_account_id: string;
-                    /** @description What happened, in the sender's words (`revoked`, `transferred`, `recovered`, `frozen`, …). Logged for correlation; never acted on. */
-                    event?: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Re-read; the status the chain now implies */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        /** @enum {string} */
-                        binding_status: "pending" | "active" | "suspended" | "revoked" | "unbound";
-                    };
-                };
-            };
-            /** @description The secret was accepted and the body could not be read as an event. Deliberately not `422`: in this API that code means the chain answered and a receipt failed (`OnChainTxFailed`), and a client routing on it must not meet it here. */
+            /** @description `bad_request`: the wallet has no owner. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -6215,41 +6000,35 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
-            /** @description No binding-event secret is configured on this deployment. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
-    getBindingBalance: {
+    getWalletContract: {
         parameters: {
-            query?: {
-                /** @description Token ID (`nep141:<contract>` or `native`). */
-                token?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Balance of the bound account (`account` is `asset`) */
+            /** @description The wallet contract */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BalanceResponse"];
+                    /**
+                     * @example {
+                     *       "account_id": "trader.alice.near",
+                     *       "agent_public_key": "77d5340090180fe99e04064f5b6c40db5c4b952c776801e5b578bd057749dfd1"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["WalletContractResponse"];
                 };
             };
-            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
-            /** @description The wallet has no binding */
+            /** @description `request_not_found`: the wallet has no wallet contract. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -6261,7 +6040,7 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    bindingTransfer: {
+    putWalletContract: {
         parameters: {
             query?: never;
             header?: never;
@@ -6270,40 +6049,140 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /** @description Where the value lands. For a token this is the LOGICAL recipient, not the token contract. */
-                    to: string;
-                    /** @description Native yoctoNEAR, or the token's own smallest unit when `token` is set. */
-                    amount: string;
-                    /** @description NEP-141 contract. Absent means native NEAR. */
-                    token?: string | null;
-                    /** @description NEP-141 `memo`, passed through untouched. */
-                    memo?: string | null;
-                };
+                /**
+                 * @example {
+                 *       "account_id": "trader.alice.near"
+                 *     }
+                 */
+                "application/json": components["schemas"]["PutWalletContractRequest"];
             };
         };
         responses: {
-            /** @description Accepted; same shape as `/wallet/v1/call` */
+            /** @description The wallet contract is recorded */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CallResponse"];
+                    /**
+                     * @example {
+                     *       "account_id": "trader.alice.near",
+                     *       "agent_public_key": "77d5340090180fe99e04064f5b6c40db5c4b952c776801e5b578bd057749dfd1"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["WalletContractResponse"];
                 };
             };
-            400: components["responses"]["BadRequest"];
+            /** @description `bad_request`: the wallet has no owner; `account_id` is not a NEAR account id; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
-            /** @description The Agent Connect pre-flight refused */
+            /** @description `chain_refused`: the chain answered about the account instead of with a value — no such account, no contract on it, or no `w_public_key` method. Not retried. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    askWalletContractOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WalletContractOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Where the operation stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletContractOperationResponse"];
+                };
+            };
+            /** @description `bad_request`: a signature header is missing or malformed, the body is not an operation, `id` is not 1 to 64 characters of letters, digits, `-` and `_`, or the kind is not one a wallet contract does. For a swap or a withdrawal to another chain also what 1Click answers to the quote: `below_min_amount_out` (the quote guarantees less than `min_out`; the body carries `min_amount_out` and `quoted_min_amount_out`), `upstream_rejected`, `no_liquidity`, `unsupported_token`, `unsupported_chain`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["AgentSignatureRefused"];
+            /** @description `policy_denied`: the owner's policy, or the enclave judging the same operation again, refuses it; `message` says why. `wallet_frozen`: the wallet is frozen. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentConnectDeniedResponse"];
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description The wallet has no binding */
+            /** @description `conflict`: the request's nonce was already taken (sign the request again with another nonce), or the `id` was used for another content. `wallet_busy`: another operation is using this wallet (`WalletBusyResponse`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["WalletBusyResponse"];
+                };
+            };
+            429: components["responses"]["OperationLimitReached"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getWalletContractOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's own id of the operation, as it was asked for. */
+                id: components["parameters"]["WalletContractOperationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Where the operation stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletContractOperationResponse"];
+                };
+            };
+            /** @description `bad_request`: a signature header is missing or malformed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["AgentSignatureRefused"];
+            /** @description `request_not_found`: this wallet contract has no operation under `id`. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -6312,7 +6191,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Another operation holds this wallet */
+            /** @description `conflict`: the request's nonce was already taken; sign the request again with another nonce. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6324,29 +6203,64 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    getBindingSetup: {
+    relayWalletContractOperation: {
         parameters: {
-            query: {
-                kind: "personal_account";
-            };
+            query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description The agent's own id of the operation, as it was asked for. */
+                id: components["parameters"]["WalletContractOperationId"];
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "agent_half": "fe67f6a4756d7a4538925d8e58f5eb32686551a0e33436dfece12e459d9e835f4c8d704405657da58f70e8c82f7609c54d999096f79ab11f63adcd5ca9e0ecbe"
+                 *     }
+                 */
+                "application/json": components["schemas"]["WalletContractRelayRequest"];
+            };
+        };
         responses: {
-            /** @description The installation transaction, ready to sign */
+            /** @description Where the operation stands */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BindingSetupResponse"];
+                    /**
+                     * @example {
+                     *       "id": "pay-2026-11-26-1",
+                     *       "status": "success",
+                     *       "request_hash": "265c98d9f330442baf2801d3eab6ac9354f899ee88daed42d1ff6f19a4f666b1",
+                     *       "tx_hash": "8fK3…"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["WalletContractOperationResponse"];
                 };
             };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            /** @description The wallet has no binding */
+            /** @description `bad_request`: a signature header is missing or malformed, the body is not `{"agent_half": ...}`, or `agent_half` is not 64 bytes in hex. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `invalid_signature`: the request is not signed by the agent's key (see `AgentSignatureRefused`), or `agent_half` is not the agent's signature over this operation's request. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description `request_not_found`: this wallet contract has no operation under `id`. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -6355,31 +6269,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description The account already has a contract deployed */
+            /** @description `conflict`: the request's nonce was already taken. `wallet_busy`: another operation is using this wallet (`WalletBusyResponse`). */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["WalletBusyResponse"];
                 };
             };
             500: components["responses"]["InternalError"];
-            /**
-             * @description The chain could not be read just now, so neither the account's
-             *     current code nor the availability of the wallet contract could be
-             *     confirmed. Transient — retry. (A network where the wallet contract
-             *     is not published answers 400 instead, because that does not change
-             *     on a retry.)
-             */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     call: {
@@ -6463,15 +6363,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
-            /** @description Refused by policy, or — for `w_execute_extension` on a bound account — by the Agent Connect pre-flight, which answers `AgentConnectDeniedResponse`. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["AgentConnectDeniedResponse"];
-                };
-            };
+            403: components["responses"]["Forbidden"];
             /** @description Another money-moving operation is using this wallet. Applies to every spending endpoint, not only this one. */
             409: {
                 headers: {
@@ -6492,15 +6384,7 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            /** @description The chain could not be reached to verify a binding. Transient — retry. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     transfer: {
@@ -10225,11 +10109,11 @@ export interface operations {
                 };
             };
             /**
-             * @description `no_bound_identity` — the call asked to run as a bound account with
-             *     `use_bound_identity`, and there is none to run as: either the paying
-             *     key names no wallet (`terminal: true`), or the wallet has no ACTIVE
-             *     binding (`terminal: false` — a pending or revoked binding authorizes
-             *     nothing, and one that activates later makes the same call work).
+             * @description `no_bound_identity` — the call asked to run as the caller's wallet
+             *     contract with `use_bound_identity`, and there is none to run as:
+             *     either the paying key names no wallet (`terminal: true`), or the
+             *     wallet has no wallet contract (`terminal: false` — the same call
+             *     works once the wallet has one, see `PUT /wallet/v1/contract`).
              *
              *     Refused before the call is priced or charged, and never answered by
              *     running the job under the caller's own name: which account the guest

@@ -8,7 +8,7 @@ TypeScript SDK for **OutLayer Agent Custody** — multi-chain wallets for AI age
 
 If you've used Steward.fi or similar AI-agent wallet infra, you know the shape: API key in, signed transactions out. OutLayer keeps that shape but moves the trust root:
 
-- **Keys live in a TEE** (Intel Trust Domain Extensions on Phala Cloud). The infrastructure operator cannot extract them.
+- **Keys live in a TEE** (Intel Trust Domain Extensions). The infrastructure operator cannot extract them.
 - **Policy is enforced inside the TEE**, before signing, against an encrypted policy stored on the NEAR blockchain.
 - **Sovereign exit** is available: a wallet's owner can permissionlessly leave with its keys even if OutLayer shuts down. Two ways: the **owner exit** — a NEAR account registers once, the agent asks for the wallet with `OutlayerClient.createExitLink()`, no contract to deploy — and a **vault** of your own, which takes the secrets out too. See [leaving OutLayer](https://app.outlayer.ai/docs/leaving).
 - **Multi-chain wallets** (NEAR, Ethereum, Solana, Bitcoin) with deterministic address derivation and gasless cross-chain transfers via NEAR Intents.
@@ -82,6 +82,8 @@ That's the whole flow. The wallet has no policy yet, so withdraws are unrestrict
 | `client.claimTrialKey()` | The wallet's trial: a nonce-0 payment key for connector calls in its first week |
 | `client.redeemSponsorCode(code)` | Redeem a sponsor code (`spn_…`): a subscription on the nonce-0 key, paid by the sponsor |
 | `client.getPaymentKey()` | The nonce-0 key derived again — send it as `X-Payment-Key`; nothing to store |
+| `client.getWalletContractKey()` / `client.putWalletContract(account)` / `client.getWalletContract()` | On-chain custody: name the wallet contract of a wallet ([see below](#on-chain-custody)) |
+| `AgentKey` / `WalletContract` | On-chain custody: run the wallet contract's operations under the agent's own signature |
 | `client.getRequest(id)` | Status of an async operation |
 | `client.listRequests({...})` | List recent operations |
 | `client.policy.*` | Policy lifecycle (encrypt → sign → store) |
@@ -149,6 +151,110 @@ operator, auditors, and law enforcement with a warrant can still read
 confidential state. See the
 [full agent integration guide](https://github.com/out-layer/coordinator/blob/main/docs/CONFIDENTIAL_INTENTS.md)
 for the mental model, threat model, and privacy recipes.
+
+## On-chain custody
+
+An agent with on-chain custody keeps its main balance in a **wallet contract**:
+a NEAR account that runs the two-key variant of the NEAR Intents wallet
+contract. The wallet contract executes a request only under two signatures,
+one by the agent's own Ed25519 key and one by a key in OutLayer's enclave,
+which signs only an operation the owner's policy allows.
+
+The wallet behind `OutlayerClient` keeps its key in the enclave (TEE custody).
+The two serve different needs, and an agent with on-chain custody uses both:
+the wallet contract holds the main balance, and the wallet is the separate
+account where the agent keeps what it works with and which pays the gas of
+relaying. What on-chain custody adds is that the chain itself requires both
+signatures for every move out of the wallet contract. What it costs is a NEAR
+transaction and its gas per move, and a signature made on the agent's side.
+
+### Setting it up
+
+For a wallet with an owner. The agent holds a 32-byte Ed25519 seed of its own;
+the enclave's key comes from the API with the wallet's API key.
+
+```ts
+import { AgentKey, OutlayerClient } from '@outlayer/sdk';
+
+const client = new OutlayerClient({ apiKey: process.env.OUTLAYER_API_KEY! });
+const key = await AgentKey.fromSeed(seed); // Uint8Array, 32 bytes
+
+const { tee_public_key } = await client.getWalletContractKey();
+// The owner installs the wallet contract on an account of their choice and
+// initialises it (`w_init`) with the pair: key.publicKey, then tee_public_key.
+
+await client.putWalletContract('trader.alice.near');
+// → { account_id, agent_public_key }: the pair is read from the chain, and an
+//   account whose second key is not this wallet's is refused.
+```
+
+`client.getWalletContract()` reads the record back; it throws `NotFoundError`
+for a wallet with no wallet contract.
+
+### Running an operation
+
+The operation routes take no API key. `WalletContract` signs every request
+with the agent's key.
+
+```ts
+import { AgentKey, WalletContract } from '@outlayer/sdk';
+
+const contract = new WalletContract({
+  account: 'trader.alice.near', // the wallet contract's account
+  key,
+  teePublicKey: tee_public_key, // verify the enclave's half before signing
+  // baseUrl: 'https://testnet-api.outlayer.ai',
+});
+
+const op = { kind: 'transfer', to: 'bob.near', amount: '1000000000000000000000000' } as const;
+const state = await contract.run('pay-1', op);
+
+if (state.status === 'pending_approval') {
+  // The policy asks for approvers: they vote on state.approval_id.
+  // An approval starts nothing. After they voted, ask again under the same id:
+  await contract.run('pay-1', op);
+}
+```
+
+`run(id, op)` asks for the operation under an id of the agent's choice (1 to
+64 letters, digits, `-`, `_`). When the answer is `awaiting_signature` it
+checks that the returned request is the operation that was asked for, from
+this wallet contract (`messageIsFor`); with `teePublicKey` it verifies the
+enclave's half; then it signs the agent's half, last, and relays. It returns
+where the operation stands:
+
+| `status` | Meaning |
+|---|---|
+| `pending_approval` | Waits for approvers (`approval_id`). Call `run` again with the same id and the same operation after they voted. |
+| `success` / `failed` | The outcome on chain (`tx_hash`, `result`). |
+| `relayed` | The transaction was sent and its outcome is not recorded yet; `contract.get(id)` settles it. |
+| `closed` | Ended with nothing sent, for `reason`: the vote did not end in approval, or a prepared request was not relayed within an hour. |
+
+Asking again under the same id continues the same operation; the same id with
+another operation is refused. Usage against the policy's limits is counted
+when the request is prepared, and it is not given back. `ask`, `relay` and
+`get` are the steps of `run`, for an agent that drives them itself.
+
+An operation is one of six kinds. Amounts are decimal strings in the smallest
+unit; a token is its id inside NEAR Intents (`nep141:<account>`).
+
+| `kind` | Fields | What it does |
+|---|---|---|
+| `transfer` | `to`, `amount` | Sends NEAR from the wallet contract |
+| `call` | `to`, `method`, `args_base64`, `gas`, `deposit` | A function call from the wallet contract |
+| `withdraw` | `to`, `amount`, `token` | A NEP-141 token out of NEAR Intents to a NEAR account |
+| `intents_transfer` | `to`, `amount`, `token` | A token to another account inside NEAR Intents |
+| `swap` | `token_in`, `amount_in`, `token_out`, `min_out` | A swap through 1Click; the output arrives in the wallet contract's balance inside NEAR Intents |
+| `cross_chain_withdraw` | `to`, `amount`, `token`, `chain` | A withdrawal to another chain through 1Click |
+
+For a swap and a withdrawal to another chain the state carries `quote` (what
+1Click quoted) and, once the input was sent, `route_status` on a read.
+
+A refusal is a `CustodyError`: one of the API's, with its `code` and `status`
+(`policy_denied`, `wallet_frozen`, `wallet_busy`, `below_min_amount_out`, …),
+or one of the client's own checks, with neither: the returned request is not
+the operation that was asked for, or the enclave's half does not verify. In
+both of the latter cases nothing was signed.
 
 ## Documentation
 

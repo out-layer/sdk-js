@@ -195,8 +195,8 @@ export interface paths {
          *     operation routes verify requests against.
          *
          *     A wallet has one wallet contract. Naming an account again reads its
-         *     pair again, which is how a changed agent key on the same account is
-         *     taken up; naming another account points the wallet at that one.
+         *     pair again; naming another account points the wallet at that one. A
+         *     wallet contract's pair is set once, when it is installed.
          *
          *     The record is what requests are routed by. That the account is this
          *     wallet's wallet contract is checked in the enclave, from the chain, on
@@ -3992,9 +3992,9 @@ export interface components {
              *     * `success`, `failed` — the outcome on chain. For a swap or a
              *       withdrawal to another chain, `success` says the input reached
              *       1Click's deposit address; `route_status` follows the route.
-             *     * `closed` — ended with nothing sent, for `reason`: the vote did
-             *       not end in approval, or a prepared request was not relayed
-             *       within an hour.
+             *     * `closed` — ended with nothing sent, for `reason`: the vote was
+             *       rejected or expired, an approval was not used within its 24
+             *       hours, or a prepared request was not relayed within an hour.
              * @enum {string}
              */
             status: "pending_approval" | "awaiting_signature" | "relayed" | "success" | "failed" | "closed";
@@ -6236,6 +6236,15 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            /** @description `conflict`: the account is the wallet contract of another wallet. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description `chain_refused`: the chain answered about the account instead of with a value — no such account, no contract on it, or no `w_public_key` method. Not retried. */
             422: {
                 headers: {
@@ -6404,7 +6413,7 @@ export interface operations {
                     "application/json": components["schemas"]["WalletContractResponse"];
                 };
             };
-            /** @description `bad_request`: `sealed_agent_key` is not base64 of at most 128 characters; `account_id` is not a NEAR account id; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
+            /** @description `bad_request`: `sealed_agent_key` is not base64 of at most 128 characters; `account_id` is not a NEAR account id, or is neither the owner's account nor a sub-account of it; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -6415,6 +6424,15 @@ export interface operations {
             };
             /** @description `request_not_found`: the token opens no setup: it is unknown, has expired, or was replaced by a newer one. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `conflict`: the account is the wallet contract of another wallet. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

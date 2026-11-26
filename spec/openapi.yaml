@@ -548,8 +548,8 @@ paths:
         operation routes verify requests against.
 
         A wallet has one wallet contract. Naming an account again reads its
-        pair again, which is how a changed agent key on the same account is
-        taken up; naming another account points the wallet at that one.
+        pair again; naming another account points the wallet at that one. A
+        wallet contract's pair is set once, when it is installed.
 
         The record is what requests are routed by. That the account is this
         wallet's wallet contract is checked in the enclave, from the chain, on
@@ -584,6 +584,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: "`conflict`: the account is the wallet contract of another wallet."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: >-
             `chain_refused`: the chain answered about the account instead of
@@ -818,10 +824,17 @@ paths:
         '400':
           description: >-
             `bad_request`: `sealed_agent_key` is not base64 of at most 128
-            characters; `account_id` is not a NEAR account id; the account
-            does not answer `w_public_key` with a pair of keys (the two-key
-            wallet contract is not installed on it); or the pair's second half
-            is not this wallet's key.
+            characters; `account_id` is not a NEAR account id, or is neither
+            the owner's account nor a sub-account of it; the account does not
+            answer `w_public_key` with a pair of keys (the two-key wallet
+            contract is not installed on it); or the pair's second half is not
+            this wallet's key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: "`conflict`: the account is the wallet contract of another wallet."
           content:
             application/json:
               schema:
@@ -7680,8 +7693,9 @@ components:
           title: call
           description: >-
             A function call from the wallet contract's account. A call to a
-            NEAR Intents contract or to the keystore DAO contract, and a call
-            of a method whose name starts with `w_execute_`, are refused.
+            NEAR Intents contract, to the keystore DAO contract or to the
+            OutLayer contract, and a call of a method whose name starts with
+            `w_execute_`, are refused.
           required: [kind, to, method, args_base64, gas, deposit]
           properties:
             kind: { type: string, enum: [call] }
@@ -7766,9 +7780,9 @@ components:
             * `success`, `failed` — the outcome on chain. For a swap or a
               withdrawal to another chain, `success` says the input reached
               1Click's deposit address; `route_status` follows the route.
-            * `closed` — ended with nothing sent, for `reason`: the vote did
-              not end in approval, or a prepared request was not relayed
-              within an hour.
+            * `closed` — ended with nothing sent, for `reason`: the vote was
+              rejected or expired, an approval was not used within its 24
+              hours, or a prepared request was not relayed within an hour.
         request_hash:
           type: string
           description: >-

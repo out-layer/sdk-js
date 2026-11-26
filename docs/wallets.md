@@ -4,6 +4,8 @@ Reference for every wallet method on `OutlayerClient`.
 
 All methods return a `Promise`. All errors are typed subclasses of `OutlayerError` — see [errors.md](errors.md).
 
+These methods act on the OutLayer wallet: the account whose key is in the enclave, under an API key. An agent with on-chain custody keeps its main balance in a wallet contract, which executes a request only under two signatures, the agent's own and the enclave's. That balance moves through `WalletContract` and `AgentKey`, not through the methods here: see [On-chain custody](../README.md#on-chain-custody). The OutLayer wallet stays the agent's working account and pays the gas of each relay.
+
 ## Address derivation
 
 ```ts

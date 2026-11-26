@@ -10,7 +10,11 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
   `OutlayerClient`: `getWalletContractKey()`, `putWalletContract(accountId)`
   and `getWalletContract()` (types `WalletContractKeyResponse`,
   `WalletContractResponse`), beside `AgentKey` and `WalletContract`, which run
-  a wallet contract's operations under the agent's signature. Removed:
+  a wallet contract's operations under the agent's signature
+  (`WalletContractOptions` takes `teePublicKey`: the enclave's half is
+  verified before the agent signs its own), and `SetupKey`, `openSetup()` and
+  `collectSetup()`, by which the agent opens a setup for its owner and
+  collects its key, sealed to a one-time key. Removed:
   `putBinding`, `getBinding`, `deleteBinding`, `bindingBalance`,
   `bindingTransfer`, `getBindingSetup`; the types `PutBindingRequest`,
   `BindingResponse`, `DeleteBindingResponse`, `BindingSetupResponse`,

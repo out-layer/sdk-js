@@ -3994,7 +3994,8 @@ export interface components {
              *       1Click's deposit address; `route_status` follows the route.
              *     * `closed` — ended with nothing sent, for `reason`: the vote was
              *       rejected or expired, an approval was not used within its 24
-             *       hours, or a prepared request was not relayed within an hour.
+             *       hours, a prepared request was not relayed within an hour, or its
+             *       transaction never reached the chain in that hour.
              * @enum {string}
              */
             status: "pending_approval" | "awaiting_signature" | "relayed" | "success" | "failed" | "closed";

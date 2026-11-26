@@ -5956,7 +5956,7 @@ components:
       in: header
       name: x-agent-nonce
       description: |
-        16 bytes in hex, the agent's choice. Each request is taken once: a
+        16 bytes in lowercase hex, the agent's choice. Each request is taken once: a
         nonce seen before is refused with `409 conflict`. See
         `AgentSignature`.
     AgentSignature:
@@ -5972,8 +5972,8 @@ components:
         |---|---|
         | `x-agent-account` | The wallet contract's account. |
         | `x-agent-timestamp` | Unix seconds, within 120 s of the server's clock. |
-        | `x-agent-nonce` | 16 bytes in hex; each request is taken once. |
-        | `x-agent-signature` | 64 bytes in hex: the Ed25519 signature. |
+        | `x-agent-nonce` | 16 bytes in lowercase hex; each request is taken once. |
+        | `x-agent-signature` | 64 bytes in lowercase hex: the Ed25519 signature. |
 
         The signature is made with the agent's key, the first half of the wallet
         contract's pair (`agent_public_key` of `GET /wallet/v1/contract`), over

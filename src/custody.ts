@@ -442,6 +442,166 @@ export async function verifyTeeHalf(
   );
 }
 
+// ── Setting up ───────────────────────────────────────────────────────────────
+
+const SEALED_FORMAT = 0x02;
+const SEAL_KDF_INFO = utf8.encode('outlayer:encryption-keys:v1:seal:kdf');
+
+/**
+ * The agent's one-time key of a setup. The owner's page seals the agent's key
+ * to it; only this object opens what was sealed.
+ */
+export class SetupKey {
+  private constructor(
+    private readonly pair: CryptoKeyPair,
+    /** The X25519 public key, 32 bytes in hex: what a setup is opened with. */
+    readonly publicKey: string,
+  ) {}
+
+  static async generate(): Promise<SetupKey> {
+    const subtle = globalThis.crypto.subtle;
+    const pair = (await subtle.generateKey({ name: 'X25519' }, false, [
+      'deriveBits',
+    ])) as CryptoKeyPair;
+    return new SetupKey(pair, toHex(new Uint8Array(await subtle.exportKey('raw', pair.publicKey))));
+  }
+
+  /** The agent's key from what the owner's page sealed for the wallet `walletId`. */
+  async open(sealedBase64: string, walletId: string): Promise<AgentKey> {
+    const sealed = base64Decode(sealedBase64);
+    if (sealed[0] !== SEALED_FORMAT || sealed.length !== 1 + 32 + 32 + 16) {
+      throw new CustodyError('this is not a sealed agent key');
+    }
+    const subtle = globalThis.crypto.subtle;
+    const ephemeralPublic = sealed.slice(1, 33);
+    const their = await subtle.importKey(
+      'raw',
+      ephemeralPublic as BufferSource,
+      { name: 'X25519' },
+      false,
+      [],
+    );
+    const shared = await subtle.deriveBits(
+      { name: 'X25519', public: their },
+      this.pair.privateKey,
+      256,
+    );
+    const hkdf = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
+    const key = await subtle.deriveKey(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: new Uint8Array(0),
+        info: concat(SEAL_KDF_INFO, ephemeralPublic, fromHex(this.publicKey, 32)) as BufferSource,
+      },
+      hkdf,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['decrypt'],
+    );
+    let seed: ArrayBuffer;
+    try {
+      seed = await subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: new Uint8Array(12),
+          additionalData: utf8.encode(
+            `outlayer:wallet-contract:agent-key:${walletId}`,
+          ) as BufferSource,
+        },
+        key,
+        sealed.slice(33) as BufferSource,
+      );
+    } catch {
+      throw new CustodyError(
+        'the sealed agent key does not open: it was sealed to another key or for another wallet',
+      );
+    }
+    return AgentKey.fromSeed(new Uint8Array(seed));
+  }
+}
+
+/** A setup the agent opened: what it hands to its owner, and how it collects the result. */
+export interface OpenedSetup {
+  /** The page the owner opens. */
+  url: string;
+  token: string;
+  expiresAt: string;
+  key: SetupKey;
+}
+
+interface SetupOptions {
+  /** The wallet's API key (`wk_…`). */
+  apiKey: string;
+  /** `https://api.outlayer.ai` by default. */
+  baseUrl?: string;
+  /** `https://app.outlayer.ai` by default. */
+  appUrl?: string;
+  fetch?: typeof fetch;
+}
+
+async function setupCall(
+  options: SetupOptions,
+  method: 'GET' | 'POST',
+  body?: unknown,
+): Promise<Record<string, unknown>> {
+  const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const baseUrl = (options.baseUrl ?? 'https://api.outlayer.ai').replace(/\/+$/, '');
+  const response = await doFetch(`${baseUrl}/wallet/v1/contract/setup`, {
+    method,
+    headers: {
+      authorization: `Bearer ${options.apiKey}`,
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const answer = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new CustodyError(
+      typeof answer.message === 'string' ? answer.message : response.statusText,
+      typeof answer.error === 'string' ? answer.error : undefined,
+      response.status,
+    );
+  }
+  return answer;
+}
+
+/**
+ * Open the setup of a wallet contract for the wallet of `apiKey`. Give `url`
+ * to the wallet's owner; keep `key` in memory until {@link collectSetup}
+ * returns the agent's key. Opening again replaces the setup.
+ */
+export async function openSetup(options: SetupOptions): Promise<OpenedSetup> {
+  const key = await SetupKey.generate();
+  const answer = await setupCall(options, 'POST', { recipient_public_key: key.publicKey });
+  const token = String(answer.token);
+  const appUrl = (options.appUrl ?? 'https://app.outlayer.ai').replace(/\/+$/, '');
+  return {
+    url: `${appUrl}/wallet/custody?setup=${token}`,
+    token,
+    expiresAt: String(answer.expires_at),
+    key,
+  };
+}
+
+/**
+ * What the owner left: the wallet contract's account and the agent's key.
+ * `null` while the owner has not finished. Refuses a key that is not the one
+ * in the contract's pair.
+ */
+export async function collectSetup(
+  options: SetupOptions,
+  key: SetupKey,
+): Promise<{ account: string; key: AgentKey } | null> {
+  const answer = await setupCall(options, 'GET');
+  if (answer.done !== true) return null;
+  const agentKey = await key.open(String(answer.sealed_agent_key), String(answer.wallet_id));
+  if (agentKey.publicKey !== answer.agent_public_key) {
+    throw new CustodyError("the key the owner left is not the agent's key of the wallet contract");
+  }
+  return { account: String(answer.account_id), key: agentKey };
+}
+
 // ── The API ──────────────────────────────────────────────────────────────────
 
 /** Where an operation stands. */

@@ -145,7 +145,10 @@ export type {
 
 export {
   AgentKey,
+  SetupKey,
   WalletContract,
+  openSetup,
+  collectSetup,
   CustodyError,
   OPERATION_PATH,
   REQUEST_TIMEOUT_SECS,
@@ -168,4 +171,5 @@ export type {
   TransferAction,
   SignedRequestHeaders,
   WalletContractOptions,
+  OpenedSetup,
 } from './custody.js';

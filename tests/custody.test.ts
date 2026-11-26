@@ -6,17 +6,21 @@ import {
   type Operation,
   type OperationState,
   type RequestMessage,
+  SetupKey,
   WalletContract,
   agentKeyRequest,
   agentKeySeed,
   agentRequestBytes,
+  collectSetup,
   encodeRequestMessage,
   fromHex,
   messageIsFor,
+  openSetup,
   requestHash,
   toHex,
   verifyTeeHalf,
 } from '../src/custody.js';
+import { sealWith } from '../src/seal.js';
 import requests from './fixtures/custody/agent_request.json';
 import keys from './fixtures/custody/keys.json';
 import messages from './fixtures/custody/messages.json';
@@ -277,5 +281,71 @@ describe('the client', () => {
       code: 'policy_denied',
       status: 403,
     });
+  });
+});
+
+describe('a setup', () => {
+  const walletId = keys.wallet_id;
+  const aad = new TextEncoder().encode(`outlayer:wallet-contract:agent-key:${walletId}`);
+
+  /** What the owner's page does: seal the agent's seed to the setup's key. */
+  async function sealedFor(recipient: string, wallet = aad): Promise<string> {
+    const ephemeral = (await crypto.subtle.generateKey({ name: 'X25519' }, false, [
+      'deriveBits',
+    ])) as CryptoKeyPair;
+    const sealed = await sealWith(ephemeral, recipient, fromHex(keys.agent.seed, 32), wallet);
+    return btoa(String.fromCharCode(...sealed));
+  }
+
+  it("opens the agent's key the owner sealed, for this wallet and this key alone", async () => {
+    const setup = await SetupKey.generate();
+    const sealed = await sealedFor(setup.publicKey);
+    expect((await setup.open(sealed, walletId)).publicKey).toBe(keys.agent.public_key);
+
+    await expect(setup.open(sealed, 'another-wallet')).rejects.toThrow(CustodyError);
+    await expect((await SetupKey.generate()).open(sealed, walletId)).rejects.toThrow(CustodyError);
+    await expect(setup.open('AAAA', walletId)).rejects.toThrow(/not a sealed agent key/);
+  });
+
+  it('is opened with a one-time key and collected when the owner has finished', async () => {
+    let stored: { recipient?: string } = {};
+    let answer: Record<string, unknown> = { wallet_id: walletId, done: false };
+    const fetch = (async (url: string, init: RequestInit) => {
+      expect(new URL(url).pathname).toBe('/wallet/v1/contract/setup');
+      expect((init.headers as Record<string, string>).authorization).toBe('Bearer wk_test');
+      if (init.method === 'POST') {
+        stored = { recipient: JSON.parse(init.body as string).recipient_public_key };
+        return new Response(
+          JSON.stringify({ token: 'ab'.repeat(32), expires_at: '2027-01-01T00:00:00Z' }),
+        );
+      }
+      return new Response(JSON.stringify(answer));
+    }) as unknown as typeof globalThis.fetch;
+    const options = {
+      apiKey: 'wk_test',
+      baseUrl: 'https://api.test',
+      appUrl: 'https://app.test/',
+      fetch,
+    };
+
+    const opened = await openSetup(options);
+    expect(opened.url).toBe(`https://app.test/wallet/custody?setup=${'ab'.repeat(32)}`);
+    expect(stored.recipient).toBe(opened.key.publicKey);
+    expect(await collectSetup(options, opened.key)).toBeNull();
+
+    const done = {
+      wallet_id: walletId,
+      done: true,
+      account_id: 'trader.alice.near',
+      sealed_agent_key: await sealedFor(opened.key.publicKey),
+    };
+    answer = { ...done, agent_public_key: keys.agent.public_key };
+    const collected = await collectSetup(options, opened.key);
+    expect(collected?.account).toBe('trader.alice.near');
+    expect(collected?.key.publicKey).toBe(keys.agent.public_key);
+
+    // a key that is not the one in the contract's pair is not taken
+    answer = { ...done, agent_public_key: keys.tee.public_key };
+    await expect(collectSetup(options, opened.key)).rejects.toThrow(/not the agent's key/);
   });
 });

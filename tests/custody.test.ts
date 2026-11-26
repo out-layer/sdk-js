@@ -217,7 +217,9 @@ describe('the client', () => {
       });
       const answer = path.endsWith('/relay')
         ? { ...state, status: 'success', message: undefined }
-        : state;
+        : init.method === 'GET' && path === OPERATION_PATH
+          ? { operations: [state] }
+          : state;
       return new Response(JSON.stringify(answer), { status: 200 });
     }) as unknown as typeof globalThis.fetch;
     const client = new WalletContract({
@@ -229,6 +231,16 @@ describe('the client', () => {
     });
     return { client, sent };
   }
+
+  it('lists what is under way with a request signed for the list', async () => {
+    const { client, sent } = await stand(prepared);
+    const open = await client.list();
+    expect(open.map((o) => [o.id, o.status])).toEqual([[prepared.id, prepared.status]]);
+    expect(sent.map((s) => `${s.method} ${s.path} [${s.body}]`)).toEqual([
+      `GET ${OPERATION_PATH} []`,
+    ]);
+    expect(sent[0].headers['x-agent-account']).toBe(ACCOUNT);
+  });
 
   it('asks, signs its half last, and relays', async () => {
     const { client, sent } = await stand(prepared);

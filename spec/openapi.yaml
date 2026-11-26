@@ -6119,6 +6119,50 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
 
   /wallet/contract/v1/operations:
+    get:
+      tags: [On-chain custody]
+      operationId: listWalletContractOperations
+      summary: The operations under way
+      description: |
+        The agent's operations that are not over: waiting for the approvers
+        (`pending_approval`), for the agent's half (`awaiting_signature`), or
+        for the chain's answer (`relayed`). Newest first, at most 100. For an
+        agent that lost its place. An operation whose request is past use is
+        closed as it is read and is left out; the outcome of a `relayed` one
+        is read by asking for it by `id`.
+
+        Signed by the agent's key (see `AgentSignature`) over the method
+        `GET`, this path and an empty body.
+      security:
+        - AgentAccount: []
+          AgentTimestamp: []
+          AgentNonce: []
+          AgentSignature: []
+      responses:
+        '200':
+          description: The operations under way
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operations]
+                properties:
+                  operations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WalletContractOperationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AgentSignatureRefused'
+        '409':
+          description: "`conflict`: the request's nonce was already taken; sign the request again with another nonce."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
     post:
       tags: [On-chain custody]
       operationId: askWalletContractOperation

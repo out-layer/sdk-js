@@ -3318,7 +3318,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * The operations under way
+         * @description The agent's operations that are not over: waiting for the approvers
+         *     (`pending_approval`), for the agent's half (`awaiting_signature`), or
+         *     for the chain's answer (`relayed`). Newest first, at most 100. For an
+         *     agent that lost its place. An operation whose request is past use is
+         *     closed as it is read and is left out; the outcome of a `relayed` one
+         *     is read by asking for it by `id`.
+         *
+         *     Signed by the agent's key (see `AgentSignature`) over the method
+         *     `GET`, this path and an empty body.
+         */
+        get: operations["listWalletContractOperations"];
         put?: never;
         /**
          * Ask for an operation of the wallet contract
@@ -12013,6 +12025,40 @@ export interface operations {
             };
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listWalletContractOperations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The operations under way */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        operations: components["schemas"]["WalletContractOperationResponse"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["AgentSignatureRefused"];
+            /** @description `conflict`: the request's nonce was already taken; sign the request again with another nonce. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
         };
     };
     askWalletContractOperation: {

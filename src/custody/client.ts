@@ -71,7 +71,11 @@ export class WalletContract {
     this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
-  private async send(method: 'GET' | 'POST', path: string, body: string): Promise<OperationState> {
+  private async send<T = OperationState>(
+    method: 'GET' | 'POST',
+    path: string,
+    body: string,
+  ): Promise<T> {
     const headers = await this.options.key.signRequest({
       account: this.options.account,
       method,
@@ -99,7 +103,7 @@ export class WalletContract {
         response.status,
       );
     }
-    return answer as unknown as OperationState;
+    return answer as unknown as T;
   }
 
   /**
@@ -109,6 +113,16 @@ export class WalletContract {
   async ask(id: string, op: Operation): Promise<OperationState> {
     checkDecimalFields(op);
     return this.send('POST', OPERATION_PATH, JSON.stringify({ id, op }));
+  }
+
+  /**
+   * The operations under way: waiting for the approvers, for this agent's
+   * half, or for the chain's answer. Newest first. What an agent that
+   * restarted picks up from.
+   */
+  async list(): Promise<OperationState[]> {
+    const answer = await this.send<{ operations: OperationState[] }>('GET', OPERATION_PATH, '');
+    return answer.operations;
   }
 
   /** Where the operation `id` stands. */

@@ -236,7 +236,7 @@ operation stands:
 | `pending_approval` | Waits for approvers (`approval_id`). Call `run` again with the same id and the same operation after they voted. |
 | `success` / `failed` | The outcome on chain (`tx_hash`, `result`). |
 | `relayed` | The transaction was sent and its outcome is not recorded yet; `contract.get(id)` settles it. |
-| `closed` | Ended with nothing sent, for `reason`: the vote was rejected or expired, an approval was not used within its 24 hours, a prepared request was not relayed within ten minutes, or its transaction never reached the chain in that time. |
+| `closed` | Ended with nothing sent, for `reason`: the vote was rejected or expired, an approval was not used within its 24 hours, a prepared request was not relayed within ten minutes, its transaction never reached the chain in that time, or the node refused it three times. |
 
 Asking again under the same id continues the same operation; the same id with
 another operation is refused. Usage against the policy's limits is counted

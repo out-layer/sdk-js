@@ -12083,7 +12083,7 @@ export interface operations {
                     "application/json": components["schemas"]["WalletContractOperationResponse"];
                 };
             };
-            /** @description `bad_request`: a signature header is missing or malformed, the body is not an operation, `id` is not 1 to 64 characters of letters, digits, `-` and `_`, or the kind is not one a wallet contract does. For a swap or a withdrawal to another chain also what 1Click answers to the quote: `below_min_amount_out` (the quote guarantees less than `min_out`; the body carries `min_amount_out` and `quoted_min_amount_out`), `upstream_rejected`, `no_liquidity`, `unsupported_token`, `unsupported_chain`. */
+            /** @description `bad_request`: a signature header is missing or malformed, the body is not an operation, `id` is not 1 to 64 characters of letters, digits, `-` and `_`, the kind is not one a wallet contract does, or a `call`'s `args_base64` is longer than 65,536 characters. `insufficient_balance`: a swap or a withdrawal to another chain sends more than the wallet contract holds of the token inside NEAR Intents (checked before any quote). For a swap or a withdrawal to another chain also what 1Click answers to the quote: `below_min_amount_out` (the quote guarantees less than `min_out`; the body carries `min_amount_out` and `quoted_min_amount_out`), `upstream_rejected`, `no_liquidity`, `unsupported_token`, `unsupported_chain`. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -12102,7 +12102,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `conflict`: the request's nonce was already taken (sign the request again with another nonce), or the `id` was used for another content. `wallet_busy`: another operation is using this wallet (`WalletBusyResponse`). */
+            /** @description `conflict`: the request's nonce was already taken (sign the request again with another nonce), or the `id` was used for another content, or 20 operations of this wallet already wait for the approvers. `wallet_busy`: another operation is using this wallet (`WalletBusyResponse`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12111,7 +12111,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["WalletBusyResponse"];
                 };
             };
-            429: components["responses"]["OperationLimitReached"];
+            /** @description `operation_limit_reached`: the wallet's counted ceiling on operations (`OperationLimitReachedResponse`). `rate_limited`: too many quotes for this wallet; try later. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationLimitReachedResponse"] | components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };

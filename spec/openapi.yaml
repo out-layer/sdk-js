@@ -6284,8 +6284,11 @@ paths:
           description: >-
             `bad_request`: a signature header is missing or malformed, the
             body is not an operation, `id` is not 1 to 64 characters of
-            letters, digits, `-` and `_`, or the kind is not one a wallet
-            contract does. For a swap or a withdrawal to another chain also
+            letters, digits, `-` and `_`, the kind is not one a wallet
+            contract does, or a `call`'s `args_base64` is longer than 65,536
+            characters. `insufficient_balance`: a swap or a withdrawal to
+            another chain sends more than the wallet contract holds of the
+            token inside NEAR Intents (checked before any quote). For a swap or a withdrawal to another chain also
             what 1Click answers to the quote: `below_min_amount_out` (the
             quote guarantees less than `min_out`; the body carries
             `min_amount_out` and `quoted_min_amount_out`), `upstream_rejected`,
@@ -6313,7 +6316,8 @@ paths:
           description: >-
             `conflict`: the request's nonce was already taken (sign the
             request again with another nonce), or the `id` was used for another
-            content. `wallet_busy`: another operation is using this wallet
+            content, or 20 operations of this wallet already wait for the
+            approvers. `wallet_busy`: another operation is using this wallet
             (`WalletBusyResponse`).
           content:
             application/json:
@@ -6322,7 +6326,16 @@ paths:
                   - $ref: '#/components/schemas/ErrorResponse'
                   - $ref: '#/components/schemas/WalletBusyResponse'
         '429':
-          $ref: '#/components/responses/OperationLimitReached'
+          description: >-
+            `operation_limit_reached`: the wallet's counted ceiling on
+            operations (`OperationLimitReachedResponse`). `rate_limited`: too
+            many quotes for this wallet; try later.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/OperationLimitReachedResponse'
+                  - $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':

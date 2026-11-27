@@ -152,6 +152,9 @@ export async function collectSetup(
   // A 0s account is named after its first state: it has to be the wallet
   // contract of this agent's key and this wallet's TEE key.
   const builds = options.walletContractBuilds ?? [WALLET_CONTRACT_CODE_HASH_HEX];
+  if (!builds.every((build) => /^[0-9a-f]{64}$/.test(build))) {
+    throw new CustodyError('`walletContractBuilds` are code hashes: 32 bytes in lowercase hex');
+  }
   if (
     /^0s[0-9a-f]{40}$/.test(account) &&
     !builds.some((build) => account === deterministicAccount(agentKey.publicKey, teePublicKey, build))

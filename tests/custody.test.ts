@@ -12,6 +12,9 @@ import {
   agentKeySeed,
   agentRequestBytes,
   collectSetup,
+  deterministicAccount,
+  stateBytes,
+  stateInitBytes,
   encodeRequestMessage,
   fromHex,
   messageIsFor,
@@ -24,6 +27,7 @@ import { sealWith } from '../src/seal.js';
 import requests from './fixtures/custody/agent_request.json';
 import keys from './fixtures/custody/keys.json';
 import messages from './fixtures/custody/messages.json';
+import deterministic from './fixtures/custody/deterministic.json';
 
 // The fixtures are the Rust implementation's own vectors
 // (`shared-tee-helpers/custody-core/vectors`), copied byte for byte.
@@ -386,7 +390,7 @@ describe('a setup', () => {
     };
 
     const opened = await openSetup(options);
-    expect(opened.url).toBe(`https://app.test/wallet/custody?setup=${'ab'.repeat(32)}`);
+    expect(opened.url).toBe(`https://app.test/wallet/custody#setup=${'ab'.repeat(32)}`);
     expect(stored.recipient).toBe(opened.key.publicKey);
     expect(await collectSetup(options, opened.key)).toBeNull();
 
@@ -406,5 +410,31 @@ describe('a setup', () => {
     // a key that is not the one in the contract's pair is not taken
     answer = { ...done, agent_public_key: keys.tee.public_key };
     await expect(collectSetup(options, opened.key)).rejects.toThrow(/not the agent's key/);
+
+    // a 0s account: taken when it is the wallet contract of this agent key and TEE key
+    const own0s = deterministicAccount(keys.agent.public_key, keys.tee.public_key);
+    answer = { ...done, account_id: own0s, agent_public_key: keys.agent.public_key };
+    expect((await collectSetup(options, opened.key))?.account).toBe(own0s);
+    const other0s = deterministicAccount(keys.tee.public_key, keys.agent.public_key);
+    answer = { ...done, account_id: other0s, agent_public_key: keys.agent.public_key };
+    await expect(collectSetup(options, opened.key)).rejects.toThrow(/is not the wallet contract of the agent's key/);
+  });
+});
+
+describe('a wallet contract at its deterministic address', () => {
+  it("is custody-core's state, StateInit and 0s address", () => {
+    expect(deterministic.cases).toHaveLength(3);
+    for (const c of deterministic.cases) {
+      const [agent, tee] = [c.pair.slice(0, 64), c.pair.slice(64)];
+      expect(toHex(stateBytes(agent, tee))).toBe(c.state);
+      expect(toHex(stateInitBytes(agent, tee, deterministic.code_hash_hex))).toBe(c.state_init);
+      expect(deterministicAccount(agent, tee, deterministic.code_hash_hex)).toBe(c.account_id);
+    }
+    expect(deterministic.cases.map((c) => c.account_id)).toContain('0scaf38f4da73c18308919d2f94e5445cd4131e2a5');
+  });
+
+  it('defaults to the published build', () => {
+    const c = deterministic.cases[0];
+    expect(deterministicAccount(c.pair.slice(0, 64), c.pair.slice(64))).toBe(c.account_id);
   });
 });

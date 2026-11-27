@@ -7,6 +7,7 @@
 import { SEALED_FORMAT, SealOpenError, openWith } from '../seal.js';
 import { base64Decode, toHex, utf8 } from './bytes.js';
 import { CustodyError } from './errors.js';
+import { deterministicAccount } from './deterministic.js';
 import { AgentKey } from './keys.js';
 
 /**
@@ -109,7 +110,9 @@ export async function openSetup(options: SetupOptions): Promise<OpenedSetup> {
   const token = String(answer.token);
   const appUrl = (options.appUrl ?? 'https://app.outlayer.ai').replace(/\/+$/, '');
   return {
-    url: `${appUrl}/wallet/custody?setup=${token}`,
+    // In the fragment: the browser sends it to no server, so the token reaches
+    // no log, proxy or link preview.
+    url: `${appUrl}/wallet/custody#setup=${token}`,
     token,
     expiresAt: String(answer.expires_at),
     key,
@@ -138,10 +141,17 @@ export async function collectSetup(
     throw new CustodyError("the key the owner left is not the agent's key of the wallet contract");
   }
   const pair = await setupCall(options, 'GET', undefined, '/wallet/v1/contract/key');
+  const account = String(answer.account_id);
+  const teePublicKey = String(pair.tee_public_key);
+  // A 0s account is named after its first state: it has to be the wallet
+  // contract of this agent's key and this wallet's TEE key.
+  if (account.startsWith('0s') && account !== deterministicAccount(agentKey.publicKey, teePublicKey)) {
+    throw new CustodyError(`${account} is not the wallet contract of the agent's key and this wallet's TEE key`);
+  }
   return {
-    account: String(answer.account_id),
+    account,
     key: agentKey,
     seed,
-    teePublicKey: String(pair.tee_public_key),
+    teePublicKey,
   };
 }

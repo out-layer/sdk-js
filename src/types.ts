@@ -3236,8 +3236,10 @@ export interface paths {
         /**
          * Open the setup of this wallet's wallet contract
          * @description The agent opens a setup and gets a `token` to hand to its owner, as
-         *     the link `https://app.outlayer.ai/wallet/custody?setup=<token>`. On
-         *     that page the owner installs the wallet contract, derives the agent's
+         *     the link `https://app.outlayer.ai/wallet/custody#setup=<token>`: in
+         *     the fragment, which the browser sends to no server, so the token
+         *     reaches no log, proxy or link preview. On that page the owner
+         *     installs the wallet contract, derives the agent's
          *     key from a signature of their own, names the account, and leaves the
          *     agent's key sealed to `recipient_public_key`. The agent then collects
          *     it with `GET /wallet/v1/contract/setup`.
@@ -3249,7 +3251,10 @@ export interface paths {
          *
          *     The token is valid for 24 hours and ends when the setup is finished.
          *     Whoever holds it can name this wallet's wallet contract once, and
-         *     only as the owner account or a sub-account of it; the account is
+         *     only as the owner account, a sub-account of it, or the `0s` address
+         *     (NEP-616) of a wallet contract created with this wallet's pair (the
+         *     address is the hash of the build and the whole first state); the
+         *     account is
          *     taken only when its pair on chain holds this wallet's key from
          *     `GET /wallet/v1/contract/key`. A wallet has one setup: opening again
          *     replaces the token and the one-time key, and discards a sealed key
@@ -6020,7 +6025,7 @@ export interface components {
             recipient_public_key: string;
         };
         OpenWalletContractSetupResponse: {
-            /** @description What the agent hands to its owner, in the link `https://app.outlayer.ai/wallet/custody?setup=<token>`. Whoever holds it can name this wallet's wallet contract once, as the owner account or a sub-account of it. */
+            /** @description What the agent hands to its owner, in the link `https://app.outlayer.ai/wallet/custody#setup=<token>` (the fragment). Whoever holds it can name this wallet's wallet contract once, as the owner account, a sub-account of it, or the `0s` address of a wallet contract of this wallet's pair. */
             token: string;
             /**
              * Format: date-time
@@ -11987,7 +11992,7 @@ export interface operations {
                     "application/json": components["schemas"]["WalletContractResponse"];
                 };
             };
-            /** @description `bad_request`: `sealed_agent_key` is not base64 of at most 128 characters; `account_id` is not a NEAR account id, or is neither the owner's account nor a sub-account of it; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
+            /** @description `bad_request`: `sealed_agent_key` is not base64 of at most 128 characters; `account_id` is not a NEAR account id, or is none of the owner's account, a sub-account of it, and the `0s` address of a wallet contract created with this wallet's pair on the build the account runs; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
             400: {
                 headers: {
                     [name: string]: unknown;

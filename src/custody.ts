@@ -46,6 +46,7 @@ export {
 } from './custody/keys.js';
 export type { SignedRequestHeaders } from './custody/keys.js';
 export { SetupKey, collectSetup, openSetup } from './custody/setup.js';
+export { WALLET_CONTRACT_CODE_HASH_HEX, deterministicAccount, stateBytes, stateInitBytes } from './custody/deterministic.js';
 export type { OpenedSetup } from './custody/setup.js';
 export { OPERATION_PATH, WalletContract } from './custody/client.js';
 export type { OperationState, WalletContractOptions } from './custody/client.js';

@@ -3252,9 +3252,13 @@ export interface paths {
          *     The token is valid for 24 hours and ends when the setup is finished.
          *     Whoever holds it can name this wallet's wallet contract once, and
          *     only as the owner account, a sub-account of it, or the `0s` address
-         *     (NEP-616) of a wallet contract created with this wallet's pair (the
-         *     address is the hash of the build and the whole first state); the
-         *     account is
+         *     (NEP-616) of a fresh wallet contract on a build the keystore DAO
+         *     approved (the address is the hash of the build and the whole first
+         *     state). A `0s` contract can be made by anyone with any agent key, so
+         *     a holder of the token who finishes first can name one with an agent
+         *     key of their own; a new setup finished by the owner replaces it. The
+         *     link carries the token in its fragment, and a spent token answers 409.
+         *     In every case the account is
          *     taken only when its pair on chain holds this wallet's key from
          *     `GET /wallet/v1/contract/key`. A wallet has one setup: opening again
          *     replaces the token and the one-time key, and discards a sealed key
@@ -6025,7 +6029,7 @@ export interface components {
             recipient_public_key: string;
         };
         OpenWalletContractSetupResponse: {
-            /** @description What the agent hands to its owner, in the link `https://app.outlayer.ai/wallet/custody#setup=<token>` (the fragment). Whoever holds it can name this wallet's wallet contract once, as the owner account, a sub-account of it, or the `0s` address of a wallet contract of this wallet's pair. */
+            /** @description What the agent hands to its owner, in the link `https://app.outlayer.ai/wallet/custody#setup=<token>` (the fragment). Whoever holds it can name this wallet's wallet contract once, as the owner account, a sub-account of it, or the `0s` address of a fresh wallet contract on an approved build. */
             token: string;
             /**
              * Format: date-time
@@ -11815,7 +11819,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-            /** @description `conflict`: the account is the wallet contract of another wallet. */
+            /** @description `conflict`: the account is the wallet contract of another wallet; or the token's setup is finished already (whoever holds the link and did not finish it asks the agent for a new one). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11954,6 +11958,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description `conflict`: the token's setup is finished already. Whoever did not finish it asks the agent for a new link: a new setup replaces the account named here. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -11992,7 +12005,7 @@ export interface operations {
                     "application/json": components["schemas"]["WalletContractResponse"];
                 };
             };
-            /** @description `bad_request`: `sealed_agent_key` is not base64 of at most 128 characters; `account_id` is not a NEAR account id, or is none of the owner's account, a sub-account of it, and the `0s` address of a wallet contract created with this wallet's pair on the build the account runs; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
+            /** @description `bad_request`: `sealed_agent_key` is not base64 of at most 128 characters; `account_id` is not a NEAR account id, or is none of the owner's account, a sub-account of it, and the `0s` address of a fresh wallet contract, on a build the keystore DAO approved, of the pair the account holds; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -7,7 +7,7 @@
 import { SEALED_FORMAT, SealOpenError, openWith } from '../seal.js';
 import { base64Decode, toHex, utf8 } from './bytes.js';
 import { CustodyError } from './errors.js';
-import { deterministicAccount } from './deterministic.js';
+import { WALLET_CONTRACT_CODE_HASH_HEX, deterministicAccount } from './deterministic.js';
 import { AgentKey } from './keys.js';
 
 /**
@@ -69,6 +69,12 @@ interface SetupOptions {
   baseUrl?: string;
   /** `https://app.outlayer.ai` by default. */
   appUrl?: string;
+  /**
+   * The wallet contract builds a `0s` account may run, by code hash in hex:
+   * the published build by default. A build the keystore DAO approves later
+   * is added here.
+   */
+  walletContractBuilds?: string[];
   fetch?: typeof fetch;
 }
 
@@ -145,8 +151,14 @@ export async function collectSetup(
   const teePublicKey = String(pair.tee_public_key);
   // A 0s account is named after its first state: it has to be the wallet
   // contract of this agent's key and this wallet's TEE key.
-  if (account.startsWith('0s') && account !== deterministicAccount(agentKey.publicKey, teePublicKey)) {
-    throw new CustodyError(`${account} is not the wallet contract of the agent's key and this wallet's TEE key`);
+  const builds = options.walletContractBuilds ?? [WALLET_CONTRACT_CODE_HASH_HEX];
+  if (
+    /^0s[0-9a-f]{40}$/.test(account) &&
+    !builds.some((build) => account === deterministicAccount(agentKey.publicKey, teePublicKey, build))
+  ) {
+    throw new CustodyError(
+      `${account} is not the wallet contract of the agent's key and this wallet's TEE key on the builds ${builds.join(', ')}`,
+    );
   }
   return {
     account,

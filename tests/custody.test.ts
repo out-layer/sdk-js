@@ -415,9 +415,20 @@ describe('a setup', () => {
     const own0s = deterministicAccount(keys.agent.public_key, keys.tee.public_key);
     answer = { ...done, account_id: own0s, agent_public_key: keys.agent.public_key };
     expect((await collectSetup(options, opened.key))?.account).toBe(own0s);
+    // a named account that starts with 0s is a named account
+    answer = { ...done, account_id: '0sam.near', agent_public_key: keys.agent.public_key };
+    expect((await collectSetup(options, opened.key))?.account).toBe('0sam.near');
     const other0s = deterministicAccount(keys.tee.public_key, keys.agent.public_key);
     answer = { ...done, account_id: other0s, agent_public_key: keys.agent.public_key };
     await expect(collectSetup(options, opened.key)).rejects.toThrow(/is not the wallet contract of the agent's key/);
+
+    // a 0s account on another build: refused by default, taken when that build is accepted
+    const otherBuild = 'ab'.repeat(32);
+    const onOther = deterministicAccount(keys.agent.public_key, keys.tee.public_key, otherBuild);
+    answer = { ...done, account_id: onOther, agent_public_key: keys.agent.public_key };
+    await expect(collectSetup(options, opened.key)).rejects.toThrow(/on the builds/);
+    const accepting = { ...options, walletContractBuilds: [otherBuild] };
+    expect((await collectSetup(accepting, opened.key))?.account).toBe(onOther);
   });
 });
 

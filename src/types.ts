@@ -3291,6 +3291,12 @@ export interface paths {
          *     from. The owner's page at `https://app.outlayer.ai/wallet/custody`
          *     reads it.
          *
+         *     A wallet that has a wallet contract already names it in
+         *     `current_contract`: its setup hands the same agent key over again, to
+         *     an agent on a new machine for instance. The owner's signature has to
+         *     be made by the key that made that agent key; the page refuses another
+         *     key's signature before it sends anything.
+         *
          *     The token is the only credential, sent as `Authorization: Bearer
          *     <token>`; no API key is sent. A token that is missing, unknown, has
          *     expired or was replaced by a newer setup answers 404.
@@ -6055,6 +6061,8 @@ export interface components {
                 /** @description The NEP-413 nonce, 32 bytes in base64. It is fixed, so the same request gives the same signature. */
                 nonce_base64: string;
             };
+            /** @description The wallet contract the wallet has already, or null. Its `agent_public_key` is the key the owner's signature has to make: a signature of another key of the owner makes another agent key, and the funds in this contract do not follow it. */
+            current_contract: components["schemas"]["WalletContractResponse"] | null;
         };
         CompleteWalletContractSetupRequest: {
             /** @description The NEAR account the wallet contract is installed on. */
@@ -11943,7 +11951,8 @@ export interface operations {
                      *         "message": "This signature is the key of your OutLayer agent. Sign it only on app.outlayer.ai, when you set up or recover an agent.\nOwner: alice.near\nWallet: 9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20",
                      *         "recipient": "outlayer-agent-key",
                      *         "nonce_base64": "b3V0bGF5ZXIvYWdlbnQta2V5L3YxL25vbmNlAAAAAAA="
-                     *       }
+                     *       },
+                     *       "current_contract": null
                      *     }
                      */
                     "application/json": components["schemas"]["WalletContractSetupForOwner"];

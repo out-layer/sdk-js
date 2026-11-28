@@ -60,6 +60,38 @@ export function base64Encode(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+/** The bytes of base58 text (the alphabet NEAR writes keys in); `null` on any other text. */
+export function base58Bytes(text: string): Uint8Array | null {
+  let value = 0n;
+  for (const char of text) {
+    const digit = BASE58.indexOf(char);
+    if (digit < 0) return null;
+    value = value * 58n + BigInt(digit);
+  }
+  const out: number[] = [];
+  for (; value > 0n; value >>= 8n) out.unshift(Number(value & 0xffn));
+  for (const char of text) {
+    if (char !== '1') break;
+    out.unshift(0);
+  }
+  return Uint8Array.from(out);
+}
+
+/** Base58 text of `bytes`, in the alphabet NEAR writes keys in. */
+export function base58Encode(bytes: Uint8Array): string {
+  let value = 0n;
+  for (const byte of bytes) value = value * 256n + BigInt(byte);
+  let out = '';
+  for (; value > 0n; value /= 58n) out = BASE58[Number(value % 58n)] + out;
+  for (const byte of bytes) {
+    if (byte !== 0) break;
+    out = `1${out}`;
+  }
+  return out;
+}
+
 /** `value` in `bytes` bytes, little-endian. */
 export function le(value: bigint, bytes: number): Uint8Array {
   const out = new Uint8Array(bytes);

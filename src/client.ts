@@ -397,7 +397,9 @@ export class OutlayerClient {
    * The enclave's Ed25519 public key of this wallet's wallet contract, in hex:
    * the second half of the pair of keys the wallet contract's `w_init` takes
    * (the first is the agent's own public key, `AgentKey.publicKey`). For a
-   * wallet with an owner; any other wallet is refused with `400`.
+   * wallet with an owner; any other wallet is refused with `400`. The answer
+   * carries the keystore's signed statement of the key: hold it to
+   * `verifyTeeKey` before the key is used.
    */
   getWalletContractKey(): Promise<WalletContractKeyResponse> {
     return runWithRetry(() => this.client.GET('/wallet/v1/contract/key'), this.retry);

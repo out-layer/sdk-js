@@ -172,13 +172,30 @@ function isCall(
 }
 
 /**
+ * The account a request sends its NEAR Intents transfer to, from its
+ * `mt_transfer` arguments: for a swap and a withdrawal to another chain, the
+ * 1Click deposit address. `null` when the request carries none.
+ */
+export function depositAddressOf(msg: RequestMessage): string | null {
+  const { action } = msg.promise;
+  if (action.action !== 'function_call') return null;
+  try {
+    const address = JSON.parse(new TextDecoder().decode(base64Decode(action.args))).receiver_id;
+    return typeof address === 'string' ? address : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether `msg` is the request for `op` from the wallet contract `account`,
  * and nothing else. The agent signs its half only when this holds.
  *
  * For a swap and a withdrawal to another chain the input goes to a 1Click
- * deposit address, which only the API knows: the token and the amount are
- * checked, and the address is taken as given. What 1Click then does with the
- * input is in the operation's `quote`.
+ * deposit address the API asked 1Click for: here the token and the amount are
+ * checked, and the address only for its form. What the address does with the
+ * input is 1Click's quote for it, which `checkRoute` reads from 1Click itself
+ * before the agent signs (`WalletContract.relay` runs both).
  */
 export function messageIsFor(msg: RequestMessage, op: Operation, account: string): boolean {
   if (msg.signer_id !== account || msg.promise.receiver_id === account) return false;
@@ -215,16 +232,9 @@ export function messageIsFor(msg: RequestMessage, op: Operation, account: string
       if (receiver_id !== INTENTS_CONTRACT || !isCall(action, 'mt_transfer', '1')) return false;
       const [token, amount] =
         op.kind === 'swap' ? [op.token_in, op.amount_in] : [op.token, op.amount];
-      let depositAddress: unknown;
-      try {
-        depositAddress = JSON.parse(
-          new TextDecoder().decode(base64Decode(action.args)),
-        ).receiver_id;
-      } catch {
-        return false;
-      }
+      const depositAddress = depositAddressOf(msg);
       return (
-        typeof depositAddress === 'string' &&
+        depositAddress !== null &&
         depositAddress !== account &&
         sameJson(action.args, { receiver_id: depositAddress, token_id: token, amount })
       );

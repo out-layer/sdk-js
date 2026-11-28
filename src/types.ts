@@ -3223,11 +3223,20 @@ export interface paths {
          *     While the owner has not, the answer is `done: false` with the
          *     `wallet_id` alone. Once the owner has, it carries the wallet
          *     contract's account, the agent's public key in the contract's pair, and
-         *     the agent's key sealed to the one-time key the setup was opened with.
+         *     what the owner's page sealed to the one-time key the setup was opened
+         *     with: the owner's NEP-413 signature and the public key that made it.
          *
-         *     The agent opens the sealed key with the private half of that one-time
-         *     key and checks that the public key of what it opened is
-         *     `agent_public_key`. `collectSetup` of `@outlayer/sdk` does both.
+         *     The agent takes none of the answer on the API's word. It opens the
+         *     seal with the private half of its one-time key; verifies the signature
+         *     over the message it builds itself from its owner's account (known from
+         *     its operator, never from an API answer) and the wallet id; reads on
+         *     chain that the signing key is a full-access key of the owner; derives
+         *     its key from the signature and requires its public key to be
+         *     `agent_public_key`; checks the keystore's statement over the enclave's
+         *     key (`GET /wallet/v1/contract/key`); accepts `account_id` only when it
+         *     is the `0s` address derived from the pair, the owner's account or a
+         *     sub-account of it; and reads on chain that the account holds exactly
+         *     that pair. `collectSetup` of `@outlayer/sdk` does all of it.
          *
          *     404 when the wallet has opened no setup.
          */
@@ -6019,6 +6028,12 @@ export interface components {
         WalletContractKeyResponse: {
             /** @description The enclave's Ed25519 public key of this wallet's wallet contract, 32 bytes in hex: the second half of the pair `w_init` takes. */
             tee_public_key: string;
+            /** @description The owner scope the key is in, `owner:<account>:<generation>`: the scope the keystore derived it in and stated it for. */
+            scope: string;
+            /** @description The registration key of the keystore that answered, `ed25519:<base58>`: the key the keystore DAO approved, which its `is_keystore_approved` view takes. */
+            keystore_public_key: string;
+            /** @description The Ed25519 signature by `keystore_public_key` over the UTF-8 text `OUTLAYER_WALLET_CONTRACT_TEE_KEY/V1`, `dao:<keystore DAO account>`, `scope:<scope>`, `wallet:<wallet id>`, `tee:<tee_public_key>`, one per line, joined by `\n`, with no newline at the end. The API carries the key and could put another there, so a client builds this text itself from the DAO, owner and wallet it knows, verifies the signature, and asks the DAO whether `keystore_public_key` is an approved keystore before it uses `tee_public_key`. */
+            tee_key_signature: string;
         };
         PutWalletContractRequest: {
             /** @description The NEAR account the wallet contract is installed on. */
@@ -6031,7 +6046,7 @@ export interface components {
             agent_public_key: string;
         };
         OpenWalletContractSetupRequest: {
-            /** @description The agent's one-time X25519 public key, 32 bytes in lowercase hex: what the owner's page seals the agent's key to. */
+            /** @description The agent's one-time X25519 public key, 32 bytes in lowercase hex: what the owner's page seals the owner's signature to. */
             recipient_public_key: string;
         };
         OpenWalletContractSetupResponse: {
@@ -6050,7 +6065,13 @@ export interface components {
             owner: string;
             /** @description The enclave's Ed25519 public key of this wallet's wallet contract, 32 bytes in hex: the second half of the pair the contract is initialised with. */
             tee_public_key: string;
-            /** @description The agent's one-time X25519 public key, 32 bytes in hex: what the agent's key is sealed to. */
+            /** @description The owner scope the key is in, `owner:<account>:<generation>`: the scope the keystore derived it in and stated it for. */
+            scope: string;
+            /** @description The registration key of the keystore that answered, `ed25519:<base58>`: the key the keystore DAO approved, which its `is_keystore_approved` view takes. */
+            keystore_public_key: string;
+            /** @description The Ed25519 signature by `keystore_public_key` over the UTF-8 text `OUTLAYER_WALLET_CONTRACT_TEE_KEY/V1`, `dao:<keystore DAO account>`, `scope:<scope>`, `wallet:<wallet id>`, `tee:<tee_public_key>`, one per line, joined by `\n`, with no newline at the end. The API carries the key and could put another there, so a client builds this text itself from the DAO, owner and wallet it knows, verifies the signature, and asks the DAO whether `keystore_public_key` is an approved keystore before it uses `tee_public_key`. */
+            tee_key_signature: string;
+            /** @description The agent's one-time X25519 public key, 32 bytes in hex: what the owner's signature is sealed to. */
             recipient_public_key: string;
             /** @description What the owner's own key signs (NEP-413). The agent's key is derived from the signature: its 32-byte seed is `HMAC-SHA256(key = "outlayer/agent-key/v1", signature ‖ message)`. The owner's wallet makes the same signature again on request, so whoever is given that signature holds the agent's key. */
             agent_key_request: {
@@ -6067,7 +6088,7 @@ export interface components {
         CompleteWalletContractSetupRequest: {
             /** @description The NEAR account the wallet contract is installed on. */
             account_id: string;
-            /** @description The 32-byte seed of the agent's key, sealed to `recipient_public_key`, in base64. The sealed bytes are the byte `0x02`, a one-time X25519 public key (32 bytes), and the AES-256-GCM ciphertext of the seed with its tag (48 bytes). The AES key is HKDF-SHA256 of the X25519 shared secret with an empty salt and the info `outlayer:encryption-keys:v1:seal:kdf` followed by the one-time public key and `recipient_public_key`; the nonce is twelve zero bytes and the additional data is `outlayer:wallet-contract:agent-key:<wallet_id>`. */
+            /** @description The owner's NEP-413 signature of the agent key's message (64 bytes) followed by the Ed25519 public key that made it (32 bytes), sealed to the agent's one-time key (`recipient_public_key`, which the setup link carries as `to`), in base64. The coordinator does not read it; it refuses what is not 145 bytes that start with `0x03`. The sealed bytes are the byte `0x03`, a one-time X25519 public key (32 bytes), and the AES-256-GCM ciphertext of the 96 bytes with its tag (112 bytes). The AES key is HKDF-SHA256 of the X25519 shared secret with an empty salt and the info `outlayer:encryption-keys:v1:seal:kdf` followed by the one-time public key and `recipient_public_key`; the nonce is twelve zero bytes and the additional data is `outlayer:wallet-contract:agent-key:<wallet_id>`. The agent verifies the signature over the message it builds itself, checks that the key is a full-access key of the owner account, and derives its key from the signature. */
             sealed_agent_key: string;
         };
         /** @description Where the setup of a wallet contract stands, for the agent that opened it. `account_id`, `agent_public_key` and `sealed_agent_key` are present when `done` is true and absent, not `null`, otherwise. */
@@ -11727,7 +11748,10 @@ export interface operations {
                 content: {
                     /**
                      * @example {
-                     *       "tee_public_key": "d968402f7d15eeca453381e4e78de992a9fa4cc64f8aae70538a4ecb133dd90d"
+                     *       "tee_public_key": "d968402f7d15eeca453381e4e78de992a9fa4cc64f8aae70538a4ecb133dd90d",
+                     *       "scope": "owner:alice.near:1",
+                     *       "keystore_public_key": "ed25519:FVen3X669xLzsi6N2V91DoiyzHzg1uAgqiT8jZ9nS96Z",
+                     *       "tee_key_signature": "a99b1882323409435bba6f594fe23f4d58f765345acca32a8d790f8d80ab8b7ea5cac207619381c8436dd3c8cfdca07f196d9c856ce2dcf83fc370152d113b01"
                      *     }
                      */
                     "application/json": components["schemas"]["WalletContractKeyResponse"];
@@ -11946,6 +11970,9 @@ export interface operations {
                      *       "wallet_id": "9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20",
                      *       "owner": "alice.near",
                      *       "tee_public_key": "d968402f7d15eeca453381e4e78de992a9fa4cc64f8aae70538a4ecb133dd90d",
+                     *       "scope": "owner:alice.near:1",
+                     *       "keystore_public_key": "ed25519:FVen3X669xLzsi6N2V91DoiyzHzg1uAgqiT8jZ9nS96Z",
+                     *       "tee_key_signature": "a99b1882323409435bba6f594fe23f4d58f765345acca32a8d790f8d80ab8b7ea5cac207619381c8436dd3c8cfdca07f196d9c856ce2dcf83fc370152d113b01",
                      *       "recipient_public_key": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
                      *       "agent_key_request": {
                      *         "message": "This signature is the key of your OutLayer agent. Sign it only on app.outlayer.ai, when you set up or recover an agent.\nOwner: alice.near\nWallet: 9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20",
@@ -11992,7 +12019,7 @@ export interface operations {
                 /**
                  * @example {
                  *       "account_id": "trader.alice.near",
-                 *       "sealed_agent_key": "Ag…"
+                 *       "sealed_agent_key": "Aw…"
                  *     }
                  */
                 "application/json": components["schemas"]["CompleteWalletContractSetupRequest"];
@@ -12014,7 +12041,7 @@ export interface operations {
                     "application/json": components["schemas"]["WalletContractResponse"];
                 };
             };
-            /** @description `bad_request`: `sealed_agent_key` is not base64 of at most 128 characters; `account_id` is not a NEAR account id, or is none of the owner's account, a sub-account of it, and the `0s` address of a fresh wallet contract, on a build the keystore DAO approved, of the pair the account holds; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
+            /** @description `bad_request`: `sealed_agent_key` is not base64 of 145 bytes (196 characters) that start with the byte `0x03`; `account_id` is not a NEAR account id, or is none of the owner's account, a sub-account of it, and the `0s` address of a fresh wallet contract, on a build the keystore DAO approved, of the pair the account holds; the account does not answer `w_public_key` with a pair of keys (the two-key wallet contract is not installed on it); or the pair's second half is not this wallet's key. */
             400: {
                 headers: {
                     [name: string]: unknown;

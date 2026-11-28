@@ -27,10 +27,21 @@ export { fromHex, toHex } from './custody/bytes.js';
 export { CustodyError } from './custody/errors.js';
 export {
   REQUEST_TIMEOUT_SECS,
+  depositAddressOf,
   encodeRequestMessage,
   messageIsFor,
   requestHash,
 } from './custody/message.js';
+export { MAX_SLIPPAGE_BPS, ONE_CLICK_URL, blockchainId, checkRoute } from './custody/route.js';
+export type { RouteOptions } from './custody/route.js';
+export {
+  KEYSTORE_DAO_IDS,
+  NEAR_RPC_URLS,
+  TEE_KEY_STATEMENT_TAG,
+  teeKeyStatement,
+  verifyTeeKey,
+} from './custody/teeKey.js';
+export type { TeeKeyAnswer, TeeKeyExpectation } from './custody/teeKey.js';
 export type {
   FunctionCallAction,
   Operation,
@@ -45,8 +56,10 @@ export {
   verifyTeeHalf,
 } from './custody/keys.js';
 export type { SignedRequestHeaders } from './custody/keys.js';
-export { SetupKey, collectSetup, openSetup } from './custody/setup.js';
+export { AGENT_KEY_SEALED_FORMAT, SetupKey, collectSetup, openSetup } from './custody/setup.js';
+export { NEP413_TAG, nep413Hash, verifyNep413 } from './custody/nep413.js';
+export type { Nep413Request } from './custody/nep413.js';
 export { WALLET_CONTRACT_CODE_HASH_HEX, deterministicAccount, stateBytes, stateInitBytes } from './custody/deterministic.js';
-export type { OpenedSetup } from './custody/setup.js';
+export type { OpenedSetup, OwnerSignature } from './custody/setup.js';
 export { OPERATION_PATH, WalletContract } from './custody/client.js';
 export type { OperationState, WalletContractOptions } from './custody/client.js';

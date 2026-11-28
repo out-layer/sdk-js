@@ -13,7 +13,25 @@ All notable changes to `@outlayer/sdk`. The format follows [Keep a Changelog](ht
   signature (`WalletContractOptions` takes `teePublicKey`: the enclave's half
   is verified before the agent signs its own). `SetupKey`, `openSetup()` and
   `collectSetup()` open a setup for the owner and collect the agent's key,
-  sealed to a one-time key. Nothing of the binding methods changes.
+  derived from the owner's NEP-413 signature, which the owner's page seals
+  with its key to a one-time key the setup link carries (`&to=`).
+  `collectSetup` verifies the signature (`verifyNep413`), that its key is a
+  full-access key of `owner` and that the account holds the pair on chain,
+  all through the NEAR RPC; the account is taken only as the `0s` address of
+  the pair on an accepted build (option `walletContractBuilds`), `owner`
+  itself or an account under `owner`, and any other is refused; it takes the enclave's key only with the
+  keystore's signed statement of it, for the wallet's `owner`, by a keystore
+  the DAO approves (`verifyTeeKey`; options `network`, `keystoreDaoId`,
+  `rpcUrl`, `walletId`). `relay` signs a swap or a withdrawal to another chain
+  only when 1Click's own quote of the deposit address is the operation
+  (`checkRoute`; options `oneClickUrl`, `maxSlippageBps`): its `amountIn` is
+  the operation's amount, it names no `referral`, and the deadline it was
+  requested with is no further than 24 hours ahead. `WalletContractOptions`
+  takes `network` (`mainnet` by default), which chooses the API when
+  `baseUrl` is not given. `WalletContract.ask(id, …)` and `get(id)` throw
+  a `CustodyError` for an answer that names another id, so `run` and `relay`
+  sign one request per id of the agent's own. Nothing of the binding methods
+  changes.
 
 ### Changed
 

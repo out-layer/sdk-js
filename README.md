@@ -177,7 +177,13 @@ the agent its key.
 ```ts
 import { collectSetup, openSetup } from '@outlayer/sdk';
 
-const options = { apiKey: process.env.OUTLAYER_API_KEY! };
+const options = {
+  apiKey: process.env.OUTLAYER_API_KEY!,
+  // the wallet's owner account, from the agent's operator or configuration:
+  // never from an API answer
+  owner: 'alice.near',
+  // network: 'testnet',
+};
 const setup = await openSetup(options);
 // Give setup.url to the wallet's owner. Keep setup.key in memory.
 
@@ -192,8 +198,34 @@ const collected = await collectSetup(options, setup.key);
 make the key again with `AgentKey.fromSeed(seed)`. The key comes from one
 signature of the owner's own key, so the owner can derive it again.
 
-`collectSetup` refuses a key that is not the agent's key in the contract's
-pair. `client.getWalletContract()` reads the account and that public key back;
+The link carries the setup's one-time key (`#setup=<token>&to=<key>`): the
+owner's page seals to the key in the link, never to one the API names. What it
+seals is the owner's NEP-413 signature and the key that made it, not the
+agent's key: anyone who knows the one-time public key can seal to it, so the
+agent derives its key itself. `collectSetup` verifies the signature over the
+message it builds from `owner` and the wallet id (option `walletId` pins the
+wallet, when the agent recorded it), reads through a NEAR RPC (FastNEAR's by
+default; option `rpcUrl`, never the API) that the key is a full-access key of
+`owner`, and derives the agent's key as the page does. It takes the enclave's
+key only with the keystore's signed statement of it for `owner` and this
+wallet, once the keystore DAO (`dao.outlayer.near`, `dao.outlayer.testnet`;
+option `keystoreDaoId`) answers that the signing keystore is approved. It
+takes the account only when it is the `0s` address of that pair on the
+published build (option `walletContractBuilds`), `owner` itself, or an account
+under `owner` (`….<owner>`), and the chain shows it holds exactly that pair
+(`w_public_key`). Any other account is refused whatever it answers: anyone can
+deploy a contract that returns a pair. An account of the owner's is the
+owner's to keep, with whatever else runs there.
+
+`owner` is what all of this is held to, so it comes from the agent's operator
+or its configuration. No API answer is a source for it: not the setup, and not
+`exit_owner` of the wallet's status.
+
+`verifyTeeKey` is the statement check for the answer of
+`client.getWalletContractKey()`; `verifyNep413` is the signature check.
+
+`collectSetup` refuses a key that is not the agent's key the API recorded.
+`client.getWalletContract()` reads the account and that public key back;
 it throws `NotFoundError` for a wallet with no wallet contract.
 `client.getWalletContractKey()` and `client.putWalletContract(account)` are
 the same steps for an owner who installs the contract without the page.
@@ -210,7 +242,7 @@ const contract = new WalletContract({
   account: 'trader.alice.near', // the wallet contract's account
   key,
   teePublicKey, // the enclave's half is verified against it
-  // baseUrl: 'https://testnet-api.outlayer.ai',
+  // network: 'testnet', // the API of the network; `baseUrl` overrides it
 });
 
 const op = { kind: 'transfer', to: 'bob.near', amount: '1000000000000000000000000' } as const;
@@ -227,7 +259,13 @@ if (state.status === 'pending_approval') {
 64 letters, digits, `-`, `_`). When the answer is `awaiting_signature` it
 checks that the returned request is the operation that was asked for, from
 this wallet contract (`messageIsFor`), verifies the enclave's half against
-`teePublicKey`, and refuses a second request under an id it has signed for.
+`teePublicKey`, and refuses a second request under an id it has signed for
+(an answer that names another id than the one asked for is refused: `ask` and
+`get` throw). A swap and a withdrawal to another chain are signed only when
+1Click's own quote of the deposit address is the operation (its `amountIn`
+is the operation's amount, and it names no `referral`), still waiting for
+its deposit, requested with a deadline (`quoteRequest.deadline`) ahead and no
+further than 24 hours (the API asks for 600 seconds).
 Then it signs the agent's half, last, and relays. It returns where the
 operation stands:
 
@@ -256,13 +294,23 @@ unit; a token is its id inside NEAR Intents (`nep141:<account>`).
 | `cross_chain_withdraw` | `to`, `amount`, `token`, `chain` | A withdrawal to another chain through 1Click |
 
 For a swap and a withdrawal to another chain the state carries `quote` (what
-1Click quoted) and, once the input was sent, `route_status` on a read.
+1Click quoted) and, once the input was sent, `route_status` on a read. Before
+it signs one, `relay` reads 1Click's own quote of the request's deposit address
+(`GET /v0/status`, from `oneClickUrl`, `https://1click.chaindefuser.com` by
+default) and signs only a quote that is the operation: the same input and
+amount, the output to the wallet contract (a swap, at least `min_out`) or to
+`to` as the same token on `chain` (a withdrawal), refunds to the wallet
+contract, no app fee or rebate, a slippage of at most `maxSlippageBps` (100,
+1%, by default: what the API asks for), and an address still waiting for its
+deposit before its deadline. A request already signed under the same id is
+sent again without a second check. An unreachable 1Click signs nothing.
 
 A refusal is a `CustodyError`: one of the API's, with its `code` and `status`
 (`policy_denied`, `wallet_frozen`, `wallet_busy`, `below_min_amount_out`, …),
 or one of the client's own checks, with neither: the returned request is not
-the operation that was asked for, or the enclave's half does not verify. In
-both of the latter cases nothing was signed.
+the operation that was asked for, the enclave's half does not verify, or
+1Click's quote is not the operation. In each of the latter cases nothing was
+signed.
 
 ## Documentation
 

@@ -75,12 +75,16 @@ export async function getEncryptionPubkey(baseUrl: string, key: EncryptionKeyOf)
  * recipient alone and the nonce is fixed, so a pair is used for ONE message:
  * {@link sealTo} makes a fresh one each time and is what callers use. Not
  * exported from the package; here for the test that pins the format.
+ * `format` is the first byte: {@link SEALED_FORMAT} for a component's input,
+ * another for another kind of message (the agent key of a wallet contract
+ * setup), so that one kind is never opened as the other.
  */
 export async function sealWith(
   ephemeral: CryptoKeyPair,
   recipientPublicKeyHex: string,
   plaintext: Uint8Array,
   aad: Uint8Array = new Uint8Array(),
+  format: number = SEALED_FORMAT,
 ): Promise<Uint8Array> {
   const recipientRaw = fromHex(recipientPublicKeyHex);
   if (recipientRaw.length !== KEY_LEN) throw new Error('the recipient key is not 32 bytes');
@@ -116,7 +120,7 @@ export async function sealWith(
     key,
     plaintext as BufferSource,
   );
-  return concat(Uint8Array.of(SEALED_FORMAT), ephemeralPublic, new Uint8Array(sealed));
+  return concat(Uint8Array.of(format), ephemeralPublic, new Uint8Array(sealed));
 }
 
 /** What {@link openWith} throws when a sealed message does not open. */
@@ -129,16 +133,18 @@ export class SealOpenError extends Error {
 
 /**
  * Opens what {@link sealWith} made for the key pair `recipient`, bound to the
- * same `aad`. Throws {@link SealOpenError} when the message was sealed to
- * another key, under another `aad`, or was changed. Not exported from the
- * package; a component opens its input inside a run.
+ * same `aad` and the same first byte `format`. Throws {@link SealOpenError}
+ * when the message was sealed to another key, under another `aad`, or was
+ * changed. Not exported from the package; a component opens its input inside
+ * a run.
  */
 export async function openWith(
   recipient: CryptoKeyPair,
   sealed: Uint8Array,
   aad: Uint8Array = new Uint8Array(),
+  format: number = SEALED_FORMAT,
 ): Promise<Uint8Array> {
-  if (sealed[0] !== SEALED_FORMAT || sealed.length < 1 + KEY_LEN + TAG_LEN) {
+  if (sealed[0] !== format || sealed.length < 1 + KEY_LEN + TAG_LEN) {
     throw new Error('not a sealed message');
   }
   const ephemeralPublic = sealed.slice(1, 1 + KEY_LEN);

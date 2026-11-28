@@ -3,6 +3,7 @@
  * what the enclave prepared, sign the agent's half last, relay.
  */
 
+import { NETWORK_BASE_URLS, type Network } from '../http.js';
 import { fromHex, toHex } from './bytes.js';
 import { CustodyError } from './errors.js';
 import { type AgentKey, verifyTeeHalf } from './keys.js';
@@ -13,6 +14,7 @@ import {
   messageIsFor,
   requestHash,
 } from './message.js';
+import { checkRoute } from './route.js';
 
 /** The path every operation is asked for at, and the root of the others. */
 export const OPERATION_PATH = '/wallet/contract/v1/operations';
@@ -44,7 +46,9 @@ export interface WalletContractOptions {
   /** The wallet contract's account: who the agent is. */
   account: string;
   key: AgentKey;
-  /** `https://api.outlayer.ai` by default. */
+  /** The network the wallet contract is on: `mainnet` by default. */
+  network?: Network;
+  /** The network's API (`https://api.outlayer.ai` on mainnet) by default. */
   baseUrl?: string;
   /**
    * The TEE's public key in the contract's pair, in hex: the second half of
@@ -53,6 +57,17 @@ export interface WalletContractOptions {
    * enclave has held to the owner's policy.
    */
   teePublicKey: string;
+  /**
+   * 1Click's API, `https://1click.chaindefuser.com` by default: where the
+   * route of a swap and of a withdrawal to another chain is read before the
+   * agent signs. Never one the API names.
+   */
+  oneClickUrl?: string;
+  /**
+   * The most slippage a 1Click quote may carry, in basis points: 100 (1%) by
+   * default, what the API asks 1Click for.
+   */
+  maxSlippageBps?: number;
   fetch?: typeof fetch;
 }
 
@@ -67,7 +82,10 @@ export class WalletContract {
   private readonly signed = new Map<string, string>();
 
   constructor(private readonly options: WalletContractOptions) {
-    this.baseUrl = (options.baseUrl ?? 'https://api.outlayer.ai').replace(/\/+$/, '');
+    this.baseUrl = (options.baseUrl ?? NETWORK_BASE_URLS[options.network ?? 'mainnet']).replace(
+      /\/+$/,
+      '',
+    );
     this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -107,12 +125,27 @@ export class WalletContract {
   }
 
   /**
+   * The state the API answered for the operation `id`, refused when it names
+   * another id: what this client signed is recorded by id, so an answer under
+   * another one would let a second request be signed for the same operation.
+   */
+  private held(id: string, state: OperationState): OperationState {
+    if (state.id !== id) {
+      throw new CustodyError(
+        `the API answered for the operation \`${String(state.id)}\`, not for \`${id}\` that was asked for; nothing was signed`,
+      );
+    }
+    return state;
+  }
+
+  /**
    * Ask for an operation under `id`. Asking again under the same id continues
    * the same operation: after its approvers voted, this is how it goes on.
+   * An answer that names another id is refused.
    */
   async ask(id: string, op: Operation): Promise<OperationState> {
     checkDecimalFields(op);
-    return this.send('POST', OPERATION_PATH, JSON.stringify({ id, op }));
+    return this.held(id, await this.send('POST', OPERATION_PATH, JSON.stringify({ id, op })));
   }
 
   /**
@@ -125,16 +158,22 @@ export class WalletContract {
     return answer.operations;
   }
 
-  /** Where the operation `id` stands. */
-  get(id: string): Promise<OperationState> {
-    return this.send('GET', `${OPERATION_PATH}/${id}`, '');
+  /** Where the operation `id` stands. An answer that names another id is refused. */
+  async get(id: string): Promise<OperationState> {
+    return this.held(id, await this.send('GET', `${OPERATION_PATH}/${id}`, ''));
   }
 
   /**
    * Sign the agent's half of a prepared operation and send it. Refuses a
    * request that is not the operation `op`, is not this wallet contract's,
    * does not carry the TEE's half, or is a second request under an id this
-   * client has signed for: one id is one move.
+   * client has signed for: one id is one move. `state` is the answer of
+   * {@link ask} or {@link get} for the agent's own id, which hold the answer
+   * to that id; a state of {@link list} carries the id the API gave it. A
+   * swap and a withdrawal to
+   * another chain are signed only when 1Click's own quote for the deposit
+   * address is the operation (`checkRoute`); an unreachable 1Click signs
+   * nothing.
    */
   async relay(state: OperationState, op: Operation): Promise<OperationState> {
     const msg = state.message;
@@ -159,6 +198,19 @@ export class WalletContract {
       throw new CustodyError(
         `another request was already signed for \`${state.id}\`; this one was not signed`,
       );
+    }
+    // The route is checked before the first signature of this request. Sent
+    // again (a relay whose answer was lost), the same request is the one
+    // already checked and signed, and its deposit address may have its
+    // deposit by now.
+    if (before === undefined) {
+      await checkRoute(msg, op, this.options.account, {
+        fetch: this.fetch,
+        ...(this.options.oneClickUrl ? { oneClickUrl: this.options.oneClickUrl } : {}),
+        ...(this.options.maxSlippageBps !== undefined
+          ? { maxSlippageBps: this.options.maxSlippageBps }
+          : {}),
+      });
     }
     this.signed.set(state.id, hash);
     const half = await this.options.key.signHalf(msg);

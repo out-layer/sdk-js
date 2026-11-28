@@ -70,8 +70,10 @@ export class AgentKey {
 
   /**
    * The agent's half over `msg`, 64 bytes. Call it only for a request
-   * {@link messageIsFor} accepted: this signature is what lets the wallet
-   * contract execute it.
+   * {@link messageIsFor} accepted and, for a swap or a withdrawal to another
+   * chain, whose deposit address {@link checkRoute} accepted (1Click's own
+   * quote of the address is the operation): this signature is what lets the
+   * wallet contract execute it. `WalletContract.relay` makes both checks.
    */
   async signHalf(msg: RequestMessage): Promise<Uint8Array> {
     return this.sign(concat(AGENT_PREFIX, requestHash(msg)));

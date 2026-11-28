@@ -396,6 +396,44 @@ describe('the client', () => {
       status: 403,
     });
   });
+
+  it('names the operation that is prepared and waits, apart from the other conflicts', async () => {
+    const key = await agent();
+    const refusing = (body: Record<string, unknown>) =>
+      new WalletContract({
+        account: ACCOUNT,
+        key,
+        teePublicKey,
+        fetch: (async () =>
+          new Response(JSON.stringify(body), {
+            status: 409,
+          })) as unknown as typeof globalThis.fetch,
+      });
+    const waiting = await refusing({
+      error: 'operation_waiting',
+      message: 'the operation `pay-1` of this wallet is prepared and not over',
+      waiting_operation_id: 'pay-1',
+    })
+      .ask('pay-2', op)
+      .catch((e: unknown) => e);
+    expect(waiting).toBeInstanceOf(CustodyError);
+    expect(waiting).toMatchObject({
+      code: 'operation_waiting',
+      status: 409,
+      waitingOperationId: 'pay-1',
+      message: 'the operation `pay-1` of this wallet is prepared and not over',
+    });
+
+    const conflict = await refusing({
+      error: 'conflict',
+      message: 'the request nonce was already taken',
+      waiting_operation_id: 'pay-1',
+    })
+      .ask('pay-2', op)
+      .catch((e: unknown) => e);
+    expect(conflict).toMatchObject({ code: 'conflict', status: 409 });
+    expect((conflict as CustodyError).waitingOperationId).toBeUndefined();
+  });
 });
 
 describe('NEP-413', () => {

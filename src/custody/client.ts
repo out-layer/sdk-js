@@ -115,10 +115,14 @@ export class WalletContract {
       // not JSON: reported below as it came
     }
     if (!response.ok) {
+      const code = typeof answer.error === 'string' ? answer.error : undefined;
       throw new CustodyError(
         typeof answer.message === 'string' ? answer.message : text || response.statusText,
-        typeof answer.error === 'string' ? answer.error : undefined,
+        code,
         response.status,
+        code === 'operation_waiting' && typeof answer.waiting_operation_id === 'string'
+          ? { waitingOperationId: answer.waiting_operation_id }
+          : undefined,
       );
     }
     return answer as unknown as T;

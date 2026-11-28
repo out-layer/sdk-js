@@ -3469,12 +3469,14 @@ export interface paths {
          *     `GET /wallet/contract/v1/operations/{id}`.
          *
          *     **A wallet has one prepared request at a time.** While an operation
-         *     is `awaiting_signature` and the wallet contract would still take its
-         *     request, another operation is not prepared: it is refused with
-         *     `409 conflict`, naming the operation that waits, and nothing exists
-         *     under the new `id`. Relay the waiting operation, or ask again once its
-         *     ten minutes have ended. Asking under the waiting operation's own `id`
-         *     answers where it stands.
+         *     is `awaiting_signature`, or `relayed` with no outcome yet, and the
+         *     wallet contract would still take its request, another operation is not
+         *     prepared: it is refused with `409 operation_waiting`, whose
+         *     `waiting_operation_id` is the waiting operation's `id`
+         *     (`OperationWaitingResponse`), and nothing exists under the new `id`.
+         *     Relay the waiting operation or read it by its `id`, or ask again once
+         *     its ten minutes have ended. Asking under the waiting operation's own
+         *     `id` answers where it stands.
          *
          *     A live quote is counted against the wallet's quote budget before it
          *     is asked for. When the counter cannot be reached the operation is
@@ -3602,6 +3604,17 @@ export interface components {
              * @default false
              */
             use_bound_identity: boolean;
+            /**
+             * @description How the program's stdout comes back in `output`. `Json` parses it
+             *     as JSON, and a run whose stdout is not JSON ends `failed` with
+             *     `Failed to parse output as JSON`. `Text` returns it as a string.
+             *     `Bytes` returns it base64-encoded, as a string. The same three
+             *     formats `request_execution` takes on chain. The run that carries
+             *     out a task the owner approved answers in JSON.
+             * @default Json
+             * @enum {string}
+             */
+            response_format: "Json" | "Text" | "Bytes";
             /**
              * @description The stored secret this run reads: the row `account_id` stored for
              *     this project under `profile`, decrypted inside the TEE only if the
@@ -4019,7 +4032,7 @@ export interface components {
          */
         RequestStatus: "pending_deposit" | "processing" | "success" | "completed" | "partially_failed" | "failed" | "refunded" | "pending_approval" | "approved" | "rejected" | "cancelled" | "needs_review";
         /** @enum {string} */
-        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "wallet_contract_refused" | "policy_denied" | "not_approver" | "insufficient_balance" | "storage_not_registered" | "recipient_not_found" | "memo_not_supported" | "below_min_amount_out" | "above_max_amount_in" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "no_liquidity" | "upstream_rejected" | "operation_limit_reached" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "route_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
+        ErrorCode: "missing_auth" | "invalid_api_key" | "session_required" | "session_replaced" | "not_wallet_owner" | "missing_wallet_id" | "invalid_wallet_id" | "missing_signature" | "invalid_signature" | "missing_timestamp" | "timestamp_expired" | "wallet_frozen" | "wallet_contract_refused" | "policy_denied" | "not_approver" | "insufficient_balance" | "storage_not_registered" | "recipient_not_found" | "memo_not_supported" | "below_min_amount_out" | "above_max_amount_in" | "wallet_underfunded" | "vault_underfunded" | "invalid_address" | "rate_limited" | "unsupported_chain" | "unsupported_token" | "no_liquidity" | "upstream_rejected" | "operation_limit_reached" | "request_not_found" | "approval_not_found" | "already_approved" | "bad_request" | "conflict" | "operation_waiting" | "duplicate_idempotency_key" | "onchain_tx_failed" | "internal_error" | "keystore_error" | "service_unavailable" | "chain_unavailable" | "upstream_unavailable" | "route_unavailable" | "chain_refused" | "tx_rejected_by_node" | "confidential_jwt_expired" | "agent_connect_denied" | "wallet_busy" | "binding_not_found";
         ErrorResponse: {
             error: components["schemas"]["ErrorCode"];
             message?: string;
@@ -4226,6 +4239,14 @@ export interface components {
             terminal: false;
             /** @description Seconds until the counter that refused this clears; null when unknown. */
             retry_after_seconds?: number | null;
+        };
+        /** @description The `409` of `POST /wallet/contract/v1/operations` when another operation of the wallet is prepared and not over: it waits for the agent's half, or it was relayed and has no outcome yet, and the wallet contract would still take its request. Nothing exists under the `id` that was asked for. */
+        OperationWaitingResponse: {
+            /** @enum {string} */
+            error: "operation_waiting";
+            message: string;
+            /** @description The `id` the agent asked for the waiting operation under. Relay it, or read it at `GET /wallet/contract/v1/operations/{id}`; once it is over, or its ten minutes have ended, the next operation is prepared. */
+            waiting_operation_id: string;
         };
         /**
          * @description A `409` meaning another money-moving operation is using this wallet.
@@ -6113,13 +6134,13 @@ export interface components {
             account_id: string;
         };
         WalletContractKeyResponse: {
-            /** @description The enclave's Ed25519 public key of this wallet's wallet contract, 32 bytes in hex: the second half of the pair `w_init` takes. */
+            /** @description The enclave's Ed25519 public key of this wallet's wallet contract, 32 bytes in hex: the second half of the pair `w_init` takes. Used only once `tee_key_signature` verifies. */
             tee_public_key: string;
-            /** @description The owner scope the key is in, `owner:<account>:<generation>`: the scope the keystore derived it in and stated it for. */
+            /** @description The owner scope the key is in, `owner:<account>:<generation>`, as the keystore has it. The owner's page and the agent's SDK check that `<account>` is the wallet's owner. */
             scope: string;
-            /** @description The registration key of the keystore that answered, `ed25519:<base58>`: the key the keystore DAO approved, which its `is_keystore_approved` view takes. */
+            /** @description The registration key of the keystore that answered, `ed25519:<base58>`. Before `tee_public_key` is used, the owner's page and the agent's SDK ask the keystore DAO (`is_keystore_approved(public_key)` on `dao.outlayer.near`, or `dao.outlayer.testnet`) whether it is an approved keystore's key. */
             keystore_public_key: string;
-            /** @description The Ed25519 signature by `keystore_public_key` over the UTF-8 text `OUTLAYER_WALLET_CONTRACT_TEE_KEY/V1`, `dao:<keystore DAO account>`, `scope:<scope>`, `wallet:<wallet id>`, `tee:<tee_public_key>`, one per line, joined by `\n`, with no newline at the end. The API carries the key and could put another there, so a client builds this text itself from the DAO, owner and wallet it knows, verifies the signature, and asks the DAO whether `keystore_public_key` is an approved keystore before it uses `tee_public_key`. */
+            /** @description The Ed25519 signature by `keystore_public_key`, 64 bytes in hex, over the keystore's statement: the UTF-8 text of five lines joined by `\n`, with no newline at the end: `OUTLAYER_WALLET_CONTRACT_TEE_KEY/V1`, `dao:<keystore DAO account>`, `scope:<scope>`, `wallet:<wallet id>`, `tee:<tee_public_key>`. The owner's page and the agent's SDK verify it before they use `tee_public_key`: the API carries the key, and a key other than the keystore's fails the signature. */
             tee_key_signature: string;
         };
         PutWalletContractRequest: {
@@ -6150,13 +6171,13 @@ export interface components {
             wallet_id: string;
             /** @description The account that owns the wallet: the one whose key signs. */
             owner: string;
-            /** @description The enclave's Ed25519 public key of this wallet's wallet contract, 32 bytes in hex: the second half of the pair the contract is initialised with. */
+            /** @description The enclave's Ed25519 public key of this wallet's wallet contract, 32 bytes in hex: the second half of the pair the contract is initialised with. Used only once `tee_key_signature` verifies. */
             tee_public_key: string;
-            /** @description The owner scope the key is in, `owner:<account>:<generation>`: the scope the keystore derived it in and stated it for. */
+            /** @description The owner scope the key is in, `owner:<account>:<generation>`, as the keystore has it. The owner's page and the agent's SDK check that `<account>` is the wallet's owner. */
             scope: string;
-            /** @description The registration key of the keystore that answered, `ed25519:<base58>`: the key the keystore DAO approved, which its `is_keystore_approved` view takes. */
+            /** @description The registration key of the keystore that answered, `ed25519:<base58>`. Before `tee_public_key` is used, the owner's page and the agent's SDK ask the keystore DAO (`is_keystore_approved(public_key)` on `dao.outlayer.near`, or `dao.outlayer.testnet`) whether it is an approved keystore's key. */
             keystore_public_key: string;
-            /** @description The Ed25519 signature by `keystore_public_key` over the UTF-8 text `OUTLAYER_WALLET_CONTRACT_TEE_KEY/V1`, `dao:<keystore DAO account>`, `scope:<scope>`, `wallet:<wallet id>`, `tee:<tee_public_key>`, one per line, joined by `\n`, with no newline at the end. The API carries the key and could put another there, so a client builds this text itself from the DAO, owner and wallet it knows, verifies the signature, and asks the DAO whether `keystore_public_key` is an approved keystore before it uses `tee_public_key`. */
+            /** @description The Ed25519 signature by `keystore_public_key`, 64 bytes in hex, over the keystore's statement: the UTF-8 text of five lines joined by `\n`, with no newline at the end: `OUTLAYER_WALLET_CONTRACT_TEE_KEY/V1`, `dao:<keystore DAO account>`, `scope:<scope>`, `wallet:<wallet id>`, `tee:<tee_public_key>`. The owner's page and the agent's SDK verify it before they use `tee_public_key`: the API carries the key, and a key other than the keystore's fails the signature. */
             tee_key_signature: string;
             /** @description The agent's one-time X25519 public key, 32 bytes in hex: what the owner's signature is sealed to. */
             recipient_public_key: string;
@@ -11865,7 +11886,7 @@ export interface operations {
                      *       "tee_public_key": "d968402f7d15eeca453381e4e78de992a9fa4cc64f8aae70538a4ecb133dd90d",
                      *       "scope": "owner:alice.near:1",
                      *       "keystore_public_key": "ed25519:FVen3X669xLzsi6N2V91DoiyzHzg1uAgqiT8jZ9nS96Z",
-                     *       "tee_key_signature": "a99b1882323409435bba6f594fe23f4d58f765345acca32a8d790f8d80ab8b7ea5cac207619381c8436dd3c8cfdca07f196d9c856ce2dcf83fc370152d113b01"
+                     *       "tee_key_signature": "5204a6370675c2478cdeb4f1d8e55707f9bfc912f2ab66301ef75148ac3687bed1b037e1828587a88c6d038fcd6318569160aa0cf7ea2fabd4b3385f22a6be0c"
                      *     }
                      */
                     "application/json": components["schemas"]["WalletContractKeyResponse"];
@@ -12086,7 +12107,7 @@ export interface operations {
                      *       "tee_public_key": "d968402f7d15eeca453381e4e78de992a9fa4cc64f8aae70538a4ecb133dd90d",
                      *       "scope": "owner:alice.near:1",
                      *       "keystore_public_key": "ed25519:FVen3X669xLzsi6N2V91DoiyzHzg1uAgqiT8jZ9nS96Z",
-                     *       "tee_key_signature": "a99b1882323409435bba6f594fe23f4d58f765345acca32a8d790f8d80ab8b7ea5cac207619381c8436dd3c8cfdca07f196d9c856ce2dcf83fc370152d113b01",
+                     *       "tee_key_signature": "5204a6370675c2478cdeb4f1d8e55707f9bfc912f2ab66301ef75148ac3687bed1b037e1828587a88c6d038fcd6318569160aa0cf7ea2fabd4b3385f22a6be0c",
                      *       "recipient_public_key": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
                      *       "agent_key_request": {
                      *         "message": "This signature is the key of your OutLayer agent. Sign it only on app.outlayer.ai, when you set up or recover an agent.\nOwner: alice.near\nWallet: 9c3c9e10-1c1f-4f5e-9c4a-1d7b9a8f3c20",
@@ -12270,13 +12291,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `conflict`: the request's nonce was already taken (sign the request again with another nonce), or the `id` was used for another content, or 20 operations of this wallet already wait for the approvers, or another operation of this wallet is prepared and waits for the agent's half (`message` names it). `wallet_busy`: another operation is using this wallet (`WalletBusyResponse`). */
+            /** @description `conflict`: the request's nonce was already taken (sign the request again with another nonce), or the `id` was used for another content, or 20 operations of this wallet already wait for the approvers. `operation_waiting`: another operation of this wallet is prepared and not over; `waiting_operation_id` names it (`OperationWaitingResponse`). `wallet_busy`: another operation is using this wallet (`WalletBusyResponse`). */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["WalletBusyResponse"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["OperationWaitingResponse"] | components["schemas"]["WalletBusyResponse"];
                 };
             };
             /** @description `operation_limit_reached`: the wallet's counted ceiling on operations (`OperationLimitReachedResponse`). `rate_limited`: too many quotes for this wallet; try later. */

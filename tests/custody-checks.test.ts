@@ -8,19 +8,23 @@ import {
   WalletContract,
   checkRoute,
   fromHex,
+  policyStatement,
   requestHash,
   teeKeyStatement,
   toHex,
+  verifyPolicyStatement,
   verifyTeeKey,
 } from '../src/custody.js';
-import { base64Encode } from '../src/custody/bytes.js';
+import { base64Decode, base64Encode } from '../src/custody/bytes.js';
 import messages from './fixtures/custody/messages.json';
 import recordedAnswer from './fixtures/custody/oneclick_status_swap.json';
+import POLICY from './fixtures/custody/policy_statement_vector.json';
 import STATEMENT from './fixtures/custody/tee_key_statement_vector.json';
 import { daoAnswers } from './teeKeyHelpers.js';
 
 // `tee_key_statement_vector.json` is the keystore's own vector
 // (`keystore-worker/src/fixtures`), copied byte for byte.
+// `policy_statement_vector.json` likewise.
 // `oneclick_status_swap.json` is 1Click's answer to `GET /v0/status` for a
 // fresh mainnet quote, recorded as it came.
 
@@ -114,6 +118,108 @@ describe("the keystore's statement of the TEE's key", () => {
       throw new TypeError('fetch failed');
     }) as unknown as typeof fetch;
     await expect(verifyTeeKey(answer, expected(down))).rejects.toThrow(/could not be read/);
+  });
+});
+
+describe("the keystore's statement over a policy", () => {
+  const answer = {
+    policy_json: POLICY.policy_json,
+    keystore_public_key: POLICY.public_key,
+    policy_statement_signature: POLICY.signature,
+  };
+
+  /** An RPC that answers `is_keystore_approved` with `approved` and records what it was asked. */
+  function rpc(approved: unknown) {
+    const asked: Record<string, unknown>[] = [];
+    const fetch = (async (url: string, init: RequestInit) => {
+      expect(url).toBe('https://rpc.test');
+      asked.push(JSON.parse(init.body as string).params);
+      return daoAnswers(approved);
+    }) as unknown as typeof globalThis.fetch;
+    return { asked, fetch };
+  }
+  const expected = (fetch: typeof globalThis.fetch) => ({
+    walletPubkey: POLICY.wallet,
+    encryptedData: POLICY.encrypted_base64,
+    keystoreDaoId: POLICY.dao,
+    rpcUrl: 'https://rpc.test',
+    fetch,
+  });
+
+  it("is the keystore's text", () => {
+    expect(
+      policyStatement(POLICY.dao, POLICY.wallet, POLICY.blob_sha256, POLICY.policy_sha256),
+    ).toBe(POLICY.statement);
+  });
+
+  it('gives the plaintext once the signature holds and the DAO approves the keystore', async () => {
+    const { asked, fetch } = rpc(true);
+    expect(await verifyPolicyStatement(answer, expected(fetch))).toBe(POLICY.policy_json);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
+      request_type: 'call_function',
+      finality: 'final',
+      account_id: POLICY.dao,
+      method_name: 'is_keystore_approved',
+      args_base64: base64Encode(
+        new TextEncoder().encode(JSON.stringify({ public_key: POLICY.public_key })),
+      ),
+    });
+  });
+
+  it('refuses a statement that is not of this ciphertext, plaintext, wallet and DAO', async () => {
+    const blob = base64Decode(POLICY.encrypted_base64);
+    const flipped = Uint8Array.from(blob);
+    flipped[0] = (flipped[0] as number) ^ 1;
+    const refusals: [string, Record<string, unknown>, Record<string, unknown>][] = [
+      ['another ciphertext', {}, { encryptedData: base64Encode(flipped) }],
+      ['a ciphertext cut short', {}, { encryptedData: base64Encode(blob.slice(0, -1)) }],
+      [
+        'another plaintext',
+        { policy_json: POLICY.policy_json.replace('alice.testnet', 'mallory.testnet') },
+        {},
+      ],
+      ['the same policy with a space', { policy_json: `${POLICY.policy_json} ` }, {}],
+      ['another wallet', {}, { walletPubkey: `ed25519:${'ab'.repeat(32)}` }],
+      ['a wallet key in another form', {}, { walletPubkey: POLICY.wallet.slice(8) }],
+      ["the other network's DAO", {}, { keystoreDaoId: 'dao.outlayer.near' }],
+      ['another keystore key', { keystore_public_key: `ed25519:${'1'.repeat(32)}` }, {}],
+      ['a key of another scheme', { keystore_public_key: 'secp256k1:abc' }, {}],
+      ['a signature cut short', { policy_statement_signature: POLICY.signature.slice(2) }, {}],
+      ['no plaintext', { policy_json: undefined }, {}],
+      [
+        'a ciphertext without its padding',
+        {},
+        { encryptedData: base64Encode(blob.slice(0, -2)).replace(/=+$/, '') },
+      ],
+      ['not base64', {}, { encryptedData: '!!!' }],
+      ['no ciphertext', {}, { encryptedData: '' }],
+    ];
+    for (const [name, change, against] of refusals) {
+      const { asked, fetch } = rpc(true);
+      await expect(
+        verifyPolicyStatement({ ...answer, ...change }, { ...expected(fetch), ...against }),
+        name,
+      ).rejects.toThrow(CustodyError);
+      expect(asked, `${name}: the DAO is read only for a signature that holds`).toHaveLength(0);
+    }
+    await expect(verifyPolicyStatement(null, expected(rpc(true).fetch))).rejects.toThrow(
+      CustodyError,
+    );
+  });
+
+  it('refuses a keystore the DAO does not approve, and a DAO it cannot read', async () => {
+    for (const approved of [false, 'true', null]) {
+      await expect(verifyPolicyStatement(answer, expected(rpc(approved).fetch))).rejects.toThrow(
+        /is not a keystore dao\.outlayer\.testnet approved/,
+      );
+    }
+    const down = (async () => {
+      throw new TypeError('fetch failed');
+    }) as unknown as typeof globalThis.fetch;
+    await expect(verifyPolicyStatement(answer, expected(down))).rejects.toThrow(
+      /could not be read .*the policy is not used/,
+    );
   });
 });
 

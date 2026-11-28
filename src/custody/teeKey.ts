@@ -129,7 +129,13 @@ export async function verifyTeeKey(answer: unknown, expected: TeeKeyExpectation)
     );
   }
 
-  if (!(await isKeystoreApproved(expected, keystore_public_key as string))) {
+  if (
+    !(await isKeystoreApproved(
+      expected,
+      keystore_public_key as string,
+      "the TEE's key is not used",
+    ))
+  ) {
     throw new CustodyError(
       `${keystore_public_key} is not a keystore ${expected.keystoreDaoId} approved: the TEE's key it states is not used`,
     );
@@ -137,10 +143,14 @@ export async function verifyTeeKey(answer: unknown, expected: TeeKeyExpectation)
   return tee_public_key;
 }
 
-/** `is_keystore_approved` of the DAO, read at the final block. */
-async function isKeystoreApproved(
-  expected: TeeKeyExpectation,
+/**
+ * `is_keystore_approved` of the DAO, read at the final block. `unused` ends
+ * the error of a DAO that cannot be read: what is not used because of it.
+ */
+export async function isKeystoreApproved(
+  expected: Pick<TeeKeyExpectation, 'keystoreDaoId' | 'rpcUrl' | 'fetch'>,
   publicKey: string,
+  unused: string,
 ): Promise<boolean> {
   const doFetch = expected.fetch ?? globalThis.fetch.bind(globalThis);
   let body: { result?: { result?: number[] }; error?: unknown };
@@ -164,13 +174,13 @@ async function isKeystoreApproved(
     body = await response.json();
   } catch (error) {
     throw new CustodyError(
-      `${expected.keystoreDaoId} could not be read through the NEAR RPC (${error instanceof Error ? error.message : String(error)}): the TEE's key is not used`,
+      `${expected.keystoreDaoId} could not be read through the NEAR RPC (${error instanceof Error ? error.message : String(error)}): ${unused}`,
     );
   }
   const bytes = body.result?.result;
   if (body.error || !Array.isArray(bytes)) {
     throw new CustodyError(
-      `${expected.keystoreDaoId} did not answer \`is_keystore_approved\`: the TEE's key is not used`,
+      `${expected.keystoreDaoId} did not answer \`is_keystore_approved\`: ${unused}`,
     );
   }
   try {

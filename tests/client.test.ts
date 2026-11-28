@@ -1250,6 +1250,24 @@ describe('client.policy', () => {
     expect(p.rules?.limits?.daily?.['*']).toBe('100');
   });
 
+  it('open() POSTs the ciphertext and returns the plaintext with the statement', async () => {
+    let receivedBody: unknown = null;
+    const answer = {
+      policy_json: '{"version":1}',
+      keystore_public_key: 'ed25519:keystore',
+      policy_statement_signature: 'ab'.repeat(64),
+    };
+    server.use(
+      http.post(`${BASE}/wallet/v1/open-policy`, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json(answer);
+      }),
+    );
+    const client = new OutlayerClient({ apiKey });
+    expect(await client.policy.open('AAAA')).toEqual(answer);
+    expect(receivedBody).toEqual({ encrypted_data: 'AAAA' });
+  });
+
   it('encrypt() POSTs rules and returns encrypted blob', async () => {
     let receivedBody: unknown = null;
     server.use(

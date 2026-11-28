@@ -72,6 +72,7 @@ export type {
   Capabilities,
   EncryptPolicyRequest,
   EncryptPolicyResponse,
+  OpenPolicyResponse,
   SignPolicyResponse,
   SignedPolicy,
   PolicyUpdatePending,

@@ -2082,6 +2082,30 @@ export interface paths {
          *     `threshold` of at least 1 and at least that many approvers with an
          *     `id` — and is otherwise `400 invalid_request`: a lock nobody could
          *     lift is never stored.
+         *
+         *     **Check the ciphertext before you sign it into a transaction.** The
+         *     owner cannot decrypt `encrypted_base64`, so the answer carries what
+         *     holds it to a plaintext: `policy_json`, the exact text the keystore
+         *     encrypted, and the keystore's statement over the two
+         *     (`keystore_public_key`, `policy_statement_signature`). The statement
+         *     is this text, one field per line, joined by `\n`, with no newline at
+         *     the end:
+         *
+         *     ```
+         *     OUTLAYER_WALLET_POLICY/V1
+         *     dao:<the keystore DAO's account>
+         *     wallet:<the wallet's key as the contract stores it, ed25519:<hex>>
+         *     blob:<sha256 of the decoded bytes of encrypted_base64, hex>
+         *     policy:<sha256 of the bytes of policy_json, hex>
+         *     ```
+         *
+         *     A client builds the text from its own values, verifies the Ed25519
+         *     signature with `keystore_public_key`, asks the keystore DAO through
+         *     its own RPC whether that key is a keystore's
+         *     (`is_keystore_approved({public_key})`), and reads `policy_json` to see
+         *     that it is the policy it asked for. The API passes the statement
+         *     through and checks none of it. `verifyPolicyStatement` of
+         *     `@outlayer/sdk` does the first three.
          */
         post: operations["encryptPolicy"];
         delete?: never;
@@ -2130,6 +2154,39 @@ export interface paths {
          *     is signed at once.
          */
         post: operations["signPolicy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/v1/open-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read a policy's ciphertext, with the keystore's statement
+         * @description The plaintext of a policy ciphertext of this wallet, exactly as it was
+         *     encrypted, with the keystore's statement over the two — the same
+         *     statement `encrypt-policy` answers (`OUTLAYER_WALLET_POLICY/V1`).
+         *
+         *     This is how a stored policy is read without trusting the API: take
+         *     `encrypted_data` from your own `get_wallet_policy` view call on the
+         *     contract, ask here for its plaintext, and verify the statement — the
+         *     signature, the keystore's key in the DAO (`is_keystore_approved`),
+         *     `blob` against the bytes the chain holds, `policy` against the text
+         *     you are about to show. The same check holds the ciphertext of a
+         *     policy update its approvers released (`result.encrypted_data` of the
+         *     request) to its plaintext before it is signed into a transaction.
+         *
+         *     A ciphertext that is not this wallet's policy is `400`.
+         */
+        post: operations["openPolicy"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3410,6 +3467,18 @@ export interface paths {
          *     correctly (`409 wallet_busy`). A wallet contract operation is not a
          *     row under `/wallet/v1/requests`: it is read at
          *     `GET /wallet/contract/v1/operations/{id}`.
+         *
+         *     **A wallet has one prepared request at a time.** While an operation
+         *     is `awaiting_signature` and the wallet contract would still take its
+         *     request, another operation is not prepared: it is refused with
+         *     `409 conflict`, naming the operation that waits, and nothing exists
+         *     under the new `id`. Relay the waiting operation, or ask again once its
+         *     ten minutes have ended. Asking under the waiting operation's own `id`
+         *     answers where it stands.
+         *
+         *     A live quote is counted against the wallet's quote budget before it
+         *     is asked for. When the counter cannot be reached the operation is
+         *     refused with `503 upstream_unavailable` and nothing is prepared.
          */
         post: operations["askWalletContractOperation"];
         delete?: never;
@@ -5587,6 +5656,24 @@ export interface components {
             wallet_pubkey: string;
             /** @description sha256 (hex) of the canonical plaintext that was encrypted — every object's keys sorted, compact — which a locked policy's approvers vote on inside the `policy_update` operation. */
             policy_hash: string;
+            /** @description The plaintext the keystore encrypted, byte for byte: the policy as it will be read from the chain. The statement's `policy` line is the sha256 of these bytes. */
+            policy_json: string;
+            /** @description The keystore's registration key, `ed25519:<base58>`: the key the keystore DAO's `is_keystore_approved` takes. */
+            keystore_public_key: string;
+            /** @description That key's Ed25519 signature over the `OUTLAYER_WALLET_POLICY/V1` statement, 64 bytes in hex. */
+            policy_statement_signature: string;
+        };
+        OpenPolicyRequest: {
+            /** @description A policy's ciphertext, base64: `encrypted_data` of the contract's `get_wallet_policy`, or of a released policy update. */
+            encrypted_data: string;
+        };
+        OpenPolicyResponse: {
+            /** @description The plaintext of `encrypted_data`, byte for byte. The statement's `policy` line is the sha256 of these bytes. */
+            policy_json: string;
+            /** @description The keystore's registration key, `ed25519:<base58>`: the key the keystore DAO's `is_keystore_approved` takes. */
+            keystore_public_key: string;
+            /** @description That key's Ed25519 signature over the `OUTLAYER_WALLET_POLICY/V1` statement, 64 bytes in hex. */
+            policy_statement_signature: string;
         };
         SignPolicyRequest: {
             encrypted_data: string;
@@ -9805,6 +9892,33 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    openPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description The plaintext and the keystore's statement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenPolicyResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     invalidatePolicyCache: {
         parameters: {
             query?: never;
@@ -12156,7 +12270,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `conflict`: the request's nonce was already taken (sign the request again with another nonce), or the `id` was used for another content, or 20 operations of this wallet already wait for the approvers. `wallet_busy`: another operation is using this wallet (`WalletBusyResponse`). */
+            /** @description `conflict`: the request's nonce was already taken (sign the request again with another nonce), or the `id` was used for another content, or 20 operations of this wallet already wait for the approvers, or another operation of this wallet is prepared and waits for the agent's half (`message` names it). `wallet_busy`: another operation is using this wallet (`WalletBusyResponse`). */
             409: {
                 headers: {
                     [name: string]: unknown;

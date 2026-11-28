@@ -112,6 +112,7 @@ export type ApprovalConfig = Schemas['ApprovalConfig'];
 export type Capabilities = Schemas['Capabilities'];
 export type EncryptPolicyRequest = Schemas['EncryptPolicyRequest'];
 export type EncryptPolicyResponse = Schemas['EncryptPolicyResponse'];
+export type OpenPolicyResponse = Schemas['OpenPolicyResponse'];
 export type SignPolicyResponse = Schemas['SignPolicyResponse'];
 export type SignedPolicy = Schemas['SignedPolicy'];
 export type PolicyUpdatePending = Schemas['PolicyUpdatePending'];
@@ -183,8 +184,31 @@ export class PolicyAPI {
     return runWithRetry(() => this.client.GET('/wallet/v1/policy'), this.retry);
   }
 
+  /**
+   * Encrypt a policy for `store_wallet_policy`.
+   *
+   * The caller cannot decrypt `encrypted_base64`, so the answer carries what
+   * holds it to a plaintext: `policy_json` and the keystore's statement over
+   * the two. Before the ciphertext is signed into a transaction, pass the
+   * answer to `verifyPolicyStatement` with your own wallet key, DAO and RPC,
+   * and read the text it returns to see that it is the policy you asked for.
+   * The API passes the statement through and checks none of it.
+   */
   encrypt(body: EncryptPolicyRequest): Promise<EncryptPolicyResponse> {
     return runWithRetry(() => this.client.POST('/wallet/v1/encrypt-policy', { body }), this.retry);
+  }
+
+  /**
+   * The plaintext of a policy's ciphertext, with the keystore's statement
+   * over the two. To read a stored policy without trusting the API, take
+   * `encryptedData` from your own `get_wallet_policy` view call on the
+   * contract and pass the answer to `verifyPolicyStatement`.
+   */
+  open(encryptedData: string): Promise<OpenPolicyResponse> {
+    return runWithRetry(
+      () => this.client.POST('/wallet/v1/open-policy', { body: { encrypted_data: encryptedData } }),
+      this.retry,
+    );
   }
 
   /**

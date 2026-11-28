@@ -42,6 +42,15 @@ export {
   verifyTeeKey,
 } from './custody/teeKey.js';
 export type { TeeKeyAnswer, TeeKeyExpectation } from './custody/teeKey.js';
+export {
+  POLICY_STATEMENT_TAG,
+  policyStatement,
+  verifyPolicyStatement,
+} from './custody/policyStatement.js';
+export type {
+  PolicyStatementAnswer,
+  PolicyStatementExpectation,
+} from './custody/policyStatement.js';
 export type {
   FunctionCallAction,
   Operation,
@@ -59,7 +68,12 @@ export type { SignedRequestHeaders } from './custody/keys.js';
 export { AGENT_KEY_SEALED_FORMAT, SetupKey, collectSetup, openSetup } from './custody/setup.js';
 export { NEP413_TAG, nep413Hash, verifyNep413 } from './custody/nep413.js';
 export type { Nep413Request } from './custody/nep413.js';
-export { WALLET_CONTRACT_CODE_HASH_HEX, deterministicAccount, stateBytes, stateInitBytes } from './custody/deterministic.js';
+export {
+  WALLET_CONTRACT_CODE_HASH_HEX,
+  deterministicAccount,
+  stateBytes,
+  stateInitBytes,
+} from './custody/deterministic.js';
 export type { OpenedSetup, OwnerSignature } from './custody/setup.js';
 export { OPERATION_PATH, WalletContract } from './custody/client.js';
 export type { OperationState, WalletContractOptions } from './custody/client.js';
